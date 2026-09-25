@@ -120,6 +120,7 @@ impl ValueAnnotation for classic::Type<classic::Attrs> {
         context: &mut MigrationContext,
     ) -> Result<v4::ValueAttributes, MigrationDiagnostic> {
         Ok(v4::ValueAttributes {
+            metadata: v4::MetadataScope::default(),
             source: None,
             inferred_type: Some(Box::new(migrate_type(self, context)?)),
             extensions: serde_json::Map::new(),
@@ -517,7 +518,7 @@ pub fn migrate_type_specification(
         classic::TypeSpecification::Alias(parameters, body) => {
             v4::TypeSpecification::TypeAliasSpecification {
                 // Classic has no annotation vocabulary, so a migrated specification has none.
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -527,7 +528,7 @@ pub fn migrate_type_specification(
         }
         classic::TypeSpecification::Opaque(parameters) => {
             v4::TypeSpecification::OpaqueTypeSpecification {
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -536,7 +537,7 @@ pub fn migrate_type_specification(
         }
         classic::TypeSpecification::Custom(parameters, constructors) => {
             v4::TypeSpecification::CustomTypeSpecification {
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -563,7 +564,7 @@ pub fn migrate_type_specification(
         }
         classic::TypeSpecification::Derived(parameters, config) => {
             v4::TypeSpecification::DerivedTypeSpecification {
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -581,7 +582,7 @@ fn migrate_value_specification(
     context: &mut MigrationContext,
 ) -> Result<v4::ValueSpecification, MigrationDiagnostic> {
     Ok(v4::ValueSpecification {
-        annotations: Vec::new(),
+        annotations: Vec::new().into(),
         inputs: specification
             .inputs
             .iter()
@@ -627,7 +628,7 @@ pub fn migrate_module_specification(
         })
         .collect::<Result<_, MigrationDiagnostic>>()?;
     Ok(v4::ModuleSpecification {
-        annotations: Vec::new(),
+        annotations: Vec::new().into(),
         types,
         values,
         doc: specification.doc.as_deref().map(documentation),
@@ -751,6 +752,7 @@ pub fn migrate_distribution(
                 .collect::<Result<_, MigrationDiagnostic>>()?;
             v4::IRFile {
                 format_version: v4::FormatVersion::Integer(4),
+                metadata: None,
                 distribution: v4::Distribution::Library(v4::LibraryContent {
                     package_name: migrate_package_name(&context)?,
                     dependencies,
@@ -764,6 +766,7 @@ pub fn migrate_distribution(
             let spec = migrate_package_specification(specification, &mut context)?;
             v4::IRFile {
                 format_version: v4::FormatVersion::Integer(4),
+                metadata: None,
                 distribution: v4::Distribution::Specs(v4::SpecsContent {
                     package_name: migrate_package_name(&context)?,
                     dependencies,

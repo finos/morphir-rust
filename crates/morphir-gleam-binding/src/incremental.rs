@@ -446,7 +446,7 @@ mod tests {
             modules: IndexMap::from([(
                 "types".into(),
                 ModuleSpecification {
-                    annotations: Vec::new(),
+                    annotations: Vec::new().into(),
                     doc: None,
                     values: IndexMap::new(),
                     types: IndexMap::from([(
@@ -454,7 +454,7 @@ mod tests {
                         Documented::new(
                             None,
                             TypeSpecification::TypeAliasSpecification {
-                                annotations: Vec::new(),
+                                annotations: Vec::new().into(),
                                 type_params: Vec::new(),
                                 type_expr,
                             },

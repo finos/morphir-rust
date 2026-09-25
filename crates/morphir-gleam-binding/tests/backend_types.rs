@@ -34,6 +34,7 @@ fn generate(definition: TypeDefinition) -> GenerateResult {
     };
     let ir = IRFile {
         format_version: FormatVersion::String("4.0.0".into()),
+        metadata: None,
         distribution: Distribution::Library(LibraryContent {
             package_name: PackageName::parse("example/package"),
             dependencies: IndexMap::new(),

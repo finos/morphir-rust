@@ -181,6 +181,7 @@ impl TreeModel for V4 {
         Ok(IRFile {
             format_version,
             distribution,
+            metadata: None,
         })
     }
 
@@ -381,7 +382,7 @@ fn specification_package(modules: Vec<Module>) -> Result<PackageSpecification, D
             ModuleSpecification {
                 // A tree has nowhere to keep module annotations, so a module read out of one
                 // has none; the writer refuses one that has any.
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 types: specifications(module.types, &key)?,
                 values: specifications(module.values, &key)?,
                 doc: module.doc,

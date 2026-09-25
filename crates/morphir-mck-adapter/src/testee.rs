@@ -30,12 +30,12 @@ use morphir_core::ir::classic;
 use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::serde_document;
 use morphir_core::ir::v4::{
-    AccessControlled, Annotation, AnnotationArgument, ApplicationContent, ConstructorArg,
-    ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution,
-    DistributionManifestFile, Documented, Field, FormatVersion, IRFile, Incompleteness, LetBinding,
-    LibraryContent, Literal, ModuleDefinition, ModuleEntries, ModuleManifestFile,
-    ModuleSpecification, NodeFileBody, PackageDefinition, PackageSpecification, Pattern,
-    PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
+    AccessControlled, Annotation, AnnotationArgument, Annotations, ApplicationContent,
+    ConstructorArg, ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification,
+    Distribution, DistributionManifestFile, Documented, Field, FormatVersion, IRFile,
+    Incompleteness, LetBinding, LibraryContent, Literal, ModuleDefinition, ModuleEntries,
+    ModuleManifestFile, ModuleSpecification, NodeFileBody, PackageDefinition, PackageSpecification,
+    Pattern, PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
     TypeDefinition, TypeDefinitionFile, TypeEncoding, TypeSpecification, Value, ValueAttributes,
     ValueBody, ValueDefinition, ValueDefinitionFile, ValueSpecification, with_spelling_mode,
     with_type_encoding,
@@ -940,6 +940,7 @@ impl Node {
             }
             Node::IRFile(node) => Node::IRFile(IRFile {
                 format_version: node.format_version,
+                metadata: node.metadata,
                 distribution: strip_distribution(node.distribution),
             }),
             // A distribution manifest is names, a kind and a budget: nothing it holds carries
@@ -1313,8 +1314,9 @@ fn strip_record_field(field: RecordFieldEntry) -> RecordFieldEntry {
 
 /// Strips the attributes off the value expressions an annotation's arguments carry; the names and
 /// the free text of an annotation carry none.
-fn strip_annotations(annotations: Vec<Annotation>) -> Vec<Annotation> {
-    annotations
+fn strip_annotations(mut annotations: Annotations) -> Annotations {
+    annotations.entries = annotations
+        .entries
         .into_iter()
         .map(|annotation| match annotation {
             Annotation::Compact { name, text } => Annotation::Compact { name, text },
@@ -1333,8 +1335,36 @@ fn strip_annotations(annotations: Vec<Annotation>) -> Vec<Annotation> {
                     })
                     .collect(),
             },
+            Annotation::LinkedCompact {
+                authored_name,
+                declaration,
+            } => Annotation::LinkedCompact {
+                authored_name,
+                declaration,
+            },
+            Annotation::LinkedStructured {
+                authored_name,
+                declaration,
+                args,
+            } => Annotation::LinkedStructured {
+                authored_name,
+                declaration,
+                args: args
+                    .into_iter()
+                    .map(|argument| match argument {
+                        AnnotationArgument::Positional(value) => {
+                            AnnotationArgument::Positional(strip_value(value))
+                        }
+                        AnnotationArgument::Named { name, value } => AnnotationArgument::Named {
+                            name,
+                            value: strip_value(value),
+                        },
+                    })
+                    .collect(),
+            },
         })
-        .collect()
+        .collect();
+    annotations
 }
 
 fn strip_type_specification(node: TypeSpecification) -> TypeSpecification {

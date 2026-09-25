@@ -30,7 +30,7 @@ pub(crate) fn signatures(library: &LibraryContent) -> Outcome<Signatures> {
 
 pub(crate) fn specification(definition: &ValueDefinition) -> Outcome<ValueSpecification> {
     Ok(ValueSpecification {
-        annotations: vec![],
+        annotations: Vec::new().into(),
         inputs: definition.input_types.clone(),
         output: definition
             .output_type

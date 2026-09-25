@@ -292,6 +292,14 @@ fn validate_options(options: &CodecOptions) -> Result<Policy, TransportDiagnosti
             "select the document-tree layout",
         ));
     }
+    if options.linked_metadata() {
+        return Err(tree_error(
+            "morphir::ir::document_tree::unsupported_metadata",
+            Stage::Detection,
+            "the proposed 4.1.0 linked-metadata revision has no document-tree profile",
+            "use the single-file JSON or YAML profile",
+        ));
+    }
     Ok(Policy {
         spelling,
         path_budget: options.path_budget(),
@@ -862,6 +870,19 @@ impl KitSink {
                 ));
             }
         };
+        if matches!(
+            &header,
+            KitHeader::V4(SinkHeader {
+                format_version: FormatVersion::String(version),
+                ..
+            }) if version == "4.1.0"
+        ) {
+            return Err(self.error(
+                "unsupported_metadata",
+                cursor,
+                "the proposed 4.1.0 revision has no document-tree profile",
+            ));
+        }
         prune(&self.root)?;
         self.header = Some(header);
         Ok(())
@@ -1230,6 +1251,11 @@ impl EventSink for KitSink {
         let (cursor, kind) = event.into_parts();
         match kind {
             SemanticEventKind::Begin(header) => self.begin(header, &cursor),
+            SemanticEventKind::DocumentMetadata(_) => Err(self.error(
+                "unsupported_metadata",
+                &cursor,
+                "document metadata in the v4 document tree is not implemented",
+            )),
             SemanticEventKind::Dependency(dependency) => self.dependency(dependency, &cursor),
             SemanticEventKind::Module(module) => self.module(module, &cursor),
             SemanticEventKind::End => self.end(&cursor),

@@ -112,10 +112,27 @@ pub(super) fn decode(values: &ion_rs::Sequence) -> Result<v4::IRFile, TransportD
     Ok(v4::IRFile {
         format_version: v4::FormatVersion::String(RELEASE.to_owned()),
         distribution,
+        metadata: None,
     })
 }
 
 pub(super) fn datagram(file: v4::IRFile) -> Result<ion_rs::Sequence, TransportDiagnostic> {
+    if !matches!(&file.format_version, v4::FormatVersion::Integer(4))
+        && !matches!(&file.format_version, v4::FormatVersion::String(release) if release == RELEASE)
+    {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_version",
+            Stage::Encoding,
+            "the Ion v4 profile supports 4.0.0, not linked metadata 4.1.0",
+        ));
+    }
+    if file.metadata.is_some() {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_metadata",
+            Stage::Encoding,
+            "the Ion v4 profile does not carry document metadata",
+        ));
+    }
     let mut sequence = ion_rs::Sequence::builder();
     match &file.distribution {
         v4::Distribution::Library(content) => {
@@ -383,7 +400,7 @@ fn read_module_spec(
     Ok((
         name,
         v4::ModuleSpecification {
-            annotations,
+            annotations: annotations.into(),
             types,
             values,
             doc: optional_doc(&fields)?,

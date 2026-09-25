@@ -21,6 +21,7 @@ use std::fmt;
 
 use super::attributes::{SourceLocation, TypeAttributes, ValueAttributes};
 use super::legacy::{accept_member, record_legacy_form_warning};
+use super::linked_metadata::MetadataScope;
 use super::literal::{FloatLiteral, Literal};
 use super::pattern::Pattern;
 use super::serde_v4;
@@ -331,9 +332,14 @@ fn decode_attributes(members: &Members<'_>, cursor: &str) -> Result<TypeAttribut
         "TypeAttributes",
         member.value,
         &at,
-        &["source", "constraints", "extensions"],
+        &["source", "constraints", "extensions", "@context", "facts"],
     )?;
     Ok(TypeAttributes {
+        metadata: MetadataScope::parse(
+            written.get("@context").map(|member| member.value),
+            written.get("facts").map(|member| member.value),
+        )
+        .map_err(|error| invalid_type(&at, error))?,
         source: decode_source(&written, &at)?,
         constraints: decode_object_member(&written, "constraints", &at)?,
         extensions: decode_object_member(&written, "extensions", &at)?,
@@ -1097,7 +1103,7 @@ fn decode_value_attributes(
         "ValueAttributes",
         member.value,
         &at,
-        &["source", "inferredType", "extensions"],
+        &["source", "inferredType", "extensions", "@context", "facts"],
     )?;
     let inferred_type = match written.get("inferredType") {
         None => None,
@@ -1107,6 +1113,11 @@ fn decode_value_attributes(
         )?)),
     };
     Ok(ValueAttributes {
+        metadata: MetadataScope::parse(
+            written.get("@context").map(|member| member.value),
+            written.get("facts").map(|member| member.value),
+        )
+        .map_err(|error| invalid_type(&at, error))?,
         source: decode_source(&written, &at)?,
         inferred_type,
         extensions: decode_object_member(&written, "extensions", &at)?,

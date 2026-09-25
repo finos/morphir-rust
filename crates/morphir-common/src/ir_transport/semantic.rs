@@ -8,7 +8,33 @@ use morphir_core::traversal::{
 };
 
 use super::ClassicV3ModuleVisitor;
-use super::{EventSink, EventSource, IrVersion, Stage, TransportDiagnostic};
+use super::{CodecOptions, EventSink, EventSource, IrVersion, Stage, TransportDiagnostic};
+
+/// Keep the proposed revision behind an explicit transport option and prevent
+/// programmatically constructed old documents from writing linked metadata.
+pub(crate) fn validate_v4_metadata_release(
+    file: &v4::IRFile,
+    options: &CodecOptions,
+) -> Result<(), TransportDiagnostic> {
+    let proposed = file.format_version == v4::FormatVersion::String("4.1.0".to_owned());
+    if proposed && !options.linked_metadata() {
+        return Err(TransportDiagnostic::error(
+            "morphir::ir::codec::unsupported_format_version_minor",
+            Stage::Encoding,
+            IrCursor::root(),
+            "formatVersion 4.1.0 requires the linked-metadata codec option",
+        ));
+    }
+    if !proposed && file.has_linked_metadata() {
+        return Err(TransportDiagnostic::error(
+            "morphir::ir::codec::metadata_version_mismatch",
+            Stage::Encoding,
+            IrCursor::root(),
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
+    Ok(())
+}
 
 pub(crate) enum SemanticFile {
     ClassicV3(classic::Distribution),
@@ -233,6 +259,7 @@ pub(crate) fn emit_v4(
 ) -> Result<(), TransportDiagnostic> {
     let distribution_cursor = IrCursor::root().child(CursorSegment::Distribution);
     let format_version = file.format_version;
+    let document_metadata = file.metadata;
     match file.distribution {
         v4::Distribution::Library(content) => {
             sink.accept(SemanticEvent::new(
@@ -242,6 +269,12 @@ pub(crate) fn emit_v4(
                     package: content.package_name,
                 }),
             ))?;
+            if let Some(metadata) = document_metadata.clone() {
+                sink.accept(SemanticEvent::new(
+                    IrCursor::root(),
+                    SemanticEventKind::DocumentMetadata(metadata),
+                ))?;
+            }
             emit_v4_dependencies(content.dependencies, &distribution_cursor, sink)?;
             for (path, module) in content.def.modules {
                 sink.accept(SemanticEvent::new(
@@ -260,6 +293,12 @@ pub(crate) fn emit_v4(
                     package: content.package_name,
                 }),
             ))?;
+            if let Some(metadata) = document_metadata.clone() {
+                sink.accept(SemanticEvent::new(
+                    IrCursor::root(),
+                    SemanticEventKind::DocumentMetadata(metadata),
+                ))?;
+            }
             emit_v4_dependencies(content.dependencies, &distribution_cursor, sink)?;
             for (path, module) in content.spec.modules {
                 sink.accept(SemanticEvent::new(
@@ -279,6 +318,12 @@ pub(crate) fn emit_v4(
                     entry_points: content.entry_points,
                 }),
             ))?;
+            if let Some(metadata) = document_metadata {
+                sink.accept(SemanticEvent::new(
+                    IrCursor::root(),
+                    SemanticEventKind::DocumentMetadata(metadata),
+                ))?;
+            }
             emit_v4_definition_dependencies(content.dependencies, &distribution_cursor, sink)?;
             for (path, module) in content.def.modules {
                 sink.accept(SemanticEvent::new(
@@ -482,9 +527,19 @@ fn collect_v4(
     let mut definition_dependencies = IndexMap::new();
     let mut definitions = IndexMap::new();
     let mut specifications = IndexMap::new();
+    let mut document_metadata = None;
     while let Some(event) = source.next_event()? {
         let (cursor, kind) = event.into_parts();
         match kind {
+            SemanticEventKind::DocumentMetadata(metadata)
+                if document_metadata.is_none()
+                    && dependencies.is_empty()
+                    && definition_dependencies.is_empty()
+                    && definitions.is_empty()
+                    && specifications.is_empty() =>
+            {
+                document_metadata = Some(metadata);
+            }
             SemanticEventKind::Dependency(DependencyEvent::V4 {
                 package,
                 specification,
@@ -559,6 +614,7 @@ fn collect_v4(
                 return Ok(SemanticFile::V4(v4::IRFile {
                     format_version,
                     distribution,
+                    metadata: document_metadata,
                 }));
             }
             _ => {

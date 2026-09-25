@@ -56,7 +56,7 @@ pub(super) fn signature(
         types,
     )?;
     Ok(ValueSpecification {
-        annotations: vec![],
+        annotations: Vec::new().into(),
         inputs: input_types,
         output: output_type,
     })

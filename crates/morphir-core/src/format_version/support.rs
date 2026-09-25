@@ -9,6 +9,9 @@ use std::cmp::Ordering;
 /// The reference table of the parent specification.
 pub const REFERENCE_SUPPORT_TABLE: &str = "[3.0.0,3.2.0),[4.0.0,4.1.0)";
 
+/// The bounded JSON/YAML metadata reader adds the proposed 4.1.0 release.
+pub const LINKED_METADATA_SUPPORT_TABLE: &str = "[3.0.0,3.2.0),[4.0.0,4.1.0),[4.1.0,4.1.0]";
+
 /// The smallest release the domain has.
 ///
 /// [`parse_release`] refuses a bound below major 3, so an absent lower bound
@@ -223,6 +226,10 @@ impl Interval {
 }
 
 impl SupportTable {
+    /// Support through the proposed 4.1.0 linked-metadata JSON/YAML profile.
+    pub fn linked_metadata() -> Self {
+        Self::parse(LINKED_METADATA_SUPPORT_TABLE).expect("static support table is valid")
+    }
     /// Parse a support table from the interval notation, normalising it.
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut intervals = Vec::new();

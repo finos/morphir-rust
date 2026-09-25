@@ -346,16 +346,16 @@ pub(super) fn read_type_spec(element: &Element) -> Result<(String, TypeSpec), Tr
     let type_params = name_list(&fields, "typeParams")?;
     let spec = match names.as_slice() {
         ["public", "spec", "opaque", "type"] => v4::TypeSpecification::OpaqueTypeSpecification {
-            annotations,
+            annotations: annotations.into(),
             type_params,
         },
         ["public", "spec", "alias", "type"] => v4::TypeSpecification::TypeAliasSpecification {
-            annotations,
+            annotations: annotations.into(),
             type_params,
             type_expr: read_type(required_field(&fields, "typeExp")?)?,
         },
         ["public", "spec", "custom", "type"] => v4::TypeSpecification::CustomTypeSpecification {
-            annotations,
+            annotations: annotations.into(),
             type_params,
             constructors: read_constructors(fields.get("constructors").copied())?
                 .into_iter()
@@ -369,7 +369,7 @@ pub(super) fn read_type_spec(element: &Element) -> Result<(String, TypeSpec), Tr
                 .collect(),
         },
         ["public", "spec", "derived", "type"] => v4::TypeSpecification::DerivedTypeSpecification {
-            annotations,
+            annotations: annotations.into(),
             type_params,
             base_type: read_type(required_field(&fields, "baseType")?)?,
             from_base_type: fq_name(required_string(&fields, "fromBaseType")?)?,

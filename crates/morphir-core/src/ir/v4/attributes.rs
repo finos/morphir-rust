@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::linked_metadata::MetadataScope;
 use super::types::Type;
 use super::value::Value;
 
@@ -35,6 +36,9 @@ pub struct SourceLocation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TypeAttributes {
+    /// Scoped authored facts on this Type node.
+    #[serde(flatten)]
+    pub metadata: MetadataScope,
     /// Source location where this type was defined
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceLocation>,
@@ -58,6 +62,9 @@ pub struct TypeAttributes {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValueAttributes {
+    /// Scoped authored facts on this Value node.
+    #[serde(flatten)]
+    pub metadata: MetadataScope,
     /// Source location where this value was defined
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceLocation>,
@@ -107,6 +114,7 @@ impl TypeAttributes {
     /// Create attributes with just a source location
     pub fn with_source(source: SourceLocation) -> Self {
         TypeAttributes {
+            metadata: MetadataScope::default(),
             source: Some(source),
             constraints: serde_json::Map::new(),
             extensions: serde_json::Map::new(),
@@ -123,6 +131,7 @@ impl ValueAttributes {
     /// Create attributes with just a source location
     pub fn with_source(source: SourceLocation) -> Self {
         ValueAttributes {
+            metadata: MetadataScope::default(),
             source: Some(source),
             inferred_type: None,
             extensions: serde_json::Map::new(),
@@ -132,6 +141,7 @@ impl ValueAttributes {
     /// Create attributes with an inferred concrete type.
     pub fn with_type(inferred_type: Type) -> Self {
         ValueAttributes {
+            metadata: MetadataScope::default(),
             source: None,
             inferred_type: Some(Box::new(inferred_type)),
             extensions: serde_json::Map::new(),

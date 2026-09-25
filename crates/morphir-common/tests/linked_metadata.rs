@@ -2,8 +2,9 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 
 use morphir_common::ir_transport::{
-    CodecOptions, DocumentTreeSink, EventSink, EventSource, FormatId, IonCodec, IrCodec, IrVersion,
-    JsonCodec, Layout, TransportDiagnostic, YamlCodec,
+    CodecOptions, EventSink, EventSource, FormatId, IonCodec, IrCodec, IrVersion, JsonCodec,
+    Layout, TransportDiagnostic, YamlCodec, read_document_tree_with_options,
+    write_document_tree_with_options,
 };
 use morphir_common::vfs::memory_root;
 use morphir_core::traversal::{DistributionHeader, SemanticEvent, SemanticEventKind};
@@ -304,23 +305,113 @@ fn unresolved_node_carrier_source_selector_is_rejected() {
 }
 
 #[test]
-fn proposed_revision_is_not_emitted_as_a_document_tree() {
-    let tree_options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::json());
-    assert!(
-        DocumentTreeSink::new(memory_root(), tree_options.clone().with_linked_metadata()).is_err()
-    );
-    let mut document = example();
-    document.as_object_mut().unwrap().remove("$meta");
-    let mut events = Events::default();
-    JsonCodec::new()
-        .decode(
-            &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
-            &options(FormatId::json()),
-            &mut events,
-        )
-        .unwrap();
-    let mut sink = DocumentTreeSink::new(memory_root(), tree_options).unwrap();
-    assert!(sink.accept(events.0.remove(0)).is_err());
+fn linked_metadata_survives_json_and_yaml_document_trees() {
+    let mut expected = example();
+    expected["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]
+        ["value"]["types"]["data-tables"]["TypeAliasDefinition"]["typeExp"]["Record"]
+        ["attributes"].as_object_mut().unwrap().remove("@context");
+    let file: morphir_core::ir::v4::IRFile = serde_json::from_value(expected.clone()).unwrap();
+    let expected = serde_json::to_value(&file).unwrap();
+
+    for format in [FormatId::json(), FormatId::yaml()] {
+        let root = memory_root();
+        let tree_options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, format.clone())
+            .with_linked_metadata();
+        write_document_tree_with_options(&root, &file, &tree_options).unwrap();
+        let manifest = root
+            .join(if format == FormatId::json() {
+                "manifest.json"
+            } else {
+                "manifest.yaml"
+            })
+            .unwrap()
+            .read_to_string()
+            .unwrap();
+        let manifest: Value = if format == FormatId::json() {
+            serde_json::from_str(&manifest).unwrap()
+        } else {
+            morphir_core::ir::yaml::read(&manifest).unwrap()
+        };
+        assert_eq!(manifest["$meta"], expected["$meta"]);
+        let actual = read_document_tree_with_options(&root, &tree_options).unwrap();
+        assert_eq!(serde_json::to_value(actual).unwrap(), expected);
+    }
+}
+
+#[test]
+fn v4_0_document_tree_refuses_linked_metadata() {
+    let mut file: morphir_core::ir::v4::IRFile = serde_json::from_value(example()).unwrap();
+    file.format_version = morphir_core::ir::v4::FormatVersion::String("4.0.0".to_owned());
+    let tree_options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::json())
+        .with_linked_metadata();
+    assert!(write_document_tree_with_options(&memory_root(), &file, &tree_options).is_err());
+    file.metadata = None;
+    assert!(write_document_tree_with_options(&memory_root(), &file, &tree_options).is_err());
+}
+
+#[test]
+fn v4_1_document_tree_requires_explicit_opt_in_for_read_and_write() {
+    let file: morphir_core::ir::v4::IRFile = serde_json::from_value(example()).unwrap();
+    let root = memory_root();
+    let default_options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::json());
+    let proposed_options = default_options.clone().with_linked_metadata();
+    assert!(write_document_tree_with_options(&root, &file, &default_options).is_err());
+    write_document_tree_with_options(&root, &file, &proposed_options).unwrap();
+    assert!(read_document_tree_with_options(&root, &default_options).is_err());
+    assert!(read_document_tree_with_options(&root, &proposed_options).is_ok());
+}
+
+#[test]
+fn v4_1_tree_refuses_document_metadata_on_a_node_file() {
+    use morphir_core::ir::layout::{Profile, TreePolicy, read_tree, write_tree};
+
+    let file: morphir_core::ir::v4::IRFile = serde_json::from_value(example()).unwrap();
+    let mut tree = write_tree(
+        &file,
+        &TreePolicy {
+            profile: Profile::Json,
+            path_budget: 4096,
+        },
+    )
+    .unwrap()
+    .into_iter()
+    .collect::<morphir_core::ir::layout::Tree>();
+    let path = tree
+        .keys()
+        .find(|path| path.ends_with(".value"))
+        .unwrap()
+        .clone();
+    let mut node: Value = serde_json::from_str(&tree[&path]).unwrap();
+    node["$meta"] = json!({"@graph": []});
+    tree.insert(path, serde_json::to_string(&node).unwrap());
+    assert!(read_tree(&tree, Profile::Json).is_err());
+}
+
+#[test]
+fn a_4_0_node_file_cannot_carry_facts_under_a_4_1_manifest() {
+    use morphir_core::ir::layout::{Profile, TreePolicy, read_tree, write_tree};
+
+    let file: morphir_core::ir::v4::IRFile = serde_json::from_value(example()).unwrap();
+    let mut tree = write_tree(
+        &file,
+        &TreePolicy {
+            profile: Profile::Json,
+            path_budget: 4096,
+        },
+    )
+    .unwrap()
+    .into_iter()
+    .collect::<morphir_core::ir::layout::Tree>();
+    let path = tree
+        .iter()
+        .find(|(path, text)| path.ends_with(".value") && text.contains("\"facts\""))
+        .unwrap()
+        .0
+        .clone();
+    let mut node: Value = serde_json::from_str(&tree[&path]).unwrap();
+    node["formatVersion"] = json!("4.0.0");
+    tree.insert(path, serde_json::to_string(&node).unwrap());
+    assert!(read_tree(&tree, Profile::Json).is_err());
 }
 
 #[test]

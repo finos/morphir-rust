@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- JSON and YAML V4 document trees can opt into the proposed 4.1 linked-metadata
+  profile. The manifest retains document `$meta`, node files retain facts and
+  annotations, and reading validates inherited context and source records
+  (finos/morphir#883).
 - `morphir-common` can explicitly load linked-metadata context files from a
   confined document root or a trusted digest resolver, with byte, count and
   depth limits before pure context resolution (finos/morphir#883).

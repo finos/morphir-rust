@@ -1516,6 +1516,19 @@ fn decode_file_format_version(
     decode_format_version(written, &format!("{cursor}/formatVersion"))
 }
 
+/// In 4.1 the manifest owns document metadata. A `$meta` on another tree file must not be
+/// silently stripped as the older tree profiles did.
+fn reject_non_manifest_meta(
+    value: &JsonValue,
+    version: &FormatVersion,
+    cursor: &str,
+) -> Result<(), Diagnostic> {
+    if *version == FormatVersion::String("4.1.0".to_owned()) && value.get("$meta").is_some() {
+        return Err(unknown_member(&format!("{cursor}/$meta"), "$meta"));
+    }
+    Ok(())
+}
+
 /// What to call a JSON value in a message, the way every reader that has to say what it found
 /// instead calls it.
 fn describe_json(value: &JsonValue) -> &'static str {
@@ -1536,6 +1549,18 @@ pub(in crate::ir) fn decode_distribution_manifest_file(
 ) -> Result<DistributionManifestFile, Diagnostic> {
     let root = root_without_meta(value, cursor, "a distribution manifest")?;
     let format_version = decode_file_format_version(&root, cursor)?;
+    let metadata = if format_version == FormatVersion::String("4.1.0".to_owned()) {
+        value
+            .get("$meta")
+            .map(|value| {
+                DocumentMeta::parse(value)
+                    .map_err(|error| invalid_type(&format!("{cursor}/$meta"), error))
+            })
+            .transpose()?
+            .map(Box::new)
+    } else {
+        None
+    };
     let members = wrapper_members_of(
         "DistributionManifestFile",
         &root,
@@ -1615,6 +1640,7 @@ pub(in crate::ir) fn decode_distribution_manifest_file(
         path_budget,
         dependencies,
         entry_points,
+        metadata,
     })
 }
 
@@ -1695,6 +1721,7 @@ pub(in crate::ir) fn decode_module_manifest_file(
 ) -> Result<ModuleManifestFile, Diagnostic> {
     let root = root_without_meta(value, cursor, "a module manifest")?;
     let format_version = decode_file_format_version(&root, cursor)?;
+    reject_non_manifest_meta(value, &format_version, cursor)?;
     let members = wrapper_members_of(
         "ModuleManifestFile",
         &root,
@@ -1765,6 +1792,14 @@ pub(in crate::ir) fn decode_module_manifest_file(
         },
         |value, cursor| decode_documented(value, cursor, decode_value_specification),
     )?;
+    if format_version != FormatVersion::String("4.1.0".to_owned())
+        && (module_entries_have_metadata(&types) || module_entries_have_metadata(&values))
+    {
+        return Err(invalid_type(
+            cursor,
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
 
     let mut listed = types.listed_names();
     listed.extend(values.listed_names());
@@ -1779,6 +1814,20 @@ pub(in crate::ir) fn decode_module_manifest_file(
         values,
         file_names,
     })
+}
+
+fn module_entries_have_metadata<D: LinkedMetadataCarrier, S: LinkedMetadataCarrier>(
+    entries: &ModuleEntries<D, S>,
+) -> bool {
+    match entries {
+        ModuleEntries::Names(_) => false,
+        ModuleEntries::Definitions(values) => values
+            .values()
+            .any(LinkedMetadataCarrier::contains_linked_metadata),
+        ModuleEntries::Specifications(values) => values
+            .values()
+            .any(LinkedMetadataCarrier::contains_linked_metadata),
+    }
 }
 
 fn decode_module_name(value: &JsonValue, cursor: &str) -> Result<ModuleName, Diagnostic> {
@@ -1957,6 +2006,17 @@ pub(in crate::ir) fn decode_type_definition_file(
         },
         |value, cursor| decode_documented(value, cursor, decode_type_specification),
     )?;
+    if format_version != FormatVersion::String("4.1.0".to_owned())
+        && match &body {
+            NodeFileBody::Def(node) => node.contains_linked_metadata(),
+            NodeFileBody::Spec(node) => node.contains_linked_metadata(),
+        }
+    {
+        return Err(invalid_type(
+            cursor,
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
     Ok(TypeDefinitionFile {
         format_version,
         name,
@@ -1980,6 +2040,17 @@ pub(in crate::ir) fn decode_value_definition_file(
         },
         |value, cursor| decode_documented(value, cursor, decode_value_specification),
     )?;
+    if format_version != FormatVersion::String("4.1.0".to_owned())
+        && match &body {
+            NodeFileBody::Def(node) => node.contains_linked_metadata(),
+            NodeFileBody::Spec(node) => node.contains_linked_metadata(),
+        }
+    {
+        return Err(invalid_type(
+            cursor,
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
     Ok(ValueDefinitionFile {
         format_version,
         name,
@@ -2000,6 +2071,7 @@ fn decode_node_file<D, S>(
 ) -> Result<(FormatVersion, Name, NodeFileBody<D, S>), Diagnostic> {
     let root = root_without_meta(value, cursor, "a node file")?;
     let format_version = decode_file_format_version(&root, cursor)?;
+    reject_non_manifest_meta(value, &format_version, cursor)?;
     let members = wrapper_members_of(
         node,
         &root,

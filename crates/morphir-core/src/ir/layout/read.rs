@@ -38,7 +38,7 @@ use super::{Profile, Tree};
 // a stack deeper than `RED_ZONE` and grows no further. That only holds while the two agree, so
 // there is one pair of constants rather than two.
 use crate::ir::json::{READ_STACK_BYTES, RED_ZONE};
-use crate::ir::v4::{FormatVersion, IRFile, SpellingMode, with_spelling_mode};
+use crate::ir::v4::{IRFile, SpellingMode, with_spelling_mode};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage, Warning};
 use crate::naming::{self, Name, PackageName};
 
@@ -52,18 +52,7 @@ use crate::naming::{self, Name, PackageName};
 /// manifest itself, then each package's module directories in sorted order, and — last of all —
 /// the first file under `pkg/` or `deps/` that no module claimed.
 pub fn read_tree(files: &Tree, profile: Profile) -> Result<(IRFile, Vec<Warning>), Diagnostic> {
-    let (file, warnings) = read_tree_with::<V4>(files, &|text| profile.read(text))?;
-    if file.format_version == FormatVersion::String("4.1.0".to_owned())
-        || file.has_linked_metadata()
-    {
-        return Err(Diagnostic::new(
-            DiagnosticCode::InvalidDistributionShape,
-            DiagnosticStage::Semantic,
-            MANIFEST,
-            "the proposed linked-metadata revision has no document-tree profile",
-        ));
-    }
-    Ok((file, warnings))
+    read_tree_with::<V4>(files, &|text| profile.read(text))
 }
 
 /// Reads a document tree whose files `M` decodes, each file's text parsed by `parse`.

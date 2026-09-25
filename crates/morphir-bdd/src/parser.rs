@@ -13,7 +13,7 @@ use morphir_gherkin::{Document, Format, NodePath, Segment, StepArgument, StepKin
 use crate::world::{MorphirWorld, ScenarioRef};
 
 type Key = (PathBuf, String, usize);
-type ModelNode = (Arc<Document>, NodePath);
+type ModelNode = (Arc<Document>, NodePath, Option<usize>);
 
 static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Default::default);
 
@@ -247,23 +247,34 @@ fn register_expanded(
 ) {
     let mut at = 0;
     for (node, count) in slots {
-        for scenario in &expanded[at..at + count] {
+        // A slot is plain (a `Scenario` with no `Examples` block of its own) when its path ends
+        // in `Segment::Scenario`; an outline row's slot ends in `Segment::Examples`.
+        let plain = matches!(node.last(), Segment::Scenario(_));
+        for (k, scenario) in expanded[at..at + count].iter().enumerate() {
             register(
                 path,
                 &scenario.name,
                 scenario.position.line,
                 document,
                 node.clone(),
+                if plain { None } else { Some(k) },
             );
         }
         at += count;
     }
 }
 
-fn register(path: &Path, name: &str, line: usize, document: &Arc<Document>, node: NodePath) {
+fn register(
+    path: &Path,
+    name: &str,
+    line: usize,
+    document: &Arc<Document>,
+    node: NodePath,
+    row: Option<usize>,
+) {
     REGISTRY.lock().expect("registry").insert(
         (path.to_owned(), name.to_owned(), line),
-        (document.clone(), node),
+        (document.clone(), node, row),
     );
 }
 
@@ -412,7 +423,7 @@ fn lower_feature(path: &Path, f: &morphir_gherkin::Feature, format: Format) -> g
 fn lookup(
     feature: &gherkin::Feature,
     scenario: &gherkin::Scenario,
-) -> Option<(Arc<Document>, NodePath)> {
+) -> Option<(Arc<Document>, NodePath, Option<usize>)> {
     let path = feature.path.clone()?;
     REGISTRY
         .lock()
@@ -431,7 +442,7 @@ pub fn prepare(
     scenario: &gherkin::Scenario,
     extensions: &Extensions,
 ) -> Result<(), String> {
-    let (document, path) = lookup(feature, scenario)
+    let (document, path, row) = lookup(feature, scenario)
         .ok_or_else(|| format!("no model node for scenario `{}`", scenario.name))?;
     let (context, _) = extensions.context_for(&document, &path).map_err(|errors| {
         errors
@@ -441,7 +452,11 @@ pub fn prepare(
             .join("; ")
     })?;
     world.context = context;
-    world.scenario = Some(ScenarioRef { document, path });
+    world.scenario = Some(ScenarioRef {
+        document,
+        path,
+        row,
+    });
     Ok(())
 }
 
@@ -454,7 +469,7 @@ pub fn skip_reason(
     scenario: &gherkin::Scenario,
     extensions: &Extensions,
 ) -> Option<String> {
-    let (document, path) = lookup(feature, scenario)?;
+    let (document, path, _row) = lookup(feature, scenario)?;
     match extensions.context_for(&document, &path) {
         Ok((_, Effect::Skip(reason))) => Some(reason),
         _ => None,
@@ -463,7 +478,7 @@ pub fn skip_reason(
 
 #[cfg(test)]
 mod tests {
-    use super::load;
+    use super::{REGISTRY, load};
 
     /// The lines cucumber gives the expanded rows of the first outline in `text`, read as `name`.
     fn row_lines(name: &str, text: &str) -> Vec<usize> {
@@ -484,5 +499,40 @@ mod tests {
     fn a_markdown_outline_row_reports_its_own_data_row_line() {
         let text = "# Feature: F\n\n## Scenario Outline: o <x>\n\n* Given a\n\n### Examples: E\n\n`@t`\n\n| x |\n| - |\n| 1 |\n| 2 |\n";
         assert_eq!(row_lines("f.feature.md", text), vec![13, 14]);
+    }
+
+    /// The registered `row` of every scenario `load` produces for `text`, in the order
+    /// `expand_examples` gives them.
+    fn registered_rows(name: &str, text: &str) -> Vec<Option<usize>> {
+        let dir = tempfile::tempdir().expect("create a temporary directory");
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).expect("write the document");
+        let feature = load(&path).expect("the document reads");
+        let registry = REGISTRY.lock().expect("registry");
+        feature
+            .scenarios
+            .iter()
+            .map(|s| {
+                registry
+                    .get(&(path.clone(), s.name.clone(), s.position.line))
+                    .expect("the scenario is registered")
+                    .2
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_outline_row_registers_its_0_based_row_within_its_own_examples_block() {
+        let text = "Feature: F\n  Scenario Outline: o <x>\n    Given a\n\n    Examples: first\n      | x |\n      | 1 |\n      | 2 |\n\n    Examples: second\n      | x |\n      | 3 |\n      | 4 |\n      | 5 |\n";
+        assert_eq!(
+            registered_rows("rows.feature", text),
+            vec![Some(0), Some(1), Some(0), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn a_plain_scenario_registers_with_no_row() {
+        let text = "Feature: F\n  Scenario: s\n    Given a\n";
+        assert_eq!(registered_rows("plain.feature", text), vec![None]);
     }
 }

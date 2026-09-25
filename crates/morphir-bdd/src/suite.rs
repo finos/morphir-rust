@@ -1,13 +1,13 @@
 //! One way to run every Morphir suite: morphir-gherkin parsing, extension context, tag filtering,
 //! and console, JSON and JUnit output.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cucumber::writer::{self, Stats as _};
-use cucumber::{World as _, WriterExt as _};
-use morphir_gherkin::extension::Extensions;
+use cucumber::{World as _, WriterExt as _, gherkin};
+use morphir_gherkin::extension::{Component, Context, Extensions};
 
 use crate::parser::{MorphirParser, prepare, skip_reason};
 use crate::steps::cli::CliProgram;
@@ -50,7 +50,17 @@ pub struct Suite {
     extensions: Extensions,
     tags: Option<String>,
     out_dir: Option<PathBuf>,
-    cli: Option<CliProgram>,
+    #[allow(clippy::type_complexity)]
+    filter: Option<
+        Arc<
+            dyn Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool
+                + Send
+                + Sync,
+        >,
+    >,
+    max_concurrent: Option<usize>,
+    #[allow(clippy::type_complexity)]
+    components: Vec<Arc<dyn Fn(&mut Context) + Send + Sync>>,
 }
 
 /// The counts and report paths from one [`Suite::run`].
@@ -102,7 +112,9 @@ impl Suite {
             extensions: standard_extensions(),
             tags: std::env::var("MORPHIR_BDD_TAGS").ok(),
             out_dir: std::env::var_os("MORPHIR_BDD_OUT").map(PathBuf::from),
-            cli: None,
+            filter: None,
+            max_concurrent: None,
+            components: Vec::new(),
         }
     }
 
@@ -142,16 +154,58 @@ impl Suite {
         self
     }
 
+    /// Sets an extra predicate a scenario must satisfy to be selected, on top of the tag
+    /// expression and the skip reason a scenario's own tags may give it: a scenario runs only if
+    /// the tag expression matches it (or none is set), `f` returns `true` for it, and it is not
+    /// skipped. Later calls replace an earlier one; they do not combine with each other.
+    ///
+    /// A filter that selects no scenario while no tag expression is set is still the "empty run"
+    /// error [`Suite::run`] documents, the same as an unfiltered run that happens to select
+    /// nothing: a filter meant to allow zero scenarios must be paired with a tag expression that
+    /// selects nothing on its own terms, for example `.tags("@nothing")`.
+    #[must_use]
+    pub fn filter(
+        mut self,
+        f: impl Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.filter = Some(Arc::new(f));
+        self
+    }
+
+    /// Sets how many scenarios cucumber runs at the same time. `1` runs scenarios one at a time,
+    /// in parse order: the order [`MorphirParser`] discovers `.feature` and `.feature.md` files
+    /// (sorted path order) and, within a file, the order its scenarios and outline rows appear.
+    /// Leaving this unset lets cucumber run scenarios concurrently, with no ordering guarantee
+    /// between them.
+    #[must_use]
+    pub fn max_concurrent_scenarios(mut self, n: usize) -> Self {
+        self.max_concurrent = Some(n);
+        self
+    }
+
+    /// Inserts a clone of `value` into every scenario's [`Context`] before its first step, after
+    /// the suite's own extensions have built that context from the scenario's tags, fences and
+    /// prose. Multiple calls apply in the order they were made, each free to overwrite an earlier
+    /// component of the same type ([`Context::insert`]'s own last-write-wins rule).
+    #[must_use]
+    pub fn with_component<T: Component + Clone>(mut self, value: T) -> Self {
+        self.components
+            .push(Arc::new(move |ctx: &mut Context| ctx.insert(value.clone())));
+        self
+    }
+
     /// Sets the program `When I run {string}` runs, named `name`: the command line's first word
     /// must equal `name`. Use this for a tool other than `morphir` itself; [`Suite::cli`] covers
     /// `morphir`.
     #[must_use]
-    pub fn cli_named(mut self, name: impl Into<String>, path: impl AsRef<Path>) -> Self {
-        self.cli = Some(CliProgram {
+    pub fn cli_named(self, name: impl Into<String>, path: impl AsRef<Path>) -> Self {
+        self.with_component(CliProgram {
             name: name.into(),
             path: path.as_ref().to_owned(),
-        });
-        self
+        })
     }
 
     /// Sets the program `When I run {string}` runs, named `"morphir"`.
@@ -205,10 +259,12 @@ impl Suite {
             .as_deref()
             .map(|t| TagExpr::parse(t).expect("a valid tag expression"));
         let mut extensions = self.extensions;
-        if let Some(program) = self.cli {
-            extensions = extensions.with_processor(InsertCli(program));
+        if !self.components.is_empty() {
+            extensions = extensions.with_processor(InsertComponents(self.components));
         }
         let extensions = Arc::new(extensions);
+        let filter = self.filter;
+        let max_concurrent = self.max_concurrent;
 
         let writer = MorphirWorld::cucumber::<PathBuf>()
             .with_parser(MorphirParser::new(extensions.clone()))
@@ -220,6 +276,7 @@ impl Suite {
                     .normalized(),
             )
             .fail_on_skipped()
+            .max_concurrent_scenarios(max_concurrent)
             .with_default_cli()
             .before({
                 let extensions = extensions.clone();
@@ -241,6 +298,7 @@ impl Suite {
                     }
                     all_tags.extend(scenario.tags.clone());
                     let keep = expr.as_ref().is_none_or(|e| e.matches(&all_tags))
+                        && filter.as_ref().is_none_or(|f| f(feature, rule, scenario))
                         && skip_reason(feature, rule, scenario, &extensions).is_none();
                     if keep {
                         selected.fetch_add(1, Ordering::SeqCst);
@@ -280,15 +338,16 @@ impl Suite {
 }
 
 /// Panics unless `name` is safe to join onto an output directory as a bare file name: not empty,
-/// not `.` or `..`, free of `/`, `\` and NUL, and a single [`Component::Normal`]. A name that
-/// fails the first checks but somehow still parsed as one `Normal` component would be redundant
-/// with them; a name that passes the character checks but is not a single `Normal` component (for
-/// example a Windows drive prefix such as `C:`) would not be caught by them. Checking both keeps
-/// the guarantee independent of how `Path::components` treats any one platform's separators.
+/// not `.` or `..`, free of `/`, `\` and NUL, and a single [`std::path::Component::Normal`]. A
+/// name that fails the first checks but somehow still parsed as one `Normal` component would be
+/// redundant with them; a name that passes the character checks but is not a single `Normal`
+/// component (for example a Windows drive prefix such as `C:`) would not be caught by them.
+/// Checking both keeps the guarantee independent of how `Path::components` treats any one
+/// platform's separators.
 fn assert_valid_name(name: &str) {
     let single_normal_component = matches!(
         Path::new(name).components().collect::<Vec<_>>().as_slice(),
-        [Component::Normal(_)]
+        [std::path::Component::Normal(_)]
     );
     let valid = !name.is_empty()
         && name != "."
@@ -326,19 +385,23 @@ fn unreadable_features(path: &Path) -> Option<String> {
     }
 }
 
-/// A [`morphir_gherkin::extension::Processor`] that inserts a suite's [`CliProgram`] into every
-/// scenario's context, so `When I run {string}` can find the program to run. [`Suite::cli`] and
-/// [`Suite::cli_named`] register one of these when they are used.
-struct InsertCli(CliProgram);
+/// A [`morphir_gherkin::extension::Processor`] that applies every closure a [`Suite::with_component`]
+/// call registered, in the order they were registered, into every scenario's context. It is the
+/// last processor a suite registers, so its components can see (and overwrite) whatever earlier
+/// extensions already put there.
+#[allow(clippy::type_complexity)]
+struct InsertComponents(Vec<Arc<dyn Fn(&mut Context) + Send + Sync>>);
 
-impl morphir_gherkin::extension::Processor for InsertCli {
+impl morphir_gherkin::extension::Processor for InsertComponents {
     fn process(
         &self,
         _doc: &morphir_gherkin::Document,
         _at: &morphir_gherkin::NodePath,
         ctx: &mut morphir_gherkin::extension::Context,
     ) -> Result<(), String> {
-        ctx.insert(self.0.clone());
+        for insert in &self.0 {
+            insert(ctx);
+        }
         Ok(())
     }
 }

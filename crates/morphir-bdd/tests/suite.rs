@@ -10,12 +10,76 @@
 
 mod drivers;
 
+use std::sync::{Arc, Mutex};
+
+use cucumber::then;
 use drivers::suite_driver::SuiteDriver;
 use morphir_bdd::Suite;
+use morphir_bdd::world::MorphirWorld;
 use morphir_gherkin::Tag;
 use morphir_gherkin::extension::{Context, Effect, Extensions, Scope, TagExtension};
+use morphir_gherkin::visit::Node;
 
 const FEATURE: &str = "Feature: S\n  @keep\n  Scenario: kept\n    Given the step library is linked\n  Scenario: dropped\n    Given a step that no library defines\n";
+
+/// A test-only component `Suite::with_component` can insert into every scenario's context. Used
+/// by [`a_component_reaches_every_scenario`] to prove that `with_component` reaches every
+/// scenario, not just one.
+#[derive(Debug, Clone, PartialEq)]
+struct Marker(u32);
+
+/// `Then the marker is {int}` asserts that a [`Marker`] `with_component` inserted into this
+/// scenario's context carries `expected`.
+#[then(expr = "the marker is {int}")]
+fn marker_is(world: &mut MorphirWorld, expected: u32) {
+    assert_eq!(world.context.get::<Marker>(), Some(&Marker(expected)));
+}
+
+/// A test-only component: a shared log every `Then I record my name` step appends the running
+/// scenario's name to. Used by [`a_sequential_run_keeps_parse_order`] to prove that
+/// `Suite::max_concurrent_scenarios(1)` runs scenarios one at a time, in parse order.
+#[derive(Debug, Clone)]
+struct NameLog(Arc<Mutex<Vec<String>>>);
+
+/// The running scenario's name, read from its node in the document: [`ScenarioRef`] carries no
+/// name of its own. A plain scenario's [`ScenarioRef::path`] already names the scenario; one row
+/// of an expanded outline names its own `Examples` block instead, so the scenario's name is read
+/// from that path's parent.
+///
+/// [`ScenarioRef`]: morphir_bdd::world::ScenarioRef
+/// [`ScenarioRef::path`]: morphir_bdd::world::ScenarioRef::path
+fn running_scenario_name(world: &MorphirWorld) -> String {
+    let scenario = world
+        .scenario
+        .as_ref()
+        .expect("no running scenario: `prepare` has not filled the world yet");
+    let path = if scenario.row.is_some() {
+        scenario
+            .path
+            .parent()
+            .expect("an outline row's examples path has a parent: the outline's own scenario path")
+    } else {
+        scenario.path.clone()
+    };
+    match scenario.document.node(&path) {
+        Some(Node::Scenario(s)) => s.name.clone(),
+        other => panic!("expected a scenario node at {path}, found {other:?}"),
+    }
+}
+
+/// `Then I record my name` appends the running scenario's name to the scenario's [`NameLog`]
+/// component.
+#[then("I record my name")]
+fn record_my_name(world: &mut MorphirWorld) {
+    let name = running_scenario_name(world);
+    let log = world
+        .context
+        .get::<NameLog>()
+        .expect("no NameLog component: the suite must call `.with_component(NameLog(…))`")
+        .0
+        .clone();
+    log.lock().expect("name log").push(name);
+}
 
 #[tokio::test]
 async fn a_suite_writes_json_and_junit_and_honours_a_tag_expression() {
@@ -299,4 +363,64 @@ fn suite_new_refuses_a_name_with_a_parent_component() {
 #[should_panic(expected = "invalid suite name")]
 fn suite_new_refuses_a_name_with_a_path_separator() {
     Suite::new("a/b");
+}
+
+/// `Suite::filter` selects scenarios by a predicate over the feature, rule and scenario, combined
+/// with (AND) the tag expression and skip effects: here it keeps only the scenario named
+/// `keep me`, so the other scenario's undefined step never runs and never fails the suite.
+#[tokio::test]
+async fn a_filter_selects_scenarios_by_name() {
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "f.feature",
+        "Feature: F\n  Scenario: keep me\n    Given the step library is linked\n  Scenario: drop me\n    Given a step that no library defines\n",
+    );
+    let result = driver
+        .when_the_suite_runs_with(|s| {
+            s.clear_tags()
+                .filter(|_, _, sc| sc.name.starts_with("keep"))
+        })
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 1, "{result:?}");
+}
+
+/// `Suite::with_component` inserts a clone of its value into every scenario's context, not just
+/// one: both scenarios here read the same `Marker(7)`.
+#[tokio::test]
+async fn a_component_reaches_every_scenario() {
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "m.feature",
+        "Feature: M\n  Scenario: a\n    Then the marker is 7\n  Scenario: b\n    Then the marker is 7\n",
+    );
+    let result = driver
+        .when_the_suite_runs_with(|s| s.clear_tags().with_component(Marker(7)))
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 2, "{result:?}");
+}
+
+/// `Suite::max_concurrent_scenarios(1)` runs scenarios one at a time, in parse order: the order
+/// this single feature file lists them in.
+#[tokio::test]
+async fn a_sequential_run_keeps_parse_order() {
+    let names = Arc::new(Mutex::new(Vec::new()));
+    let mut driver = SuiteDriver::new();
+    let body: String = (0..20)
+        .map(|i| format!("  Scenario: s{i:02}\n    Then I record my name\n"))
+        .collect();
+    driver.given_a_feature("o.feature", &format!("Feature: O\n{body}"));
+    let result = driver
+        .when_the_suite_runs_with(|s| {
+            s.clear_tags()
+                .max_concurrent_scenarios(1)
+                .with_component(NameLog(names.clone()))
+        })
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 20, "{result:?}");
+    let seen = names.lock().expect("name log").clone();
+    let expected: Vec<String> = (0..20).map(|i| format!("s{i:02}")).collect();
+    assert_eq!(seen, expected);
 }

@@ -426,6 +426,31 @@ fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
 // =============================================================================
 
 fn read_v4(req: &DecodeRequest, value: Json) -> Result<(Node, Vec<Warning>), Diagnostic> {
+    // The separate metadata draft can read 4.1.0, while this established IR
+    // suite still advertises the released support table ending before 4.1.0.
+    // Keep that boundary at the adapter rather than restricting the new codec.
+    let version = match req.node {
+        NodeKind::FormatVersion => Some(&value),
+        NodeKind::IRFile
+        | NodeKind::Distribution
+        | NodeKind::DistributionManifestFile
+        | NodeKind::ModuleManifestFile
+        | NodeKind::TypeDefinitionFile
+        | NodeKind::ValueDefinitionFile => value.get("formatVersion"),
+        _ => None,
+    };
+    if version.and_then(Json::as_str) == Some("4.1.0") {
+        let cursor = if req.node == NodeKind::FormatVersion {
+            "/"
+        } else {
+            "/formatVersion"
+        };
+        return Err(Diagnostic::normalization(
+            DiagnosticCode::UnsupportedFormatVersionMinor,
+            cursor,
+            "formatVersion 4.1.0 is outside this IR suite's advertised support table",
+        ));
+    }
     // Both path modes read through the same readers, so both decode under the open window (see
     // the module's note on `current` and `pinned`). `req.path` is matched rather than ignored so
     // the day the two paths differ, this is where that shows up.

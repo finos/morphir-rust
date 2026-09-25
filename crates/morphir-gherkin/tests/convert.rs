@@ -256,7 +256,11 @@ A line.
 }
 
 #[test]
-fn a_fence_line_that_looks_like_a_comment_is_also_escaped() {
+fn a_fence_line_that_looks_like_a_comment_is_written_byte_identical() {
+    // R10: a description fence's body is written byte for byte, never escaped. This crate's own
+    // reader always finds the fence's closing line first (it does not walk into the fence body),
+    // so the body round-trips exactly, even though the `#`-led line inside it is not portable to
+    // the reference Gherkin parsers (see the module documentation).
     let text = "\
 # Feature: Fenced hash
 
@@ -271,19 +275,193 @@ key: value
 ";
     let (md, source) = read_str("fence-hash.feature.md", text).unwrap();
     let (feature_text, _map) = to_feature_text(&md, &source);
-    for line in feature_text.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with('#'),
-            "unescaped comment-like line in the converted text: {line:?}"
-        );
-    }
     assert!(
-        feature_text.contains("\\# a comment inside the fence"),
+        feature_text.contains("# a comment inside the fence"),
+        "{feature_text}"
+    );
+    assert!(
+        !feature_text.contains("\\# a comment inside the fence"),
+        "the fence body must not be escaped: {feature_text}"
+    );
+
+    let (back, _) = read_str("fence-hash.feature", &feature_text).unwrap();
+    let original_body = md
+        .feature
+        .as_ref()
+        .unwrap()
+        .description
+        .fences()
+        .next()
+        .unwrap()
+        .body
+        .clone();
+    let converted_body = back
+        .feature
+        .unwrap()
+        .description
+        .fences()
+        .next()
+        .unwrap()
+        .body
+        .clone();
+    assert_eq!(converted_body, original_body);
+    assert_eq!(converted_body, "# a comment inside the fence\nkey: value\n");
+}
+
+#[test]
+fn table_cells_with_backslash_pipe_and_newline_round_trip() {
+    // Critical 2: gherkin 0.16 allows only `\|`, `\\` and `\n` as backslash sequences inside a
+    // table cell. A cell's own backslash, pipe and line break must be escaped the same way, and a
+    // `<x>` placeholder must stay untouched, so the table reads back to the same rows.
+    let text = "Feature: F\n  Scenario Outline: S\n    Given <x>\n\n    Examples:\n      \
+                | x |\n      | a\\|b\\\\c\\nd |\n      | <x> |\n";
+    let (doc, source) = read_str("cells.feature", text).unwrap();
+    let original = doc.feature.as_ref().unwrap().scenarios[0].examples[0]
+        .table
+        .as_ref()
+        .unwrap()
+        .rows
+        .clone();
+    assert_eq!(original[1][0], "a|b\\c\nd");
+    assert_eq!(original[2][0], "<x>");
+
+    let (feature_text, _map) = to_feature_text(&doc, &source);
+    let (back, _) = read_str("cells.feature", &feature_text).unwrap();
+    let converted = back.feature.unwrap().scenarios[0].examples[0]
+        .table
+        .as_ref()
+        .unwrap()
+        .rows
+        .clone();
+    assert_eq!(converted, original);
+}
+
+#[test]
+fn a_doc_string_with_no_conflicting_line_uses_triple_quotes() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+  ```ion
+  plain content
+  ```
+";
+    let (md, source) = read_str("plain.feature.md", text).unwrap();
+    let (feature_text, _map) = to_feature_text(&md, &source);
+    assert!(feature_text.contains("\"\"\"ion"), "{feature_text}");
+    let (back, _) = read_str("plain.feature", &feature_text).unwrap();
+    let Some(StepArgument::DocString(d)) = &back.feature.unwrap().scenarios[0].steps[0].argument
+    else {
+        panic!("a doc string")
+    };
+    assert_eq!(d.content_type.as_deref(), Some("ion"));
+    assert_eq!(d.body, "plain content\n");
+}
+
+#[test]
+fn a_doc_string_with_a_triple_quote_line_uses_backticks() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+  ```text
+  \"\"\"looks like closing
+  more text
+  ```
+";
+    let (md, source) = read_str("backtick.feature.md", text).unwrap();
+    let (feature_text, _map) = to_feature_text(&md, &source);
+    assert!(feature_text.contains("```text"), "{feature_text}");
+    let (back, _) = read_str("backtick.feature", &feature_text).unwrap();
+    let Some(StepArgument::DocString(d)) = &back.feature.unwrap().scenarios[0].steps[0].argument
+    else {
+        panic!("a doc string")
+    };
+    assert_eq!(d.content_type.as_deref(), Some("text"));
+    assert_eq!(d.body, "\"\"\"looks like closing\nmore text\n");
+}
+
+#[test]
+fn a_doc_string_with_both_delimiters_stays_triple_quoted_and_escapes_them() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+  ```text
+  \"\"\"looks like closing
+  ```also looks like closing
+  plain
+  ```
+";
+    let (md, source) = read_str("both.feature.md", text).unwrap();
+    let original_body = md.feature.as_ref().unwrap().scenarios[0].steps[0]
+        .argument
+        .as_ref()
+        .map(|a| match a {
+            StepArgument::DocString(d) => d.body.clone(),
+            StepArgument::Table(_) => panic!("a doc string"),
+        })
+        .unwrap();
+    let (feature_text, _map) = to_feature_text(&md, &source);
+    assert!(feature_text.contains("\"\"\"text"), "{feature_text}");
+    assert!(
+        feature_text.contains("\\\"\\\"\\\"looks like closing"),
+        "{feature_text}"
+    );
+    let (back, _) = read_str("both.feature", &feature_text).unwrap();
+    let Some(StepArgument::DocString(d)) = &back.feature.unwrap().scenarios[0].steps[0].argument
+    else {
+        panic!("a doc string")
+    };
+    assert_eq!(d.content_type.as_deref(), Some("text"));
+    assert_eq!(d.body, original_body);
+}
+
+#[test]
+fn a_fence_info_string_round_trips_exactly() {
+    // Important 4: FenceInfo does not preserve the order of bare words and `key=value` options,
+    // so the converter writes `raw`, the fence's original info text, back verbatim.
+    let text = "\
+# Feature: F
+
+Some prose.
+
+```yaml key=value extra
+key: value
+```
+
+## Scenario: S
+
+* Given a step
+";
+    let (md, source) = read_str("info.feature.md", text).unwrap();
+    let fence = md
+        .feature
+        .as_ref()
+        .unwrap()
+        .description
+        .fences()
+        .next()
+        .unwrap();
+    assert_eq!(fence.info.raw, "yaml key=value extra");
+
+    let (feature_text, _map) = to_feature_text(&md, &source);
+    assert!(
+        feature_text.contains("```yaml key=value extra"),
         "{feature_text}"
     );
 
-    // The converted text is still valid Gherkin: it reads back without error.
-    let (back, _) = read_str("fence-hash.feature", &feature_text).unwrap();
-    assert!(back.feature.is_some());
+    let (back, _) = read_str("info.feature", &feature_text).unwrap();
+    let back_feature = back.feature.unwrap();
+    let back_fence = back_feature.description.fences().next().unwrap();
+    assert_eq!(back_fence.info.raw, "yaml key=value extra");
 }

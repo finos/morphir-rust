@@ -114,6 +114,10 @@ pub struct FenceInfo {
     pub language: String,
     pub words: Vec<String>,
     pub options: Vec<(String, String)>,
+    /// The info string exactly as written, trimmed, with the original order of `language`,
+    /// `words` and `options` kept. A writer that needs the fence's original info text back,
+    /// rather than one it reassembles, uses this field.
+    pub raw: String,
 }
 
 impl FenceInfo {
@@ -131,6 +135,7 @@ impl FenceInfo {
             language,
             words,
             options,
+            raw: info.trim().to_owned(),
         }
     }
 }

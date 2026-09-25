@@ -10,22 +10,41 @@
 //! A `Description` (everything before a node's first child) is different: it is written back as
 //! plain Markdown, not as comments, so that reading the `.feature` text gives the same
 //! description again. The reference Gherkin parsers read a line whose first character is `#` as a
-//! comment, even inside a description or a description's fenced block, and this crate's own
-//! `.feature` reader can even lose a trailing comment-like line by folding it into the next
-//! heading's tag lines. So a description line that would start with `#` once indented is written
-//! with a leading backslash instead: `\#`. CommonMark reads `\#` back as a literal `#`, so a
-//! written prose line reads back to the same text.
+//! comment, even inside a description, and this crate's own `.feature` reader can even lose a
+//! trailing comment-like line by folding it into the next heading's tag lines. So a description
+//! prose line that would start with `#` once indented is written with a leading backslash
+//! instead: `\#`. CommonMark reads `\#` back as a literal `#`, so a written prose line reads back
+//! to the same text.
+//!
+//! A description fence's body is written byte for byte, with no escaping: it is arbitrary data
+//! (YAML, Ion and the like), and a fence's own closing line always bounds it, so this crate's own
+//! reader never misreads it. A body line that starts with `#` is not escaped and stays as
+//! written; the reference Gherkin parsers still read that specific line as a comment, so a
+//! description fence body with such a line is not portable to them, even though this crate reads
+//! it back correctly.
+//!
+//! A table cell is escaped for the three sequences Gherkin gives special meaning inside a cell:
+//! `\`, `|` and a line break, written as `\\`, `\|` and `\n`. A step's doc string is written with
+//! `"""` unless its body has a line that starts with `"""`; then it is written with a triple
+//! backtick fence instead, unless the body also has a line that starts with a triple backtick, in
+//! which case it stays `"""` and every `"""` in the body is escaped as `\"\"\"`, which this
+//! crate's reader already unescapes back to `"""`.
 
 use crate::model::*;
 use crate::span::SourceText;
 
+/// A map from a line of the text `to_feature_text` writes back to the line it came from in the
+/// original file. A written line that comes from more than one source line (the closing line of a
+/// prose block, for example) or from none (a blank line between blocks) maps to `0`.
 #[derive(Debug, Clone, Default)]
 pub struct LineMap {
     source_lines: Vec<usize>,
 }
 
 impl LineMap {
-    /// The original line for a 1-based line of the written text.
+    /// The original line for a 1-based line of the written text, or `0` for a line past the end
+    /// of the written text, or for a written line with no single source line of its own (a blank
+    /// separator line between description blocks, for example).
     pub fn source_line(&self, feature_line: usize) -> usize {
         self.source_lines
             .get(feature_line - 1)
@@ -58,8 +77,10 @@ impl Writer {
         }
     }
 
-    /// A description: prose and fences, written back as plain Markdown. A line that would start
-    /// with `#` once indented is escaped, so plain Gherkin never reads it as a comment.
+    /// A description: prose and fences, written back as plain Markdown. A prose line that would
+    /// start with `#` once indented is escaped, so plain Gherkin never reads it as a comment. A
+    /// fence's body is written byte for byte; see the module documentation for why that is safe
+    /// for this crate's own reader, and what it means for other Gherkin tooling.
     fn description(&mut self, indent: usize, description: &Description) {
         for block in &description.blocks {
             match block {
@@ -67,20 +88,15 @@ impl Writer {
                     for (i, text) in p.markdown.trim_end().lines().enumerate() {
                         self.line(
                             indent,
-                            &escape_comment_marker(text.trim_start()),
+                            &escape_description_prose_line(text.trim_start()),
                             p.position.line + i,
                         );
                     }
                 }
                 DescriptionBlock::Fence(f) => {
-                    let info = fence_info_text(&f.info);
-                    self.line(indent, &format!("```{info}"), f.position.line);
+                    self.line(indent, &format!("```{}", f.info.raw), f.position.line);
                     for (i, text) in f.body.lines().enumerate() {
-                        self.line(
-                            indent,
-                            &escape_comment_marker(text),
-                            f.position.line + 1 + i,
-                        );
+                        self.line(indent, text, f.position.line + 1 + i);
                     }
                     self.line(indent, "```", f.position.line + 1 + f.body.lines().count());
                 }
@@ -101,8 +117,7 @@ impl Writer {
                     }
                 }
                 DescriptionBlock::Fence(f) => {
-                    let info = fence_info_text(&f.info);
-                    self.comment_line(indent, &format!("```{info}"), f.position.line);
+                    self.comment_line(indent, &format!("```{}", f.info.raw), f.position.line);
                     for (i, text) in f.body.lines().enumerate() {
                         self.comment_line(indent, text, f.position.line + 1 + i);
                     }
@@ -130,7 +145,7 @@ impl Writer {
                     .rows
                     .iter()
                     .filter_map(|r| r.get(c))
-                    .map(|cell| cell.chars().count())
+                    .map(|cell| escape_table_cell(cell).chars().count())
                     .max()
                     .unwrap_or(0)
             })
@@ -139,7 +154,7 @@ impl Writer {
             let cells: Vec<String> = row
                 .iter()
                 .enumerate()
-                .map(|(c, cell)| format!("{cell:<width$}", width = widths[c]).replace('|', "\\|"))
+                .map(|(c, cell)| format!("{:<width$}", escape_table_cell(cell), width = widths[c]))
                 .collect();
             self.line(
                 indent,
@@ -158,22 +173,28 @@ impl Writer {
             );
             match &step.argument {
                 Some(StepArgument::Table(t)) => self.table(indent + 1, t),
-                Some(StepArgument::DocString(d)) => {
-                    let opening = format!("\"\"\"{}", d.content_type.clone().unwrap_or_default());
-                    self.line(indent + 1, &opening, d.position.line);
-                    for (i, text) in d.body.lines().enumerate() {
-                        self.line(indent + 1, text, d.position.line + 1 + i);
-                    }
-                    self.line(
-                        indent + 1,
-                        "\"\"\"",
-                        d.position.line + 1 + d.body.lines().count(),
-                    );
-                }
+                Some(StepArgument::DocString(d)) => self.doc_string(indent + 1, d),
                 None => {}
             }
             self.comments(indent + 1, &step.notes);
         }
+    }
+
+    /// A step's doc string. `choose_doc_string_delimiter` picks a delimiter the body's own lines
+    /// cannot be mistaken for; see the module documentation for the three cases.
+    fn doc_string(&mut self, indent: usize, d: &DocString) {
+        let (marker, escape) = choose_doc_string_delimiter(&d.body);
+        let opening = format!("{marker}{}", d.content_type.clone().unwrap_or_default());
+        self.line(indent, &opening, d.position.line);
+        for (i, text) in d.body.lines().enumerate() {
+            let text = if escape {
+                escape_doc_string_marker(text, marker)
+            } else {
+                text.to_owned()
+            };
+            self.line(indent, &text, d.position.line + 1 + i);
+        }
+        self.line(indent, marker, d.position.line + 1 + d.body.lines().count());
     }
 
     fn scenario(&mut self, indent: usize, s: &Scenario) {
@@ -257,31 +278,57 @@ pub fn to_feature_text(doc: &Document, _source: &SourceText) -> (String, LineMap
     (w.out, w.map)
 }
 
-/// The fence info of a description fence, re-assembled from its language, its bare words and its
-/// `key=value` options.
-fn fence_info_text(info: &FenceInfo) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if !info.language.is_empty() {
-        parts.push(info.language.clone());
-    }
-    parts.extend(info.words.iter().cloned());
-    parts.extend(
-        info.options
-            .iter()
-            .map(|(key, value)| format!("{key}={value}")),
-    );
-    parts.join(" ")
-}
-
-/// Escapes a line that would start with `#` once written and indented, so plain Gherkin never
-/// reads it as a comment. A backslash in front of the `#` is a CommonMark escape: reading the
-/// line back as Markdown gives a literal `#`, the same as before it was written. Inside a fenced
-/// block, CommonMark does not undo backslash escapes, so the backslash stays part of that line's
-/// text; this only matters for a fence body line that itself starts with `#`.
-fn escape_comment_marker(line: &str) -> String {
+/// Escapes a description prose line that would start with `#` once written and indented, so
+/// plain Gherkin never reads it as a comment. A backslash in front of the `#` is a CommonMark
+/// escape: reading the line back as Markdown gives a literal `#`, the same as before it was
+/// written.
+fn escape_description_prose_line(line: &str) -> String {
     if line.starts_with('#') {
         format!("\\{line}")
     } else {
         line.to_owned()
     }
+}
+
+/// Escapes a table cell for the three backslash sequences a Gherkin table cell gives special
+/// meaning: `\|` for a literal `|`, `\\` for a literal `\`, and `\n` for a line break. Walking the
+/// cell one character at a time and mapping each one to its own output, rather than running
+/// several `String::replace` passes over the whole cell, keeps a backslash this function writes
+/// from being escaped again by a later pass.
+fn escape_table_cell(cell: &str) -> String {
+    let mut escaped = String::with_capacity(cell.len());
+    for c in cell.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '|' => escaped.push_str("\\|"),
+            '\n' => escaped.push_str("\\n"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+/// The delimiter to write a doc string's body with, and whether that body needs its own
+/// delimiter sequence escaped. See the module documentation for the three cases this chooses
+/// between.
+fn choose_doc_string_delimiter(body: &str) -> (&'static str, bool) {
+    let starts_with = |marker: &str| {
+        body.lines()
+            .any(|line| line.trim_start().starts_with(marker))
+    };
+    if !starts_with("\"\"\"") {
+        ("\"\"\"", false)
+    } else if !starts_with("```") {
+        ("```", false)
+    } else {
+        ("\"\"\"", true)
+    }
+}
+
+/// Escapes every occurrence of `marker` in a doc string body line by putting a backslash in front
+/// of each of its characters, the same escaping this crate's `.feature` reader already
+/// unescapes.
+fn escape_doc_string_marker(line: &str, marker: &str) -> String {
+    let escaped: String = marker.chars().flat_map(|c| ['\\', c]).collect();
+    line.replace(marker, &escaped)
 }

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The new `morphir-gherkin` crate reads `.feature` and `.feature.md` files
+  (Markdown with Gherkin) into one Gherkin document model, with source spans,
+  node paths, and visitor and cursor navigation. Prose is parsed as Markdown.
+  Tag, fence and prose extensions build a typed scenario context, and a
+  converter turns a `.feature.md` document into `.feature` text
+  (finos/morphir#946).
+
 ### Changed
 - The extension bundles are released with version-2 descriptors that carry
   each guest's capability claims: `extension/avro/v0.2.0`,

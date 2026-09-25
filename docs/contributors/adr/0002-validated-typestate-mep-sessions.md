@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded by the `morphir-host` design (`Channel`, `SessionCore`, `Session`) in morphir-host Phase A part 4
+
+> **Supersession notice:** `morphir-daemon` no longer has its own typestate session or `MepTransport`. Sessions run through `morphir_host::Session` over a `morphir_host::Channel`, and a new transport implements `Channel`, not `MepTransport`. The validation rules this record describes still hold: `morphir-host` checks the same identity, protocol and capability claims and the same result invariants. The rest of this record preserves the original rationale.
 
 ## Date
 

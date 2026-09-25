@@ -886,7 +886,7 @@ fn decode_number_literal(value: &JsonValue, cursor: &str) -> Result<Literal, Dia
 
 /// Reads a JSON number as an integer literal when its lexeme has no point and no exponent
 /// (decision 0009), at any size.
-fn integer_from_json(value: &JsonValue) -> Option<BigInt> {
+pub(crate) fn integer_from_json(value: &JsonValue) -> Option<BigInt> {
     let lexeme = value.as_number()?.to_string();
     if lexeme.contains(['.', 'e', 'E']) {
         return None;

@@ -493,15 +493,20 @@ fn expand_side(side: &Value, json_types: &HashMap<String, NodeUri>) -> Result<Ve
     let context = resolve_context(None, &side["context"], &resources, None)
         .map_err(|error| error.to_string())?;
     let facts = side["facts"].as_object().ok_or("missing facts object")?;
-    let mut expanded = expand_properties(
+    let expanded = expand_properties(
         &subject,
         facts.iter().map(|(key, value)| (key.as_str(), value)),
         &context,
         |predicate| json_types.get(&predicate.to_string()).cloned(),
     )
     .map_err(|error| error.to_string())?;
-    expanded.dedup();
-    Ok(expanded)
+    let mut unique = Vec::new();
+    for fact in expanded {
+        if !unique.contains(&fact) {
+            unique.push(fact);
+        }
+    }
+    Ok(unique)
 }
 
 fn same_facts(left: &[Fact], right: &[Fact]) -> bool {

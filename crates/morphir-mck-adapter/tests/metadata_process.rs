@@ -57,6 +57,32 @@ fn compare_facts_claim_uses_real_context_expansion_and_json_datatype() {
 }
 
 #[test]
+fn compare_facts_collapses_nonadjacent_alias_duplicates() {
+    let subject = "morphir://ir/pkg/acme/orders?format=4.1.0#/module/api";
+    let repeated = "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/naming/value/label";
+    let middle = "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/naming/value/count";
+    let datatype = "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/naming/type/label";
+    let context = json!({
+        "first":{"@id":repeated,"@type":"@json"},
+        "middle":{"@id":middle,"@type":"@json"},
+        "last":{"@id":repeated,"@type":"@json"}
+    });
+    let left = json!({"owner":subject,"carrier":"attributesFacts",
+        "context":context,"facts":{"first":"same","middle":7,"last":"same"}});
+    let right = json!({"owner":subject,"carrier":"attributesFacts",
+        "context":context,"facts":{"first":"same","middle":7}});
+    let closure = json!({"predicates":[
+        {"uri":repeated,"object":{"kind":"json","type":datatype}},
+        {"uri":middle,"object":{"kind":"json","type":datatype}}
+    ]});
+
+    let replies = exchange(left, right, closure);
+    assert_eq!(replies[1]["ok"], true, "{}", replies[1]);
+    assert_eq!(replies[1]["observation"]["equal"], true);
+    assert_eq!(replies[1]["observation"]["distinctFacts"], 2);
+}
+
+#[test]
 fn compare_facts_keeps_json_array_order_distinct() {
     let predicate = "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/naming/value/label-list";
     let datatype = "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/naming/type/label-list";

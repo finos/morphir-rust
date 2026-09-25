@@ -335,7 +335,11 @@ impl DataValueValidator {
     ) -> Result<(), DataValueError> {
         match (sdk.0, sdk.1, args) {
             ("basics", "bool", []) => expect_primitive(value.is_boolean(), path, "Bool"),
-            ("basics", "int", []) => expect_primitive(value.as_i64().is_some(), path, "Int"),
+            ("basics", "int", []) => expect_primitive(
+                v4::serde_tagged::integer_from_json(value).is_some(),
+                path,
+                "Int",
+            ),
             ("basics", "float", []) => expect_primitive(value.is_number(), path, "Float"),
             ("string", "string", []) => expect_primitive(value.is_string(), path, "String"),
             ("char", "char", []) => expect_primitive(

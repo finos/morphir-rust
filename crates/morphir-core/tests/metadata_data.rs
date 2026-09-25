@@ -19,6 +19,24 @@ fn string() -> v4::Type {
     reference("morphir/SDK:string#string", vec![])
 }
 
+#[test]
+fn metadata_sdk_int_accepts_integer_lexemes_beyond_i64() {
+    let validator = DataValueValidator::v4(&definitions()).unwrap();
+    let integer = reference("morphir/SDK:basics#int", vec![]);
+
+    for lexeme in ["18446744073709551616", "-9223372036854775809"] {
+        let value = serde_json::from_str(lexeme).unwrap();
+        assert!(
+            validator.validate_v4_data(&integer, &value).is_ok(),
+            "integer lexeme {lexeme} should be accepted"
+        );
+    }
+    for lexeme in ["1.0", "1e2"] {
+        let value = serde_json::from_str(lexeme).unwrap();
+        assert!(validator.validate_v4_data(&integer, &value).is_err());
+    }
+}
+
 fn definitions() -> v4::Distribution {
     let dict = || reference("morphir/SDK:dict#dict", vec![string(), string()]);
     let alias = |type_expr| v4::AccessControlled {

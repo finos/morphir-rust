@@ -6,8 +6,8 @@ use anyhow::{Result, anyhow};
 use base64::Engine as _;
 use morphir_core::ir::v4::{DocumentGraphError, DocumentMeta, expand_document_graph};
 use morphir_core::metadata::{
-    AssertionSource, ContextResources, DocumentId, Fact, MetadataError, ObjectTerm,
-    expand_properties, resolve_context,
+    Assertion, AssertionKey, AssertionSource, Carrier, ContextResources, DocumentId, Fact,
+    GraphIndex, GraphName, MetadataError, ObjectTerm, expand_properties, resolve_context,
 };
 use morphir_core::node_address::{NodeUri, Sha256Digest};
 use morphir_package::authoring::{AuthoredLibrary, PublicationBindings};
@@ -66,7 +66,8 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 "claims":[
                     {"operation":"compareFacts","profile":"json","layout":"single","irRevision":"4.1.0"},
                     {"operation":"resolveSources","profile":"json","layout":"single","irRevision":"4.1.0"},
-                    {"operation":"publish","profile":"json","layout":"single","irRevision":"4.1.0"}
+                    {"operation":"publish","profile":"json","layout":"single","irRevision":"4.1.0"},
+                    {"operation":"sourceEdit","profile":"json","layout":"single","irRevision":"4.1.0"}
                 ]})
             }
             Request::Run {
@@ -82,6 +83,7 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 if operation != "compareFacts"
                     && operation != "resolveSources"
                     && operation != "publish"
+                    && operation != "sourceEdit"
                 {
                     json!({"id":id,"ok":false,"error":{"code":"unsupported_operation",
                         "message":"this metadata operation is not implemented"}})
@@ -95,6 +97,9 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                         }
                         "publish" => {
                             publish(&case_id, &targets, &given, &schema_closure, &fixtures)
+                        }
+                        "sourceEdit" => {
+                            source_edit(&case_id, &targets, &given, &schema_closure, &fixtures)
                         }
                         _ => unreachable!("unsupported operations returned above"),
                     };
@@ -342,6 +347,83 @@ fn publish(
         "sha256":published_digest.strip_prefix("sha256:").unwrap()}],
         "predicate":bound.to_string()}),
     )
+}
+
+fn source_edit(
+    case_id: &str,
+    targets: &[Value],
+    given: &Value,
+    schema_closure: &str,
+    fixtures: &[Fixture],
+) -> Result<Value, String> {
+    if !valid_case_id(case_id) {
+        return Err("invalid metadata case id".into());
+    }
+    if targets != [json!({"profile":"json","layout":"single","irRevision":"4.1.0"})] {
+        return Err("sourceEdit target is not supported".into());
+    }
+    read_closure(schema_closure, fixtures)?;
+    if given["provenanceStorage"] != "document"
+        || given["sourceDependentRemoval"] != true
+        || given["trustedProducerManifest"] != false
+        || given["storedAssertionSources"] != false
+        || given["carrier"] != "documentGraph"
+    {
+        return Err("unsupported source edit fixture".into());
+    }
+    let owner = DocumentId::new(
+        given["ownerDocument"]
+            .as_str()
+            .ok_or("missing owner document")?,
+    )
+    .map_err(|error| error.to_string())?;
+    let wire = &given["fact"];
+    if wire["graph"] != "default" {
+        return Err("source edit requires the default graph".into());
+    }
+    let subject = NodeUri::parse(wire["subject"].as_str().ok_or("missing fact subject")?)
+        .map_err(|error| error.to_string())?;
+    let predicate = NodeUri::parse(wire["predicate"].as_str().ok_or("missing fact predicate")?)
+        .map_err(|error| error.to_string())?;
+    let object = wire["object"]
+        .get("@value")
+        .ok_or("missing fact value")?
+        .clone();
+    let fact = Fact::new(
+        subject,
+        predicate,
+        ObjectTerm::value(object),
+        GraphName::Default,
+    );
+    let key = AssertionKey::new(owner.clone(), Carrier::DocumentGraph, fact)
+        .map_err(|error| error.to_string())?;
+    let mut graph = GraphIndex::new();
+    graph
+        .insert(Assertion::new(key))
+        .map_err(|error| error.to_string())?;
+    let source = match given["removeSource"]["kind"].as_str() {
+        Some("compiler") => AssertionSource::Compiler {
+            producer: given["removeSource"]["producer"]
+                .as_str()
+                .ok_or("missing compiler producer")?
+                .to_owned(),
+            reference: given["removeSource"]["ref"].as_str().map(ToOwned::to_owned),
+        },
+        Some("author") => AssertionSource::Author {
+            reference: given["removeSource"]["ref"]
+                .as_str()
+                .ok_or("missing author reference")?
+                .to_owned(),
+        },
+        _ => return Err("unsupported removal source".into()),
+    };
+    let before = graph.facts().to_vec();
+    match graph.remove_source_from_owner(&owner, &source) {
+        Err(MetadataError::UnknownSourceOwnership) => Ok(json!({"outcome":"rejected",
+            "diagnostic":"assertion_source_unknown","factsChanged":graph.facts() != before})),
+        Err(error) => Err(error.to_string()),
+        Ok(_) => Err("source edit fixture unexpectedly has known ownership".into()),
+    }
 }
 
 fn read_fixtures(fixtures: &[Fixture]) -> Result<HashMap<String, Vec<u8>>, String> {

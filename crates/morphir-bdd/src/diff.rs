@@ -8,7 +8,7 @@ const MAX_LINES: usize = 400;
 /// Builds a unified diff between `expected` and `actual`, with `expected_name` and `actual_name`
 /// as the `---`/`+++` header labels and three lines of context around each hunk.
 ///
-/// The diff is capped at [`MAX_LINES`] lines. A longer diff is cut at that line and ends with a
+/// The diff is capped at 400 lines (`MAX_LINES`). A longer diff is cut at that line and ends with a
 /// closing line, `… N more lines not shown`.
 ///
 /// ```

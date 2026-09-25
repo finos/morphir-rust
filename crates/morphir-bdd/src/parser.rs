@@ -17,6 +17,16 @@ type ModelNode = (Arc<Document>, NodePath, Option<usize>);
 
 static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Default::default);
 
+/// A custom way to read one file format into a [`morphir_gherkin::Document`], registered by exact
+/// file name through [`MorphirParser::with_reader`] or [`Suite::reader`](crate::suite::Suite::reader).
+///
+/// A reader is given the file's path and reads it however it likes (its own text format, its own
+/// I/O errors and all); on success it returns the [`Document`] the file lowers to. `Err(message)`
+/// becomes a parsing error the same way a built-in [`morphir_gherkin::ReadError`] does: `message`
+/// is folded into a parsing error that names the file, so it reaches the console, JSON and JUnit
+/// reports and counts in [`SuiteResult::errors`](crate::suite::SuiteResult::errors).
+pub type Reader = Arc<dyn Fn(&Path) -> Result<Document, String> + Send + Sync>;
+
 /// A cucumber-rs [`cucumber::Parser`] that reads `.feature` and `.feature.md` documents through
 /// morphir-gherkin instead of cucumber's own `gherkin` parser.
 ///
@@ -80,12 +90,29 @@ static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Defaul
 pub struct MorphirParser {
     #[allow(dead_code)]
     extensions: Arc<Extensions>,
+    readers: HashMap<String, Reader>,
 }
 
 impl MorphirParser {
-    /// A parser for a suite that builds its scenario contexts with `extensions`.
+    /// A parser for a suite that builds its scenario contexts with `extensions`, with no custom
+    /// readers registered yet.
     pub fn new(extensions: Arc<Extensions>) -> Self {
-        Self { extensions }
+        Self {
+            extensions,
+            readers: HashMap::new(),
+        }
+    }
+
+    /// Registers `reader` for every file named exactly `file_name` (for example `scenarios.md`),
+    /// found anywhere under a run's features root. `reader` wins over the built-in `.feature` and
+    /// `.feature.md` suffix rules for that exact file name: discovery finds a matching file the
+    /// same way it finds a `.feature` file, and loading calls `reader` instead of
+    /// [`morphir_gherkin::read_document`] for it. A later call for the same `file_name` replaces
+    /// an earlier one.
+    #[must_use]
+    pub fn with_reader(mut self, file_name: &str, reader: Reader) -> Self {
+        self.readers.insert(file_name.to_owned(), reader);
+        self
     }
 }
 
@@ -94,19 +121,23 @@ impl<I: AsRef<Path>> cucumber::Parser<I> for MorphirParser {
     type Output = stream::Iter<std::vec::IntoIter<parser::Result<gherkin::Feature>>>;
 
     fn parse(self, input: I, _cli: Self::Cli) -> Self::Output {
-        let (paths, errors) = discover(input.as_ref());
-        let mut features: Vec<_> = paths.into_iter().map(|path| load(&path)).collect();
+        let (paths, errors) = discover(input.as_ref(), &self.readers);
+        let mut features: Vec<_> = paths
+            .into_iter()
+            .map(|path| load(&path, &self.readers))
+            .collect();
         features.extend(errors.into_iter().map(|message| Err(parse_error(message))));
         stream::iter(features)
     }
 }
 
 /// Walks `root` (a file, or a directory searched recursively) for `.feature` and `.feature.md`
-/// documents, in sorted path order. A directory that cannot be listed, or an entry whose metadata
-/// cannot be read, is not skipped in silence: it is collected as an error message instead, naming
-/// the path and the underlying I/O error, so the caller can turn it into a parsing error rather
-/// than let the subtree it would have held drop unnoticed.
-fn discover(root: &Path) -> (Vec<PathBuf>, Vec<String>) {
+/// documents, plus any file whose name exactly matches a key of `readers`, in sorted path order.
+/// A directory that cannot be listed, or an entry whose metadata cannot be read, is not skipped in
+/// silence: it is collected as an error message instead, naming the path and the underlying I/O
+/// error, so the caller can turn it into a parsing error rather than let the subtree it would have
+/// held drop unnoticed.
+fn discover(root: &Path, readers: &HashMap<String, Reader>) -> (Vec<PathBuf>, Vec<String>) {
     if root.is_file() {
         return (vec![root.to_owned()], Vec::new());
     }
@@ -146,7 +177,10 @@ fn discover(root: &Path) -> (Vec<PathBuf>, Vec<String>) {
                 .unwrap_or_default();
             if metadata.is_dir() {
                 stack.push(path);
-            } else if name.ends_with(".feature") || name.ends_with(".feature.md") {
+            } else if name.ends_with(".feature")
+                || name.ends_with(".feature.md")
+                || readers.contains_key(name)
+            {
                 found.push(path);
             }
         }
@@ -171,9 +205,27 @@ fn parse_error(message: String) -> parser::Error {
     }))
 }
 
-fn load(path: &Path) -> parser::Result<gherkin::Feature> {
-    let (document, _) =
-        morphir_gherkin::read_document(path).map_err(|error| parse_error(error.to_string()))?;
+/// Reads `path` into a [`Document`]: through the reader registered for its exact file name, if
+/// any, else through [`morphir_gherkin::read_document`]. Either way, a read failure becomes a
+/// parsing error through [`parse_error`]; for a custom reader, that error's text carries both
+/// `path` and the reader's own message, since a bare `Err(message)` names no file on its own.
+fn read_one(path: &Path, readers: &HashMap<String, Reader>) -> parser::Result<Document> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    match readers.get(name) {
+        Some(reader) => {
+            reader(path).map_err(|message| parse_error(format!("{}: {message}", path.display())))
+        }
+        None => morphir_gherkin::read_document(path)
+            .map(|(document, _)| document)
+            .map_err(|error| parse_error(error.to_string())),
+    }
+}
+
+fn load(path: &Path, readers: &HashMap<String, Reader>) -> parser::Result<gherkin::Feature> {
+    let document = read_one(path, readers)?;
     let document = Arc::new(document);
     let feature = document
         .feature
@@ -478,6 +530,8 @@ pub fn skip_reason(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{REGISTRY, load};
 
     /// The lines cucumber gives the expanded rows of the first outline in `text`, read as `name`.
@@ -485,7 +539,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("create a temporary directory");
         let path = dir.path().join(name);
         std::fs::write(&path, text).expect("write the document");
-        let feature = load(&path).expect("the document reads");
+        let feature = load(&path, &HashMap::new()).expect("the document reads");
         feature.scenarios.iter().map(|s| s.position.line).collect()
     }
 
@@ -507,7 +561,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("create a temporary directory");
         let path = dir.path().join(name);
         std::fs::write(&path, text).expect("write the document");
-        let feature = load(&path).expect("the document reads");
+        let feature = load(&path, &HashMap::new()).expect("the document reads");
         let registry = REGISTRY.lock().expect("registry");
         feature
             .scenarios

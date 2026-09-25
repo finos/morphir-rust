@@ -1,6 +1,7 @@
 //! One way to run every Morphir suite: morphir-gherkin parsing, extension context, tag filtering,
 //! and console, JSON and JUnit output.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -10,7 +11,7 @@ use cucumber::writer::{self, Coloring, Stats as _, Verbosity};
 use cucumber::{World as _, WriterExt as _, gherkin};
 use morphir_gherkin::extension::{Component, Context, Extensions};
 
-use crate::parser::{MorphirParser, prepare, skip_reason};
+use crate::parser::{MorphirParser, Reader, prepare, skip_reason};
 use crate::steps::cli::CliProgram;
 use crate::tags::{TagExpr, WipTag};
 use crate::world::MorphirWorld;
@@ -156,6 +157,7 @@ pub struct Suite {
     console: Console,
     #[allow(clippy::type_complexity)]
     on_scenario_finished: Option<Arc<dyn Fn(&ScenarioOutcome) + Send + Sync>>,
+    readers: HashMap<String, Reader>,
 }
 
 /// The counts and report paths from one [`Suite::run`].
@@ -212,6 +214,7 @@ impl Suite {
             components: Vec::new(),
             console: Console::Full,
             on_scenario_finished: None,
+            readers: HashMap::new(),
         }
     }
 
@@ -314,6 +317,18 @@ impl Suite {
         self
     }
 
+    /// Registers `reader` for every file named exactly `file_name` (for example `scenarios.md`),
+    /// found anywhere under [`Suite::features`], passed through to
+    /// [`MorphirParser::with_reader`](crate::parser::MorphirParser::with_reader). See its docs for
+    /// how such a file is discovered and loaded, and how a reader's `Err(message)` becomes a
+    /// parsing error counted in [`SuiteResult::errors`]. A later call for the same `file_name`
+    /// replaces an earlier one.
+    #[must_use]
+    pub fn reader(mut self, file_name: &str, reader: Reader) -> Self {
+        self.readers.insert(file_name.to_owned(), reader);
+        self
+    }
+
     /// Sets the program `When I run {string}` runs, named `name`: the command line's first word
     /// must equal `name`. Use this for a tool other than `morphir` itself; [`Suite::cli`] covers
     /// `morphir`.
@@ -383,6 +398,10 @@ impl Suite {
         let filter = self.filter;
         let max_concurrent = self.max_concurrent;
         let on_scenario_finished = self.on_scenario_finished.clone();
+        let mut parser = MorphirParser::new(extensions.clone());
+        for (file_name, reader) in self.readers {
+            parser = parser.with_reader(&file_name, reader);
+        }
 
         // `Console::Off` keeps the same writer chain as `Console::Full`; only the `Basic` writer's
         // output target changes, from real stdout to a sink that discards every byte. `Stats`
@@ -393,7 +412,7 @@ impl Suite {
         };
 
         let cucumber = MorphirWorld::cucumber::<PathBuf>()
-            .with_parser(MorphirParser::new(extensions.clone()))
+            .with_parser(parser)
             .with_writer(
                 writer::Basic::new(console_target, Coloring::Auto, Verbosity::Default)
                     .summarized()

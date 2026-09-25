@@ -10,10 +10,12 @@
 
 mod drivers;
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use cucumber::then;
 use drivers::suite_driver::SuiteDriver;
+use morphir_bdd::parser::Reader;
 use morphir_bdd::world::MorphirWorld;
 use morphir_bdd::{Console, ScenarioOutcome, Suite};
 use morphir_gherkin::Tag;
@@ -716,4 +718,47 @@ async fn an_outline_reports_each_row_with_its_expanded_name_and_examples_tags() 
             outcome.tags
         );
     }
+}
+
+/// A3: a reader registered by exact file name (`Suite::reader`) lowers its own file format into
+/// a `morphir_gherkin::Document`, in place of the built-in `.feature`/`.feature.md` suffix rules.
+/// This toy format turns each `step: <text>` line into a `Given` step of one scenario.
+#[tokio::test]
+async fn a_custom_reader_lowers_its_own_file_format() {
+    let reader: Reader = Arc::new(|path: &Path| {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let steps: String = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("step: "))
+            .map(|s| format!("    Given {s}\n"))
+            .collect();
+        morphir_gherkin::read_str(
+            path.to_str().unwrap().replace("toy.txt", "toy.feature"),
+            &format!("Feature: Toy\n  Scenario: from toy\n{steps}"),
+        )
+        .map(|(doc, _)| doc)
+        .map_err(|e| e.to_string())
+    });
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature("toy.txt", "step: the step library is linked\n");
+    let result = driver
+        .when_the_suite_runs_with(move |s| s.clear_tags().reader("toy.txt", reader))
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 1);
+}
+
+/// A3: a reader's `Err(message)` becomes a parsing error, the same way a `ReadError` does: it
+/// counts in `SuiteResult::errors` and its message reaches the JSON report.
+#[tokio::test]
+async fn a_reader_error_fails_the_run_with_its_message() {
+    let reader: Reader = Arc::new(|_path: &Path| Err("bad toy".to_owned()));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature("toy.txt", "step: the step library is linked\n");
+    let result = driver
+        .when_the_suite_runs_with(move |s| s.clear_tags().reader("toy.txt", reader))
+        .await;
+    assert!(result.errors >= 1, "{result:?}");
+    assert!(!result.succeeded(), "{result:?}");
+    driver.then_the_json_report_contains("bad toy");
 }

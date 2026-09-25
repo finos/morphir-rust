@@ -61,6 +61,22 @@ class CliReleaseTaskTests(unittest.TestCase):
             self.assertEqual(1, result.returncode, result.stderr)
             self.assertIn(f"no bundle at {bundle}", result.stderr)
 
+    def test_elm_native_selection_reaches_bundle_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = Path(temporary_directory) / "missing-bundle"
+            result = _run_task("elm-native", bundle=bundle, cwd=temporary_directory)
+            self.assertEqual(1, result.returncode, result.stderr)
+            self.assertIn(f"no bundle at {bundle}", result.stderr)
+
+    def test_elm_native_compiles_a_multi_file_selection(self) -> None:
+        """An installed multiDocument frontend takes a selection of several files in one compile."""
+        task = TASK.read_text(encoding="utf-8")
+        self.assertIn("elm-native) EXTENSION_ID=morphir-elm-native ;;", task)
+        self.assertIn(
+            "--input src/Acme/Types.elm --input src/Acme/Rules.elm",
+            task,
+        )
+
 
 class PublishTests(unittest.TestCase):
     """Every publish failure fails the task; nothing is downgraded to a skip."""

@@ -228,9 +228,8 @@ if ($process.ExitCode -ne 0) { throw 'environment fixture subprocess failed' }
             job.index('mise run "extension:artifact:${{ matrix.id }}"'),
             job.index("mise run test:cli-release"),
         )
-        # morphir-elm-native is built into the CLI, so finos/morphir checks it; every other
-        # bundle, the Rust one included, goes through the released CLI.
-        self.assertIn("        if: matrix.id != 'elm-native'\n", job)
+        # Every bundle goes through the released CLI, morphir-elm-native and Rust included.
+        self.assertNotIn("matrix.id != 'elm-native'", job)
         self.assertNotIn("matrix.id != 'rust'", job)
         # The check uses a released CLI, never a checkout of finos/morphir.
         self.assertNotIn("repository: finos/morphir\n", job)

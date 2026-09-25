@@ -9,7 +9,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-use crate::metadata::{Coercion, ContextResources, EffectiveContext, resolve_context};
+use crate::metadata::{
+    ContextResources, EffectiveContext, ObjectTerm, expand_property_objects, resolve_context,
+};
 use crate::node_address::NodeUri;
 
 /// A bounded authored context, validated against the inline context grammar.
@@ -95,21 +97,8 @@ impl AuthoredFacts {
 
     fn validate(&self, effective: &EffectiveContext) -> Result<(), String> {
         for (key, value) in &self.0 {
-            let expanded = effective
-                .expand_key(key)
+            expand_property_objects(key, value, effective, &|predicate| Some(predicate.clone()))
                 .map_err(|error| error.to_string())?;
-            let values = match value {
-                Value::Array(items) => items.iter().collect::<Vec<_>>(),
-                _ => vec![value],
-            };
-            if expanded.coercion() == Coercion::NodeId {
-                for item in values {
-                    let uri = item
-                        .as_str()
-                        .ok_or_else(|| format!("{key} requires a node URI string"))?;
-                    NodeUri::parse(uri).map_err(|error| error.to_string())?;
-                }
-            }
         }
         Ok(())
     }
@@ -414,24 +403,24 @@ impl DocumentMeta {
                     .filter(|subject| subject.id() == record.selector.subject)
                     .any(|subject| {
                         subject.facts().properties().iter().any(|(key, authored)| {
-                            let Ok(expanded) = effective.expand_key(key) else {
+                            let Ok((expanded, objects)) = expand_property_objects(
+                                key,
+                                authored,
+                                &effective,
+                                &|predicate| Some(predicate.clone()),
+                            ) else {
                                 return false;
                             };
                             if expanded.uri().to_string() != record.selector.predicate {
                                 return false;
                             }
-                            let values = match authored {
-                                _ if expanded.coercion() == Coercion::Json => vec![authored],
-                                Value::Array(items) => items.iter().collect::<Vec<_>>(),
-                                _ => vec![authored],
-                            };
-                            values.into_iter().any(|value| {
-                                let object = match expanded.coercion() {
-                                    Coercion::NodeId => serde_json::json!({"@id": value}),
-                                    Coercion::Json => {
-                                        serde_json::json!({"@value": value, "@type": "@json"})
+                            objects.into_iter().any(|value| {
+                                let object = match value {
+                                    ObjectTerm::NodeRef(uri) => serde_json::json!({"@id": uri.to_string()}),
+                                    ObjectTerm::Value(value) if value.datatype().is_some() => {
+                                        serde_json::json!({"@value": value.value(), "@type": "@json"})
                                     }
-                                    Coercion::None => serde_json::json!({"@value": value}),
+                                    ObjectTerm::Value(value) => serde_json::json!({"@value": value.value()}),
                                 };
                                 object == record.selector.object
                             })

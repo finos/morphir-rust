@@ -8,6 +8,8 @@ mod context;
 mod graph;
 mod term;
 
+pub(crate) use context::expand_property_objects;
+
 pub use assertion::{Assertion, AssertionKey, AssertionSource, Carrier, DocumentId, SourceRecord};
 pub use context::{
     Coercion, ContextError, ContextResources, EffectiveContext, ExpandedKey, expand_object,

@@ -282,21 +282,7 @@ pub fn expand_properties<'a>(
 ) -> Result<Vec<Fact>, ContextError> {
     let mut facts = Vec::new();
     for (key, authored) in properties {
-        let predicate = context.expand_key(key)?;
-        let datatype = || json_datatype(predicate.uri());
-        let objects = if predicate.coercion() == Coercion::Json {
-            vec![expand_object(Coercion::Json, authored.clone(), datatype())?]
-        } else {
-            let values: Vec<&Value> = match authored {
-                Value::Array(items) => items.iter().collect(),
-                _ => vec![authored],
-            };
-            values
-                .into_iter()
-                .filter(|value| !value.is_null())
-                .map(|value| expand_fact_object(predicate.coercion(), value, datatype()))
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        let (predicate, objects) = expand_property_objects(key, authored, context, &json_datatype)?;
         facts.extend(objects.into_iter().map(|object| {
             Fact::new(
                 subject.clone(),
@@ -307,6 +293,33 @@ pub fn expand_properties<'a>(
         }));
     }
     Ok(facts)
+}
+
+/// Shared object expansion for a carrier's authored property. The V4 parser
+/// also uses this path when matching detailed-source selectors so expanded
+/// forms cannot acquire a different identity there.
+pub(crate) fn expand_property_objects(
+    key: &str,
+    authored: &Value,
+    context: &EffectiveContext,
+    json_datatype: &impl Fn(&NodeUri) -> Option<NodeUri>,
+) -> Result<(ExpandedKey, Vec<ObjectTerm>), ContextError> {
+    let predicate = context.expand_key(key)?;
+    let datatype = || json_datatype(predicate.uri());
+    let objects = if predicate.coercion() == Coercion::Json {
+        vec![expand_object(Coercion::Json, authored.clone(), datatype())?]
+    } else {
+        let values: Vec<&Value> = match authored {
+            Value::Array(items) => items.iter().collect(),
+            _ => vec![authored],
+        };
+        values
+            .into_iter()
+            .filter(|value| !value.is_null())
+            .map(|value| expand_fact_object(predicate.coercion(), value, datatype()))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    Ok((predicate, objects))
 }
 
 fn expand_fact_object(

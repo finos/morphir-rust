@@ -22,6 +22,7 @@ pub mod attributes;
 pub mod distribution;
 pub mod legacy;
 pub mod linked_metadata;
+mod linked_metadata_project;
 mod linked_metadata_scan;
 pub mod literal;
 pub mod module;
@@ -51,6 +52,9 @@ pub use crate::ir::decimal::{DecimalLiteral, InvalidDecimalLexeme};
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
 pub use legacy::{SpellingMode, accept_member, take_warnings, with_spelling_mode};
 pub use linked_metadata::{DocumentMeta, MetadataScope};
+pub use linked_metadata_project::{
+    DocumentGraphError, expand_document_graph, expand_v4_single_file_graph,
+};
 pub use linked_metadata_scan::LinkedMetadataCarrier;
 pub use literal::{FloatLiteral, InvalidFloatLexeme, Literal};
 pub use pattern::Pattern;

@@ -19,12 +19,11 @@ use std::time::Duration;
 
 use cucumber::then;
 use drivers::suite_driver::SuiteDriver;
-use morphir_bdd::parser::Reader;
 use morphir_bdd::steps::cli::{CliRequest, CliRunner, CustomCliRunner};
 use morphir_bdd::steps::files::Workspace;
 use morphir_bdd::steps::output::LastOutput;
 use morphir_bdd::world::MorphirWorld;
-use morphir_bdd::{Console, ScenarioOutcome, Suite, standard_extensions};
+use morphir_bdd::{Console, Reader, ScenarioOutcome, Suite, standard_extensions};
 use morphir_gherkin::extension::{Context, Effect, Extensions, Processor, Scope, TagExtension};
 use morphir_gherkin::visit::Node;
 use morphir_gherkin::{Document, NodePath, Tag};
@@ -1096,4 +1095,45 @@ async fn a_processor_reads_a_suite_component_once_per_scenario() {
     driver.then_it_succeeds();
     assert_eq!(result.passed, 2, "{result:?}");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+/// Part A fix M6: `with a 0 second timeout` fails the step with a clear message instead of
+/// timing the command out at once.
+#[tokio::test]
+async fn a_zero_second_timeout_is_refused() {
+    let seen = Arc::new(Mutex::new(Vec::<ScenarioOutcome>::new()));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "t.feature",
+        "Feature: T\n  Scenario: zero\n    When I run \"morphir a\" with a 0 second timeout\n",
+    );
+    let sink = seen.clone();
+    let result = driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .cli("unused")
+                .with_component(CustomCliRunner(Arc::new(EchoArgsRunner)))
+                .on_scenario_finished(move |o| sink.lock().unwrap().push(o.clone()))
+        })
+        .await;
+    assert_eq!(result.failed, 1, "{result:?}");
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(
+        seen[0]
+            .failure
+            .as_deref()
+            .unwrap()
+            .contains("a command timeout must be at least 1 second"),
+        "{:?}",
+        seen[0].failure
+    );
+}
+
+/// Part A fix M4: a [`CliRequest`] can be printed with `{:?}`, so a custom runner can log it.
+#[test]
+fn a_cli_request_is_debug() {
+    fn is_debug<T: std::fmt::Debug>() {}
+    is_debug::<CliRequest<'static>>();
 }

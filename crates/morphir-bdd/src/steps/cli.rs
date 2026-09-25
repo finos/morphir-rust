@@ -24,8 +24,10 @@ use crate::world::MorphirWorld;
 /// its binary.
 ///
 /// A [`Suite::cli`](crate::suite::Suite::cli) or
-/// [`Suite::cli_named`](crate::suite::Suite::cli_named) call adds a processor that inserts one of
-/// these into every scenario's context, so `When I run {string}` can find the program to run.
+/// [`Suite::cli_named`](crate::suite::Suite::cli_named) call adds one of these as a suite
+/// component (see [`Suite::with_component`](crate::suite::Suite::with_component)), so it is in
+/// every scenario's context before the suite's extensions run, and `When I run {string}` can find
+/// the program to run.
 #[derive(Debug, Clone)]
 pub struct CliProgram {
     /// The command line's first word must equal this name.
@@ -82,6 +84,7 @@ pub fn split_command_line(line: &str) -> Result<Vec<String>, String> {
 
 /// A request to run one command line, given to a [`CliRunner`] in place of the default
 /// `run_program`.
+#[derive(Debug)]
 pub struct CliRequest<'a> {
     /// The suite's program under test.
     pub program: &'a CliProgram,
@@ -114,6 +117,12 @@ pub trait CliRunner: Send + Sync + std::fmt::Debug {
 /// a scenario's context carries one, `When I run {string}` calls it instead, and does **not**
 /// create a [`Workspace`](crate::steps::files::Workspace): a custom runner finds its own
 /// directories elsewhere, typically through another component in [`CliRequest::context`].
+///
+/// The file steps do not follow the runner. `Given a file {string} containing:` and the other
+/// steps in [`files`](crate::steps::files) still write to and read from the scenario's
+/// [`Workspace`](crate::steps::files::Workspace), which they create when they first need it. That
+/// directory is not the runner's directory, so a command the runner runs does not see those
+/// files unless the runner itself looks in the `Workspace`.
 #[derive(Clone, Debug)]
 pub struct CustomCliRunner(pub Arc<dyn CliRunner>);
 
@@ -244,6 +253,10 @@ async fn run_line(world: &mut MorphirWorld, line: String, timeout: Option<Durati
 /// `When I run {string}` splits the command line like a shell, checks that its first word names
 /// the suite's program, runs it in the scenario's workspace with an isolated home, and records the
 /// result as [`LastOutput`]. With no timeout given, it runs to completion.
+///
+/// When the scenario's context carries a [`CustomCliRunner`], the runner decides where the
+/// command runs and how it is isolated: this step then creates no workspace and passes the
+/// command to the runner.
 #[when(expr = "I run {string}")]
 async fn i_run(world: &mut MorphirWorld, line: String) {
     run_line(world, line, None).await;
@@ -252,10 +265,18 @@ async fn i_run(world: &mut MorphirWorld, line: String) {
 /// `When I run {string} with a {int} second timeout` runs the command as `When I run {string}`
 /// does, but fails it with a timeout error if it has not finished after `secs` seconds. See
 /// [`run_program`] for how the default runner enforces this.
+///
+/// `secs` is a whole number of seconds, and it must be at least 1: a `0` fails the step with
+/// [`ZERO_TIMEOUT`] before the command runs.
 #[when(expr = "I run {string} with a {int} second timeout")]
 async fn i_run_with_timeout(world: &mut MorphirWorld, line: String, secs: u64) {
+    assert!(secs >= 1, "{ZERO_TIMEOUT}");
     run_line(world, line, Some(Duration::from_secs(secs))).await;
 }
+
+/// The message `When I run {string} with a {int} second timeout` fails with when its timeout is
+/// `0`.
+const ZERO_TIMEOUT: &str = "a command timeout must be at least 1 second";
 
 /// The message a status step panics with when no command has run in the scenario yet. It names
 /// the step that provides the missing [`LastOutput`], in the same style as the output steps.

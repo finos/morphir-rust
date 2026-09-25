@@ -13,6 +13,7 @@ pub mod suite;
 pub mod tags;
 pub mod world;
 
+pub use parser::Reader;
 pub use suite::{Console, ScenarioOutcome, Suite, SuiteResult, standard_extensions};
 pub use world::MorphirWorld;
 

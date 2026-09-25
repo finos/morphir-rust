@@ -18,6 +18,9 @@ pub struct ScenarioRef {
     /// description only, not from the outline's other blocks. Take
     /// [`NodePath::parent`] of it to reach the outline itself.
     pub path: NodePath,
+    /// The 0-based data row of an expanded outline row within its Examples block; `None` for a
+    /// plain scenario.
+    pub row: Option<usize>,
 }
 
 /// The state of one scenario. Extensions fill `context` before the first step; steps read and add

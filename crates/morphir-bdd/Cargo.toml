@@ -20,9 +20,10 @@ futures = "0.3"
 similar = "3"
 tempfile = { workspace = true }
 serde_json = "1.0"
-# `process` only: `When I run {string}` waits on `tokio::process`. The runtime itself comes from
-# the test binary (`#[tokio::main]`), so this crate does not pick one.
-tokio = { version = "1", features = ["process"] }
+# `process`: `When I run {string}` waits on `tokio::process`. `time`: `run_program`'s optional
+# timeout waits on `tokio::time::timeout`. The runtime itself comes from the test binary
+# (`#[tokio::main]`), so this crate does not pick one.
+tokio = { version = "1", features = ["process", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

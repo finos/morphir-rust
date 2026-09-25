@@ -19,3 +19,7 @@ Feature: CLI process steps
     When I run 'morphir echo "a file.json"'
     Then the command should succeed
     And stdout should contain "a file.json"
+
+  Scenario: A generous timeout does not stop a fast command
+    When I run "morphir x" with a 5 second timeout
+    Then the command should succeed

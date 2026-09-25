@@ -1,21 +1,41 @@
 //! Feeds morphir-gherkin documents to cucumber-rs and finds each running scenario's model node.
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use cucumber::feature::Ext as _;
 use cucumber::{gherkin, parser};
 use futures::stream;
-use morphir_gherkin::extension::{Effect, Extensions};
+use morphir_gherkin::extension::{Context, Effect, Extensions};
 use morphir_gherkin::{Document, Format, NodePath, Segment, StepArgument, StepKind};
 
 use crate::world::{MorphirWorld, ScenarioRef};
 
 type Key = (PathBuf, String, usize);
-type ModelNode = (Arc<Document>, NodePath);
+type ModelNode = (Arc<Document>, NodePath, Option<usize>);
 
 static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Default::default);
+
+/// A custom way to read one file format into a [`morphir_gherkin::Document`], registered by exact
+/// file name through [`MorphirParser::with_reader`] or [`Suite::reader`](crate::suite::Suite::reader).
+///
+/// A reader is given the file's path and reads it however it likes (its own text format, its own
+/// I/O errors and all); on success it returns the [`Document`] the file lowers to. `Err(message)`
+/// becomes a parsing error the same way a built-in [`morphir_gherkin::ReadError`] does: `message`
+/// is folded into a parsing error that names the file. That error reaches the JSON and JUnit
+/// reports and [`SuiteResult::error_messages`](crate::suite::SuiteResult::error_messages), and
+/// counts in [`SuiteResult::errors`](crate::suite::SuiteResult::errors). It reaches the console
+/// too, but only when the suite runs with [`Console::Full`](crate::suite::Console::Full).
+///
+/// A reader that panics instead of returning `Err` fails only its own file, the same way: the
+/// panic is caught and its message becomes that file's parsing error. The process's panic hook
+/// still runs first, though, so the default hook prints the panic to stderr (`thread '…' panicked
+/// at …`) even under [`Console::Off`](crate::suite::Console::Off). This crate does not replace the
+/// global panic hook to hide that line; return `Err` to fail a file quietly.
+pub type Reader = Arc<dyn Fn(&Path) -> Result<Document, String> + Send + Sync>;
 
 /// A cucumber-rs [`cucumber::Parser`] that reads `.feature` and `.feature.md` documents through
 /// morphir-gherkin instead of cucumber's own `gherkin` parser.
@@ -32,7 +52,9 @@ static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Defaul
 /// cannot be read. Neither one is skipped in silence; each becomes a parsing error of its own, so
 /// a dropped subtree is a failed, not a passed, run. [`Suite`](crate::suite::Suite) is the checked
 /// path: it sums every parsing error, this crate's own included, into
-/// [`SuiteResult::errors`](crate::suite::SuiteResult::errors) and its writer prints each one. A
+/// [`SuiteResult::errors`](crate::suite::SuiteResult::errors), gives each one's text in
+/// [`SuiteResult::error_messages`](crate::suite::SuiteResult::error_messages), and its writers put
+/// each one in the reports (and on the console, under [`Console::Full`](crate::suite::Console)). A
 /// raw cucumber chain that uses this parser directly sees the same one-error-per-directory
 /// behavior, since it comes from the parser, not from `Suite`.
 ///
@@ -80,12 +102,41 @@ static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Defaul
 pub struct MorphirParser {
     #[allow(dead_code)]
     extensions: Arc<Extensions>,
+    readers: HashMap<String, Reader>,
+    /// Where [`Suite::run`](crate::suite::Suite::run) collects the text of every parsing error,
+    /// for [`SuiteResult::error_messages`](crate::suite::SuiteResult::error_messages).
+    error_sink: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl MorphirParser {
-    /// A parser for a suite that builds its scenario contexts with `extensions`.
+    /// A parser for a suite that builds its scenario contexts with `extensions`, with no custom
+    /// readers registered yet.
     pub fn new(extensions: Arc<Extensions>) -> Self {
-        Self { extensions }
+        Self {
+            extensions,
+            readers: HashMap::new(),
+            error_sink: None,
+        }
+    }
+
+    /// Registers `reader` for every file named exactly `file_name` (for example `scenarios.md`),
+    /// found anywhere under a run's features root. `reader` wins over the built-in `.feature` and
+    /// `.feature.md` suffix rules for that exact file name: discovery finds a matching file the
+    /// same way it finds a `.feature` file, and loading calls `reader` instead of
+    /// [`morphir_gherkin::read_document`] for it. A later call for the same `file_name` replaces
+    /// an earlier one.
+    #[must_use]
+    pub fn with_reader(mut self, file_name: &str, reader: Reader) -> Self {
+        self.readers.insert(file_name.to_owned(), reader);
+        self
+    }
+
+    /// Appends the text of every parsing error this parser gives to `sink`, in the order it gives
+    /// them to cucumber (see [`error_text`]).
+    #[must_use]
+    pub(crate) fn with_error_sink(mut self, sink: Arc<Mutex<Vec<String>>>) -> Self {
+        self.error_sink = Some(sink);
+        self
     }
 }
 
@@ -94,19 +145,49 @@ impl<I: AsRef<Path>> cucumber::Parser<I> for MorphirParser {
     type Output = stream::Iter<std::vec::IntoIter<parser::Result<gherkin::Feature>>>;
 
     fn parse(self, input: I, _cli: Self::Cli) -> Self::Output {
-        let (paths, errors) = discover(input.as_ref());
-        let mut features: Vec<_> = paths.into_iter().map(|path| load(&path)).collect();
+        let (paths, errors) = discover(input.as_ref(), &self.readers);
+        let mut features: Vec<_> = paths
+            .into_iter()
+            .map(|path| load(&path, &self.readers))
+            .collect();
         features.extend(errors.into_iter().map(|message| Err(parse_error(message))));
+        if let Some(sink) = &self.error_sink {
+            let mut sink = sink.lock().expect("error sink");
+            sink.extend(
+                features
+                    .iter()
+                    .filter_map(|feature| feature.as_ref().err().map(error_text)),
+            );
+        }
         stream::iter(features)
     }
 }
 
+/// The text of a parsing error this parser gives: the message the JSON and JUnit reports carry
+/// for it, without cucumber's own prefixes (`Failed to parse feature: Could not read path: ` or
+/// `Failed to expand examples: `).
+///
+/// Every [`parser::Error::Parsing`] this parser builds carries its whole message in the `path`
+/// field (see [`parse_error`]), so the text is that path read back as a string. An
+/// [`parser::Error::ExampleExpansion`] error names the unresolved `<placeholder>` and its file,
+/// line and column in its own `Display`.
+fn error_text(error: &parser::Error) -> String {
+    match error {
+        parser::Error::Parsing(e) => match e.as_ref() {
+            gherkin::ParseFileError::Reading { path, .. } => path.to_string_lossy().into_owned(),
+            other @ gherkin::ParseFileError::Parsing { .. } => other.to_string(),
+        },
+        parser::Error::ExampleExpansion(e) => e.to_string(),
+    }
+}
+
 /// Walks `root` (a file, or a directory searched recursively) for `.feature` and `.feature.md`
-/// documents, in sorted path order. A directory that cannot be listed, or an entry whose metadata
-/// cannot be read, is not skipped in silence: it is collected as an error message instead, naming
-/// the path and the underlying I/O error, so the caller can turn it into a parsing error rather
-/// than let the subtree it would have held drop unnoticed.
-fn discover(root: &Path) -> (Vec<PathBuf>, Vec<String>) {
+/// documents, plus any file whose name exactly matches a key of `readers`, in sorted path order.
+/// A directory that cannot be listed, or an entry whose metadata cannot be read, is not skipped in
+/// silence: it is collected as an error message instead, naming the path and the underlying I/O
+/// error, so the caller can turn it into a parsing error rather than let the subtree it would have
+/// held drop unnoticed.
+fn discover(root: &Path, readers: &HashMap<String, Reader>) -> (Vec<PathBuf>, Vec<String>) {
     if root.is_file() {
         return (vec![root.to_owned()], Vec::new());
     }
@@ -146,7 +227,10 @@ fn discover(root: &Path) -> (Vec<PathBuf>, Vec<String>) {
                 .unwrap_or_default();
             if metadata.is_dir() {
                 stack.push(path);
-            } else if name.ends_with(".feature") || name.ends_with(".feature.md") {
+            } else if name.ends_with(".feature")
+                || name.ends_with(".feature.md")
+                || readers.contains_key(name)
+            {
                 found.push(path);
             }
         }
@@ -171,9 +255,51 @@ fn parse_error(message: String) -> parser::Error {
     }))
 }
 
-fn load(path: &Path) -> parser::Result<gherkin::Feature> {
-    let (document, _) =
-        morphir_gherkin::read_document(path).map_err(|error| parse_error(error.to_string()))?;
+/// Reads a panic payload as text: `payload.downcast_ref::<String>()` covers a formatted
+/// `panic!("{args}")`, `payload.downcast_ref::<&str>()` covers a string-literal `panic!("...")`.
+/// Shared between a reader's panic (here, in [`read_one`]) and a before-hook's panic
+/// ([`suite::scenario_outcome`](crate::suite)), so both report the same text for the same kind of
+/// panic. cucumber's own console writer has an internal copy of this same logic, private to the
+/// `cucumber` crate, so callers outside it need their own.
+pub(crate) fn panic_payload_text(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "(could not resolve panic payload)".to_owned())
+}
+
+/// Reads `path` into a [`Document`]: through the reader registered for its exact file name, if
+/// any, else through [`morphir_gherkin::read_document`]. Either way, a read failure becomes a
+/// parsing error through [`parse_error`]; for a custom reader, that error's text carries both
+/// `path` and the reader's own message (or, if the reader panicked instead of returning `Err`,
+/// the panic's own payload text), since a bare message alone names no file. A reader's panic is
+/// caught with [`std::panic::catch_unwind`] rather than left to unwind out of
+/// [`cucumber::Parser::parse`]: an uncaught panic there would abort the whole run with no report,
+/// instead of failing just the one file the way every other read failure does.
+fn read_one(path: &Path, readers: &HashMap<String, Reader>) -> parser::Result<Document> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    match readers.get(name) {
+        Some(reader) => match panic::catch_unwind(AssertUnwindSafe(|| reader(path))) {
+            Ok(Ok(document)) => Ok(document),
+            Ok(Err(message)) => Err(parse_error(format!("{}: {message}", path.display()))),
+            Err(payload) => Err(parse_error(format!(
+                "{}: the reader panicked: {}",
+                path.display(),
+                panic_payload_text(&*payload)
+            ))),
+        },
+        None => morphir_gherkin::read_document(path)
+            .map(|(document, _)| document)
+            .map_err(|error| parse_error(error.to_string())),
+    }
+}
+
+fn load(path: &Path, readers: &HashMap<String, Reader>) -> parser::Result<gherkin::Feature> {
+    let document = read_one(path, readers)?;
     let document = Arc::new(document);
     let feature = document
         .feature
@@ -247,23 +373,34 @@ fn register_expanded(
 ) {
     let mut at = 0;
     for (node, count) in slots {
-        for scenario in &expanded[at..at + count] {
+        // A slot is plain (a `Scenario` with no `Examples` block of its own) when its path ends
+        // in `Segment::Scenario`; an outline row's slot ends in `Segment::Examples`.
+        let plain = matches!(node.last(), Segment::Scenario(_));
+        for (k, scenario) in expanded[at..at + count].iter().enumerate() {
             register(
                 path,
                 &scenario.name,
                 scenario.position.line,
                 document,
                 node.clone(),
+                if plain { None } else { Some(k) },
             );
         }
         at += count;
     }
 }
 
-fn register(path: &Path, name: &str, line: usize, document: &Arc<Document>, node: NodePath) {
+fn register(
+    path: &Path,
+    name: &str,
+    line: usize,
+    document: &Arc<Document>,
+    node: NodePath,
+    row: Option<usize>,
+) {
     REGISTRY.lock().expect("registry").insert(
         (path.to_owned(), name.to_owned(), line),
-        (document.clone(), node),
+        (document.clone(), node, row),
     );
 }
 
@@ -412,7 +549,7 @@ fn lower_feature(path: &Path, f: &morphir_gherkin::Feature, format: Format) -> g
 fn lookup(
     feature: &gherkin::Feature,
     scenario: &gherkin::Scenario,
-) -> Option<(Arc<Document>, NodePath)> {
+) -> Option<(Arc<Document>, NodePath, Option<usize>)> {
     let path = feature.path.clone()?;
     REGISTRY
         .lock()
@@ -425,52 +562,82 @@ fn lookup(
 ///
 /// For one row of a scenario outline, the context comes from the row's own `Examples` block, not
 /// from the outline's other blocks, and [`ScenarioRef::path`] is that block's path.
+///
+/// This is [`prepare_seeded`] with an empty seed.
 pub fn prepare(
     world: &mut MorphirWorld,
     feature: &gherkin::Feature,
     scenario: &gherkin::Scenario,
     extensions: &Extensions,
 ) -> Result<(), String> {
-    let (document, path) = lookup(feature, scenario)
+    prepare_seeded(world, feature, scenario, extensions, Context::default())
+}
+
+/// Fills the world before the first step, as [`prepare`] does, but builds the scenario's context
+/// from `seed` instead of from an empty context (see [`Extensions::context_for_seeded`]).
+///
+/// The tag, fence and prose extensions and then the processors all see the components in `seed`,
+/// and an extension may replace one of them. [`Suite`](crate::suite::Suite) seeds each scenario
+/// with its [`Suite::with_component`](crate::suite::Suite::with_component) values this way.
+pub fn prepare_seeded(
+    world: &mut MorphirWorld,
+    feature: &gherkin::Feature,
+    scenario: &gherkin::Scenario,
+    extensions: &Extensions,
+    seed: Context,
+) -> Result<(), String> {
+    let (document, path, row) = lookup(feature, scenario)
         .ok_or_else(|| format!("no model node for scenario `{}`", scenario.name))?;
-    let (context, _) = extensions.context_for(&document, &path).map_err(|errors| {
-        errors
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ")
-    })?;
+    let (context, _) = extensions
+        .context_for_seeded(&document, &path, seed)
+        .map_err(|errors| {
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
     world.context = context;
-    world.scenario = Some(ScenarioRef { document, path });
+    world.scenario = Some(ScenarioRef {
+        document,
+        path,
+        row,
+    });
     Ok(())
 }
 
 /// Why a scenario is skipped, decided from its static tags before it starts. For one row of a
 /// scenario outline, only the tags of the row's own `Examples` block count, so `@wip` on one block
 /// skips only that block's rows.
+///
+/// It decides through [`Extensions::effect_for`], so it runs no processor: a processor runs only
+/// once per scenario, in [`prepare`]. A scenario whose tags, fences or prose give an extension
+/// error is not skipped here; it runs, and [`prepare`] fails it with that error.
 pub fn skip_reason(
     feature: &gherkin::Feature,
     _rule: Option<&gherkin::Rule>,
     scenario: &gherkin::Scenario,
     extensions: &Extensions,
 ) -> Option<String> {
-    let (document, path) = lookup(feature, scenario)?;
-    match extensions.context_for(&document, &path) {
-        Ok((_, Effect::Skip(reason))) => Some(reason),
+    let (document, path, _row) = lookup(feature, scenario)?;
+    match extensions.effect_for(&document, &path) {
+        Ok(Effect::Skip(reason)) => Some(reason),
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::load;
+    use std::collections::HashMap;
+
+    use super::{REGISTRY, load};
 
     /// The lines cucumber gives the expanded rows of the first outline in `text`, read as `name`.
     fn row_lines(name: &str, text: &str) -> Vec<usize> {
         let dir = tempfile::tempdir().expect("create a temporary directory");
         let path = dir.path().join(name);
         std::fs::write(&path, text).expect("write the document");
-        let feature = load(&path).expect("the document reads");
+        let feature = load(&path, &HashMap::new()).expect("the document reads");
         feature.scenarios.iter().map(|s| s.position.line).collect()
     }
 
@@ -484,5 +651,40 @@ mod tests {
     fn a_markdown_outline_row_reports_its_own_data_row_line() {
         let text = "# Feature: F\n\n## Scenario Outline: o <x>\n\n* Given a\n\n### Examples: E\n\n`@t`\n\n| x |\n| - |\n| 1 |\n| 2 |\n";
         assert_eq!(row_lines("f.feature.md", text), vec![13, 14]);
+    }
+
+    /// The registered `row` of every scenario `load` produces for `text`, in the order
+    /// `expand_examples` gives them.
+    fn registered_rows(name: &str, text: &str) -> Vec<Option<usize>> {
+        let dir = tempfile::tempdir().expect("create a temporary directory");
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).expect("write the document");
+        let feature = load(&path, &HashMap::new()).expect("the document reads");
+        let registry = REGISTRY.lock().expect("registry");
+        feature
+            .scenarios
+            .iter()
+            .map(|s| {
+                registry
+                    .get(&(path.clone(), s.name.clone(), s.position.line))
+                    .expect("the scenario is registered")
+                    .2
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_outline_row_registers_its_0_based_row_within_its_own_examples_block() {
+        let text = "Feature: F\n  Scenario Outline: o <x>\n    Given a\n\n    Examples: first\n      | x |\n      | 1 |\n      | 2 |\n\n    Examples: second\n      | x |\n      | 3 |\n      | 4 |\n      | 5 |\n";
+        assert_eq!(
+            registered_rows("rows.feature", text),
+            vec![Some(0), Some(1), Some(0), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn a_plain_scenario_registers_with_no_row() {
+        let text = "Feature: F\n  Scenario: s\n    Given a\n";
+        assert_eq!(registered_rows("plain.feature", text), vec![None]);
     }
 }

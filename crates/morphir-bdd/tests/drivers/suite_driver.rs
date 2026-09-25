@@ -96,6 +96,38 @@ impl SuiteDriver {
         self.run(name, features_path, Some(tags.to_owned())).await;
     }
 
+    /// `When the suite runs, configured by {configure}` builds a [`Suite`] from this driver's own
+    /// temporary features directory and report output directory, applies whatever
+    /// [`SuiteDriver::given_extensions`] / [`SuiteDriver::given_the_cli`] set, and then lets
+    /// `configure` finish it — for example `.clear_tags().filter(…)`, `.with_component(…)` or
+    /// `.max_concurrent_scenarios(…)` — before running it. As the other `when_the_suite_runs…`
+    /// methods, it records the result and reports for the `then_` methods to check; it also
+    /// returns the result directly, for a test that reads a specific count (for example
+    /// `SuiteResult::passed`) straight off it. Panics if [`SuiteDriver::given_a_feature`] has not
+    /// created a features directory yet.
+    pub async fn when_the_suite_runs_with(
+        &mut self,
+        configure: impl FnOnce(Suite) -> Suite,
+    ) -> SuiteResult {
+        let features = self.features_dir().to_owned();
+        let mut suite = Suite::new("driven")
+            .features(features)
+            .out_dir(self.out.path());
+        if let Some(extensions) = self.extensions.take() {
+            suite = suite.extensions(extensions);
+        }
+        if let Some(cli) = self.cli.take() {
+            suite = suite.cli(cli);
+        }
+        let result = configure(suite).run().await;
+        self.json = std::fs::read_to_string(&result.json)
+            .unwrap_or_else(|e| panic!("read the JSON report {}: {e}", result.json.display()));
+        self.junit = std::fs::read_to_string(&result.junit)
+            .unwrap_or_else(|e| panic!("read the JUnit report {}: {e}", result.junit.display()));
+        self.result = Some(result.clone());
+        result
+    }
+
     /// The shared run implementation behind both `when_the_suite_runs…` methods.
     async fn run(&mut self, name: &str, features_path: impl AsRef<Path>, tags: Option<String>) {
         let mut suite = Suite::new(name)

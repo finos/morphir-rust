@@ -23,7 +23,7 @@ async fn run_program_removes_inherited_morphir_variables() {
     // SAFETY: this binary holds only this test, and `#[tokio::test]` runs it on a current-thread
     // runtime, so no other thread reads the environment while it changes.
     unsafe { std::env::set_var("MORPHIR_BDD_LEAK_PROBE", "leaked") };
-    let result = run_program(&program, &[], dir.path()).await;
+    let result = run_program(&program, &[], dir.path(), None).await;
     // SAFETY: as above.
     unsafe { std::env::remove_var("MORPHIR_BDD_LEAK_PROBE") };
 

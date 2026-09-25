@@ -131,10 +131,14 @@ pub trait ProseExtension: Send + Sync {
 }
 
 /// Runs after every scope has been applied, to derive further context from the whole document.
+///
+/// [`Extensions::context_for`] and [`Extensions::context_for_seeded`] run every processor once
+/// per call. [`Extensions::effect_for`] runs none.
 pub trait Processor: Send + Sync {
     /// Derives further context for the scenario, or the examples block of a scenario outline, at
-    /// `at`: the same path [`Extensions::context_for`] was given. Returns an error message naming
-    /// what went wrong.
+    /// `at`: the same path [`Extensions::context_for`] or [`Extensions::context_for_seeded`] was
+    /// given. `ctx` already holds the seed, if any, and every scope's components. Returns an error
+    /// message naming what went wrong.
     fn process(&self, doc: &Document, at: &NodePath, ctx: &mut Context) -> Result<(), String>;
 }
 
@@ -207,11 +211,80 @@ impl Extensions {
     ///
     /// A path that names neither a scenario nor an examples block of a scenario (a rule, a
     /// feature, a step, or a node that does not exist) fails with `"not a scenario"`.
+    ///
+    /// This is [`Extensions::context_for_seeded`] with an empty seed.
     pub fn context_for(
         &self,
         doc: &Document,
         at: &NodePath,
     ) -> Result<(Context, Effect), Vec<ExtensionError>> {
+        self.context_for_seeded(doc, at, Context::default())
+    }
+
+    /// Builds the context of one scenario, or of one examples block of a scenario outline, as
+    /// [`Extensions::context_for`] does, but starts from `seed` instead of an empty context.
+    ///
+    /// A runner puts its own components into `seed` (for example a value its user configured
+    /// once for every scenario). The tag, fence and prose extensions apply next, then the
+    /// processors, and each one sees the seeded components. An extension or a processor that inserts a
+    /// component of the same type replaces the seeded value, by [`Context::insert`]'s
+    /// last-write-wins rule.
+    pub fn context_for_seeded(
+        &self,
+        doc: &Document,
+        at: &NodePath,
+        seed: Context,
+    ) -> Result<(Context, Effect), Vec<ExtensionError>> {
+        let (mut ctx, effect, mut errors) = self.apply_scopes(doc, at, seed)?;
+        for processor in &self.processors {
+            if let Err(message) = processor.process(doc, at, &mut ctx) {
+                errors.push(ExtensionError {
+                    path: at.clone(),
+                    span: Span::default(),
+                    message,
+                });
+            }
+        }
+        if errors.is_empty() {
+            Ok((ctx, effect))
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Decides only whether a scenario, or one examples block of a scenario outline, runs or is
+    /// skipped, without building a context for it to run with.
+    ///
+    /// It applies the tag, fence and prose scopes exactly as [`Extensions::context_for`] does,
+    /// into a scratch context that starts empty and is then dropped, and gives the same
+    /// [`Effect`]. It runs **no** processors: a processor cannot change the effect, and a runner
+    /// that filters scenarios before they start calls this for every candidate, so processors
+    /// with a cost or a side effect run only once, when the scenario's real context is built.
+    ///
+    /// It fails with the scope errors [`Extensions::context_for`] would give (for example `"not
+    /// a scenario"`, or an extension's own error), but never with a processor's error. An
+    /// extension that decides its effect from a component a runner seeds sees no such component
+    /// here, since the scratch context starts empty.
+    pub fn effect_for(&self, doc: &Document, at: &NodePath) -> Result<Effect, Vec<ExtensionError>> {
+        let (_, effect, errors) = self.apply_scopes(doc, at, Context::default())?;
+        if errors.is_empty() {
+            Ok(effect)
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Applies the feature, rule, scenario and examples scopes on the way to `at` into `ctx`, as
+    /// [`Extensions::context_for`] documents, and gives back the context, the effect and every
+    /// scope error. Fails early, with only the errors so far, when `at` is not a scenario or an
+    /// examples block of one, or when a node on the way does not exist.
+    #[allow(clippy::type_complexity)]
+    fn apply_scopes(
+        &self,
+        doc: &Document,
+        at: &NodePath,
+        mut ctx: Context,
+    ) -> Result<(Context, Effect, Vec<ExtensionError>), Vec<ExtensionError>> {
         let is_examples = match doc.node(at) {
             Some(Node::Scenario(_)) => false,
             Some(Node::Examples(_))
@@ -231,7 +304,6 @@ impl Extensions {
                 }]);
             }
         };
-        let mut ctx = Context::default();
         let mut effect = Effect::Continue;
         let mut errors = Vec::new();
         let segments = at.segments();
@@ -280,20 +352,7 @@ impl Extensions {
                 }
             }
         }
-        for processor in &self.processors {
-            if let Err(message) = processor.process(doc, at, &mut ctx) {
-                errors.push(ExtensionError {
-                    path: at.clone(),
-                    span: Span::default(),
-                    message,
-                });
-            }
-        }
-        if errors.is_empty() {
-            Ok((ctx, effect))
-        } else {
-            Err(errors)
-        }
+        Ok((ctx, effect, errors))
     }
 
     #[allow(clippy::too_many_arguments)]

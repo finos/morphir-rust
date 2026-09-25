@@ -1,4 +1,10 @@
 //! CLI process steps: run the suite's program with an isolated home and record its output.
+//!
+//! Quoting in `When I run {string}`: inside a step text written with double quotes, `\"` groups
+//! words (see [`split_command_line`]); it does not embed a literal `"`, since cucumber's
+//! `{string}` capture is not unescaped. To pass an argument that itself contains a literal `"`,
+//! write the step's `{string}` with single quotes instead, for example
+//! `When I run 'morphir x "a b"'`: the double quotes inside it group as usual and arrive intact.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -74,6 +80,13 @@ pub fn split_command_line(line: &str) -> Result<Vec<String>, String> {
 /// directory inside `dir` (created if it does not exist), and `MORPHIR_NO_BANNER=1` is set. This
 /// keeps a scenario from reading or writing a developer's real configuration, data or cache.
 ///
+/// Before applying those overrides, every inherited environment variable whose name starts with
+/// `MORPHIR_` is removed from the child's environment. Without this, a developer's own
+/// `MORPHIR_*` variables (for example a stray `MORPHIR_BDD_TAGS` or a real `MORPHIR_HOME`) would
+/// pass straight through from this test process into the program under test and could defeat the
+/// isolation above, or the tag filtering / output directory this crate's own `Suite` reads from
+/// the same namespace.
+///
 /// Returns `Err` naming `program.path` if the process fails to start, for example because the
 /// binary is missing. It never reports an empty [`LastOutput`] in that case.
 pub fn run_program(
@@ -84,9 +97,14 @@ pub fn run_program(
     let home = dir.join(".home");
     std::fs::create_dir_all(&home)
         .map_err(|e| format!("cannot create the isolated home {}: {e}", home.display()))?;
-    let output = Command::new(&program.path)
-        .args(args)
-        .current_dir(dir)
+    let mut command = Command::new(&program.path);
+    command.args(args).current_dir(dir);
+    for (name, _) in std::env::vars() {
+        if name.starts_with("MORPHIR_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("XDG_DATA_HOME", home.join(".local/share"))
@@ -156,7 +174,20 @@ fn should_fail(world: &mut MorphirWorld) {
 /// `Then the exit code should be {int}` asserts the last command's exact exit status.
 #[then(expr = "the exit code should be {int}")]
 fn exit_code(world: &mut MorphirWorld, code: i32) {
-    assert_eq!(status(world), Some(code));
+    let out = world
+        .context
+        .get::<LastOutput>()
+        .expect("no command has run");
+    let actual = out
+        .status
+        .map_or_else(|| "killed by a signal".to_owned(), |s| s.to_string());
+    assert_eq!(
+        out.status,
+        Some(code),
+        "the command exited with {actual}, not {code}:\nstdout:\n{}\nstderr:\n{}",
+        out.stdout,
+        out.stderr
+    );
 }
 
 #[cfg(test)]
@@ -187,6 +218,46 @@ mod tests {
         assert!(
             err.contains("/no/such/morphir-binary"),
             "the error must name the program path: {err}"
+        );
+    }
+
+    /// T12-c: `run_program` must remove every inherited `MORPHIR_`-prefixed variable before it
+    /// runs the program, so a developer's own environment cannot leak into the program under
+    /// test. `MORPHIR_BDD_LEAK_PROBE` is a variable name reserved for this test alone: no other
+    /// test in this crate reads or sets it, so a concurrent test cannot observe a wrong value
+    /// from it or make this test observe one of its own.
+    #[test]
+    #[cfg(unix)]
+    fn run_program_removes_inherited_morphir_variables() {
+        let dir = tempfile::tempdir().expect("create a temporary directory");
+        let echo = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/echo.sh"
+        ));
+        let program = CliProgram {
+            name: "morphir".to_owned(),
+            path: echo,
+        };
+
+        // SAFETY: `set_var`/`remove_var` mutate process-global state, which is why they are
+        // `unsafe` as of edition 2024 (a concurrent read through libc, outside Rust's own
+        // std::env, is not guaranteed safe). `MORPHIR_BDD_LEAK_PROBE` is reserved for this test
+        // alone, so no other test reads or depends on it, and nothing else in this process reads
+        // the environment through anything but `std::env`.
+        unsafe {
+            std::env::set_var("MORPHIR_BDD_LEAK_PROBE", "leaked");
+        }
+        let result = run_program(&program, &[], dir.path());
+        // SAFETY: see above.
+        unsafe {
+            std::env::remove_var("MORPHIR_BDD_LEAK_PROBE");
+        }
+
+        let output = result.expect("the fixture runs");
+        assert!(
+            output.stdout.contains("leak=\n"),
+            "MORPHIR_BDD_LEAK_PROBE must not reach the program under test:\n{}",
+            output.stdout
         );
     }
 }

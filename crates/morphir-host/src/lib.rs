@@ -13,6 +13,8 @@ mod error;
 mod expected;
 mod jsonrpc;
 mod negotiated;
+/// Warm guest reuse, one session per key.
+mod pool;
 /// The install probe: describe a guest before trusting its claims.
 mod probe;
 mod registry;
@@ -34,6 +36,7 @@ pub use expected::{
 };
 pub use jsonrpc::JsonRpcConnection;
 pub use negotiated::Negotiated;
+pub use pool::Pool;
 pub use probe::{Description, DescriptionSource, describe, describe_with};
 pub use registry::{
     CapabilityMetadataScope, GuestSource, InvocationMode, InvocationPolicy, ProviderMetadata,

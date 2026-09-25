@@ -22,6 +22,7 @@ pub mod attributes;
 pub mod distribution;
 pub mod legacy;
 pub mod linked_metadata;
+mod linked_metadata_scan;
 pub mod literal;
 pub mod module;
 pub mod package;
@@ -50,6 +51,7 @@ pub use crate::ir::decimal::{DecimalLiteral, InvalidDecimalLexeme};
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
 pub use legacy::{SpellingMode, accept_member, take_warnings, with_spelling_mode};
 pub use linked_metadata::{DocumentMeta, MetadataScope};
+pub use linked_metadata_scan::LinkedMetadataCarrier;
 pub use literal::{FloatLiteral, InvalidFloatLexeme, Literal};
 pub use pattern::Pattern;
 pub use serde_v4::{TypeEncoding, with_type_encoding};
@@ -105,15 +107,8 @@ pub struct IRFile {
 impl IRFile {
     /// Whether any node, specification, or document carrier contains linked metadata.
     pub fn has_linked_metadata(&self) -> bool {
-        self.metadata.is_some()
-            || serde_json::to_value(&self.distribution)
-                .is_ok_and(|value| serde_document::has_linked_metadata(&value))
+        self.metadata.is_some() || self.distribution.contains_linked_metadata()
     }
-}
-
-/// Detect linked carriers in a serialized V4 fragment without interpreting user data in extensions.
-pub fn contains_linked_metadata(value: &serde_json::Value) -> bool {
-    serde_document::has_linked_metadata(value)
 }
 
 impl Serialize for IRFile {

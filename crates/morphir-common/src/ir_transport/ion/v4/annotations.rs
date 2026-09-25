@@ -117,7 +117,10 @@ fn write_annotation(annotation: &Annotation) -> Result<Element, TransportDiagnos
             }
             Element::from(builder.build())
         }
-        Annotation::LinkedCompact { .. } | Annotation::LinkedStructured { .. } => {
+        Annotation::LinkedCompact { .. }
+        | Annotation::LinkedStructured { .. }
+        | Annotation::PendingCompact { .. }
+        | Annotation::PendingStructured { .. } => {
             return Err(member(
                 "linked annotation entries are not supported by the Ion v4 profile",
             ));

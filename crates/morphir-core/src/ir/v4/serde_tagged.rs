@@ -335,7 +335,7 @@ fn decode_attributes(members: &Members<'_>, cursor: &str) -> Result<TypeAttribut
         &["source", "constraints", "extensions", "@context", "facts"],
     )?;
     Ok(TypeAttributes {
-        metadata: MetadataScope::parse(
+        metadata: MetadataScope::parse_unresolved(
             written.get("@context").map(|member| member.value),
             written.get("facts").map(|member| member.value),
         )
@@ -1113,7 +1113,7 @@ fn decode_value_attributes(
         )?)),
     };
     Ok(ValueAttributes {
-        metadata: MetadataScope::parse(
+        metadata: MetadataScope::parse_unresolved(
             written.get("@context").map(|member| member.value),
             written.get("facts").map(|member| member.value),
         )

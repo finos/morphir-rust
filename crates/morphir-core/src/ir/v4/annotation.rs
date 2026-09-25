@@ -116,6 +116,13 @@ pub enum Annotation {
         /// The existing argument vocabulary.
         args: Vec<AnnotationArgument>,
     },
+    /// An alias awaiting the enclosing document's context during whole-file decode.
+    PendingCompact { authored_name: String },
+    /// A structured alias awaiting the enclosing document's context.
+    PendingStructured {
+        authored_name: String,
+        args: Vec<AnnotationArgument>,
+    },
 }
 
 /// An argument of a structured annotation.
@@ -145,13 +152,18 @@ impl Serialize for Annotation {
                 }
                 map.end()
             }
-            Annotation::LinkedCompact { authored_name, .. } => {
+            Annotation::LinkedCompact { authored_name, .. }
+            | Annotation::PendingCompact { authored_name } => {
                 serializer.serialize_str(authored_name)
             }
             Annotation::LinkedStructured {
                 authored_name,
                 args,
                 ..
+            }
+            | Annotation::PendingStructured {
+                authored_name,
+                args,
             } => {
                 let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("name", authored_name)?;

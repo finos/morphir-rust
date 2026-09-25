@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Registry`, `GuestSource` and `Pool` in `morphir-host`: a portable provider
+  registry that resolves frontends and backends from registered sources, and
+  a warm-guest pool that opens one session per key and reuses it across
+  calls, evicting and retrying once on a broken session.
+- `NativeSource` and `InstalledSource` in `morphir-host-native`: registry
+  sources for a built-in extension already loaded into the host process, and
+  for an installed extension read from its verified catalog and lock.
+
+### Changed
+- `ChannelError` and `HostError::Channel` carry a `cause`, so a transport
+  failure keeps what it began as (an I/O error, a JSON error, or the
+  transport itself) instead of always reporting `Transport`.
+- `morphir-host` depends on `morphir-core` to normalize the IR release
+  versions a `Registry` resolves against.
+- `Registry::register` refuses a source whose origin, scope and mode
+  disagree: a `Builtin` source must report `Complete` metadata scope and
+  `NativeDirect`/`NativeMep` invocation modes, and an `Installed` source must
+  report `PersistedFrontendBackend` scope and the same `ProcessMep` or
+  `WasmMep` mode under every policy.
+
 ### Changed
 - The extension bundles are released with version-2 descriptors that carry
   each guest's capability claims: `extension/avro/v0.2.0`,

@@ -301,6 +301,18 @@ pub fn inline_document_contexts(
     } else {
         EffectiveContext::default()
     };
+    if let Some(graph) = result
+        .get_mut("$meta")
+        .and_then(|meta| meta.get_mut("@graph"))
+        .and_then(Value::as_array_mut)
+    {
+        for node in graph {
+            if let Some(context) = node.get_mut("@context") {
+                let effective = resolve_context(Some(&parent), context, resources, source_file)?;
+                *context = effective.to_inline_value();
+            }
+        }
+    }
     inline_node_contexts(&mut result, &parent, resources, source_file)?;
     Ok(result)
 }

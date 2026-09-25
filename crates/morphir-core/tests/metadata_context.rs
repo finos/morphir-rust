@@ -82,6 +82,32 @@ fn verified_archive_contexts_inline_without_rewriting_fact_data() {
 }
 
 #[test]
+fn graph_record_scope_is_inlined_over_document_scope() {
+    let mut resources = ContextResources::new(".");
+    resources.insert_local(
+        "contexts/lifecycle.jsonld",
+        format!(r#"{{"@context":{{"deprecated":"{LIFE}deprecated"}}}}"#).into_bytes(),
+    );
+    let document = json!({"$meta":{
+        "@context":"./contexts/lifecycle.jsonld",
+        "@graph":[{
+            "@id":"morphir://ir/pkg/acme/orders?format=4.1.0#/module/api",
+            "@context":{"@vocab":NAMING},
+            "deprecated":true,
+            "operational-name":"submitOrder"
+        }]
+    }});
+    let inline = inline_document_contexts(&document, &resources, Some("ir.json")).unwrap();
+    let scope = &inline["$meta"]["@graph"][0]["@context"];
+    assert_eq!(scope["deprecated"], format!("{LIFE}deprecated"));
+    assert_eq!(scope["@vocab"], NAMING);
+    assert_eq!(
+        inline["$meta"]["@graph"][0]["operational-name"],
+        "submitOrder"
+    );
+}
+
+#[test]
 fn aliases_prefixes_and_vocab_expand_with_precedence() {
     let context = resolve_context(
         None,

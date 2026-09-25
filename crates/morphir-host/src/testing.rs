@@ -153,6 +153,11 @@ enum FakeModes {
     Native,
     /// The same mode under every policy, like an installed runtime.
     Fixed(InvocationMode),
+    /// One mode under each policy.
+    PerPolicy {
+        prefer_direct: InvocationMode,
+        protocol_only: InvocationMode,
+    },
 }
 
 /// A [`GuestSource`] made of metadata, for registry tests.
@@ -220,6 +225,20 @@ impl FakeSource {
         self
     }
 
+    /// Use `prefer_direct` under [`InvocationPolicy::PreferDirect`] and
+    /// `protocol_only` under [`InvocationPolicy::ProtocolOnly`].
+    pub fn with_modes(
+        mut self,
+        prefer_direct: InvocationMode,
+        protocol_only: InvocationMode,
+    ) -> Self {
+        self.modes = FakeModes::PerPolicy {
+            prefer_direct,
+            protocol_only,
+        };
+        self
+    }
+
     /// Answer the next request on every connection with `response`.
     pub fn respond(mut self, response: ExtensionResponse) -> Self {
         self.answers.push(response);
@@ -251,6 +270,12 @@ impl GuestSource for FakeSource {
             (FakeModes::Native, InvocationPolicy::PreferDirect) => InvocationMode::NativeDirect,
             (FakeModes::Native, InvocationPolicy::ProtocolOnly) => InvocationMode::NativeMep,
             (FakeModes::Fixed(mode), _) => mode,
+            (FakeModes::PerPolicy { prefer_direct, .. }, InvocationPolicy::PreferDirect) => {
+                prefer_direct
+            }
+            (FakeModes::PerPolicy { protocol_only, .. }, InvocationPolicy::ProtocolOnly) => {
+                protocol_only
+            }
         }
     }
 

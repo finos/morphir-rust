@@ -742,3 +742,20 @@ fn registration_rejects_a_builtin_source_that_claims_a_process_mode() {
     assert!(error.contains("ProcessMep"), "{error}");
     assert!(error.contains("Builtin"), "{error}");
 }
+
+// The refusal names the mode under each policy, so a source whose mode is
+// wrong only under `ProtocolOnly` shows that mode.
+#[test]
+fn registration_names_a_wrong_protocol_only_mode() {
+    let source = builtin_alpha()
+        .as_ref()
+        .clone()
+        .with_modes(InvocationMode::NativeDirect, InvocationMode::ProcessMep);
+    let mut registry = Registry::new();
+    let error = registry.register(Arc::new(source)).unwrap_err().to_string();
+    assert_eq!(
+        error,
+        "provider 'builtin-alpha' reports Complete, NativeDirect under PreferDirect \
+         and ProcessMep under ProtocolOnly, which do not match its Builtin origin"
+    );
+}

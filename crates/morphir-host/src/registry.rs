@@ -255,7 +255,7 @@ fn validate_origin_scope_and_modes(source: &dyn GuestSource) -> Result<(), HostE
         Ok(())
     } else {
         Err(HostError::Invalid(format!(
-            "provider '{}' reports {scope:?} and {prefer_direct:?}, which do not match its {origin:?} origin",
+            "provider '{}' reports {scope:?}, {prefer_direct:?} under PreferDirect and {protocol_only:?} under ProtocolOnly, which do not match its {origin:?} origin",
             source.info().id
         )))
     }

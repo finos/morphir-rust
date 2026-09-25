@@ -4,6 +4,7 @@
 //! first step. Step libraries in any crate write steps against it. A runner runs every suite the
 //! same way.
 
+pub mod diff;
 pub mod parser;
 pub mod steps;
 pub mod suite;

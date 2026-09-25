@@ -8,6 +8,7 @@ use cucumber::writer::Stats as _;
 use cucumber::{World as _, then};
 use morphir_bdd::parser::MorphirParser;
 use morphir_bdd::steps::probe::Linked;
+use morphir_bdd::suite::Suite;
 use morphir_bdd::world::MorphirWorld;
 use morphir_gherkin::Tag;
 use morphir_gherkin::extension::{Context, Effect, Extensions, Scope, TagExtension};
@@ -95,6 +96,25 @@ async fn context_run() {
     );
 }
 
+/// Runs `tests/features/files_and_output.feature` through [`Suite`], the same runner the CLI
+/// uses: file steps write inside a scenario-owned temporary directory, and output steps read a
+/// `LastOutput` a step sets directly since Task 12's CLI steps do not exist yet. Its reports go to
+/// a fresh temporary directory, never into the source tree.
+async fn files_and_output_run() {
+    let out_dir = tempfile::tempdir().expect("create a temporary report directory");
+    let result = Suite::new("files-and-output")
+        .features(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/features/files_and_output.feature"
+        ))
+        .out_dir(out_dir.path())
+        .run()
+        .await;
+    assert!(result.succeeded(), "{result:?}");
+    assert_eq!(result.failed, 0, "{result:?}");
+    assert!(result.passed > 0, "{result:?}");
+}
+
 #[tokio::main]
 async fn main() {
     morphir_bdd::link();
@@ -117,4 +137,5 @@ async fn main() {
     );
 
     context_run().await;
+    files_and_output_run().await;
 }

@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new slot, opening a guest only if none is cached there, instead of using
   the abandoned one. The registry's `ProviderOrigin`,
   `InvocationMode` and `CapabilityMetadataScope` are `#[non_exhaustive]`.
+- `Resolved::native` in `morphir-host` is `Some` only under
+  `InvocationMode::NativeDirect`. Under `NativeMep` it is `None`, so a
+  `ProtocolOnly` caller goes through `Resolved::connect` and gets MEP
+  negotiation and result checks.
+- `GuestSource::incarnation` in `morphir-host` tells apart two builds under
+  one id and version, and `Resolved::fingerprint` appends it when it is
+  `Some`. `InstalledSource` reports a SHA-256 of its installed catalog
+  record, so a reinstall under the same version with another artifact, args
+  or claims opens a new pooled guest. `testing::FakeSource::with_incarnation`
+  sets it in tests.
 - `Registry::register` refuses a source whose origin, scope and mode
   disagree: a `Builtin` source must report `Complete` metadata scope and
   `NativeDirect`/`NativeMep` invocation modes, and an `Installed` source must

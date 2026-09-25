@@ -33,4 +33,15 @@ async fn run_program_removes_inherited_morphir_variables() {
         "MORPHIR_BDD_LEAK_PROBE must not reach the program under test:\n{}",
         output.stdout
     );
+
+    // C1: `MORPHIR_HOME` must point inside this scenario's own workspace, not at a developer's
+    // real Morphir home, so the isolated run can never reach or pollute real registries.
+    let expected_morphir_home = dir.path().join(".home").join(".morphir");
+    let expected_line = format!("morphir_home={}\n", expected_morphir_home.display());
+    assert!(
+        output.stdout.contains(&expected_line),
+        "MORPHIR_HOME must be {}:\n{}",
+        expected_morphir_home.display(),
+        output.stdout
+    );
 }

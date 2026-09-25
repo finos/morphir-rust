@@ -75,17 +75,26 @@ pub fn split_command_line(line: &str) -> Result<Vec<String>, String> {
     Ok(words)
 }
 
-/// Runs `program` with `args` in `dir`, with an isolated environment: `HOME`,
-/// `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` all point under a fresh `.home`
-/// directory inside `dir` (created if it does not exist), and `MORPHIR_NO_BANNER=1` is set. This
-/// keeps a scenario from reading or writing a developer's real configuration, data or cache.
+/// Runs `program` with `args` in `dir`, with an isolated environment: `HOME`, `USERPROFILE`,
+/// `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `APPDATA` and `LOCALAPPDATA` all point
+/// under a fresh `.home` directory inside `dir` (created if it does not exist), `MORPHIR_HOME` is
+/// set to `.home/.morphir`, and `MORPHIR_NO_BANNER=1` is set. This keeps a scenario from reading
+/// or writing a developer's real configuration, data or cache.
+///
+/// The real `morphir` CLI resolves its Morphir home from `MORPHIR_HOME` first and only falls
+/// back to the OS home directory (`$HOME` on Unix, `%USERPROFILE%` on Windows) when that variable
+/// is unset. Setting `MORPHIR_HOME` directly is what keeps a scenario's run out of a developer's
+/// real registries; `HOME` and `USERPROFILE` (plus `APPDATA` and `LOCALAPPDATA`) are set too, on
+/// every OS, as a second line of defense for anything that consults the OS home directly instead
+/// of `MORPHIR_HOME`. Setting the Windows-only variables on Unix, and vice versa, is harmless: the
+/// program under test only reads the ones its own OS gives meaning to.
 ///
 /// Before applying those overrides, every inherited environment variable whose name starts with
 /// `MORPHIR_` is removed from the child's environment. Without this, a developer's own
 /// `MORPHIR_*` variables (for example a stray `MORPHIR_BDD_TAGS` or a real `MORPHIR_HOME`) would
 /// pass straight through from this test process into the program under test and could defeat the
 /// isolation above, or the tag filtering / output directory this crate's own `Suite` reads from
-/// the same namespace.
+/// the same namespace. The strip happens first, so the overrides below always win.
 ///
 /// It runs on `tokio::process`, so a scenario waiting for its program does not block the
 /// executor: cucumber keeps running other scenarios meanwhile. It must be awaited inside a Tokio
@@ -112,9 +121,13 @@ pub async fn run_program(
     }
     let output = command
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("XDG_DATA_HOME", home.join(".local/share"))
         .env("XDG_CACHE_HOME", home.join(".cache"))
+        .env("APPDATA", home.join("AppData/Roaming"))
+        .env("LOCALAPPDATA", home.join("AppData/Local"))
+        .env("MORPHIR_HOME", home.join(".morphir"))
         .env("MORPHIR_NO_BANNER", "1")
         .output()
         .await

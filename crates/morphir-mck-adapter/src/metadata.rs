@@ -9,7 +9,8 @@ use morphir_core::metadata::{
     AssertionSource, ContextResources, DocumentId, Fact, MetadataError, ObjectTerm,
     expand_properties, resolve_context,
 };
-use morphir_core::node_address::NodeUri;
+use morphir_core::node_address::{NodeUri, Sha256Digest};
+use morphir_package::authoring::{AuthoredLibrary, PublicationBindings};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -64,7 +65,8 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
                 "claims":[
                     {"operation":"compareFacts","profile":"json","layout":"single","irRevision":"4.1.0"},
-                    {"operation":"resolveSources","profile":"json","layout":"single","irRevision":"4.1.0"}
+                    {"operation":"resolveSources","profile":"json","layout":"single","irRevision":"4.1.0"},
+                    {"operation":"publish","profile":"json","layout":"single","irRevision":"4.1.0"}
                 ]})
             }
             Request::Run {
@@ -77,14 +79,24 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 fixtures,
             } => {
                 check_id(id)?;
-                if operation != "compareFacts" && operation != "resolveSources" {
+                if operation != "compareFacts"
+                    && operation != "resolveSources"
+                    && operation != "publish"
+                {
                     json!({"id":id,"ok":false,"error":{"code":"unsupported_operation",
                         "message":"this metadata operation is not implemented"}})
                 } else {
-                    let observed = if operation == "compareFacts" {
-                        compare_facts(&case_id, &targets, &given, &schema_closure, &fixtures)
-                    } else {
-                        resolve_sources(&case_id, &targets, &given, &schema_closure, &fixtures)
+                    let observed = match operation.as_str() {
+                        "compareFacts" => {
+                            compare_facts(&case_id, &targets, &given, &schema_closure, &fixtures)
+                        }
+                        "resolveSources" => {
+                            resolve_sources(&case_id, &targets, &given, &schema_closure, &fixtures)
+                        }
+                        "publish" => {
+                            publish(&case_id, &targets, &given, &schema_closure, &fixtures)
+                        }
+                        _ => unreachable!("unsupported operations returned above"),
                     };
                     match observed {
                         Ok(observation) => json!({"id":id,"ok":true,"observation":observation}),
@@ -219,9 +231,122 @@ fn compare_facts(
     Ok(json!({"outcome":"accepted","equal":equal,"distinctFacts":facts.len(),"facts":facts}))
 }
 
-fn read_closure(path: &str, fixtures: &[Fixture]) -> Result<HashMap<String, NodeUri>, String> {
+fn publish(
+    case_id: &str,
+    targets: &[Value],
+    given: &Value,
+    schema_closure: &str,
+    fixtures: &[Fixture],
+) -> Result<Value, String> {
+    if !valid_case_id(case_id) {
+        return Err("invalid metadata case id".into());
+    }
+    if targets != [json!({"profile":"json","layout":"single","irRevision":"4.1.0"})] {
+        return Err("publish target is not supported".into());
+    }
+    let resources = read_fixtures(fixtures)?;
+    if !resources.contains_key(schema_closure) {
+        return Err("schema closure fixture missing".into());
+    }
+    let context_file = given["contextFile"]
+        .as_str()
+        .ok_or("missing context fixture")?;
+    let context_bytes = resources
+        .get(context_file)
+        .ok_or("context fixture missing")?;
+    let context_digest = Sha256Digest::from_bytes(context_bytes).to_string();
+    let context_hex = context_digest.strip_prefix("sha256:").unwrap();
+    if let Some(declared) = given["declaredSha256"].as_str()
+        && declared != context_hex
+    {
+        return Ok(
+            json!({"outcome":"rejected","diagnostic":"context_digest_mismatch",
+            "usablePublicationChanged":false}),
+        );
+    }
+    if given["contextDigest"] != context_digest {
+        return Err("context content address mismatch".into());
+    }
+    if given["contextStorage"] != "external"
+        || given["archiveOwnsPredicate"] != false
+        || given["providerTrusted"] != true
+    {
+        return Err("unsupported publication fixture".into());
+    }
+    let archive = resources
+        .get(
+            given["archiveFile"]
+                .as_str()
+                .ok_or("missing archive fixture")?,
+        )
+        .ok_or("archive fixture missing")?;
+    let provider = resources
+        .get(
+            given["providerFile"]
+                .as_str()
+                .ok_or("missing provider fixture")?,
+        )
+        .ok_or("provider fixture missing")?;
+    let revision = Sha256Digest::parse(
+        given["externalPredicateRevision"]
+            .as_str()
+            .ok_or("missing external predicate revision")?,
+    )
+    .map_err(|error| error.to_string())?;
+    if revision != Sha256Digest::from_bytes(provider) {
+        return Err("external provider revision mismatch".into());
+    }
+    let inventory_path = context_file
+        .strip_prefix("metadata-fixtures/")
+        .ok_or("invalid context fixture path")?;
+    let library = AuthoredLibrary::create_with_contexts(
+        &serde_json::to_vec(&given["authoring"]).map_err(|error| error.to_string())?,
+        archive,
+        vec![(inventory_path.to_owned(), context_bytes.clone())],
+    )
+    .map_err(|error| error.to_string())?;
+    let mut bindings = PublicationBindings::new(&library).map_err(|error| error.to_string())?;
+    bindings
+        .add_v4_provider(provider, &revision)
+        .map_err(|error| error.to_string())?;
+    let mut context = morphir_core::ir::json::read(
+        std::str::from_utf8(context_bytes).map_err(|_| "context is not UTF-8")?,
+    )
+    .map_err(|error| format!("invalid context JSON: {error:?}"))?;
+    let aliases = context["@context"]
+        .as_object_mut()
+        .ok_or("context aliases missing")?;
+    if aliases.len() != 1 {
+        return Err("publication case needs one predicate alias".into());
+    }
+    let uri = aliases
+        .values()
+        .next()
+        .and_then(Value::as_str)
+        .ok_or("predicate alias must be a node URI")?;
+    let bound = bindings
+        .bind_uri(&NodeUri::parse(uri).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    *aliases.values_mut().next().unwrap() = json!(bound.to_string());
+    let mut published = serde_json::to_vec_pretty(&context).map_err(|error| error.to_string())?;
+    published.push(b'\n');
+    AuthoredLibrary::create_with_contexts(
+        &serde_json::to_vec(&given["authoring"]).map_err(|error| error.to_string())?,
+        archive,
+        vec![(inventory_path.to_owned(), published.clone())],
+    )
+    .map_err(|error| error.to_string())?;
+    let published_digest = Sha256Digest::from_bytes(&published).to_string();
+    Ok(
+        json!({"outcome":"accepted","inventory":[{"path":inventory_path,
+        "sha256":published_digest.strip_prefix("sha256:").unwrap()}],
+        "predicate":bound.to_string()}),
+    )
+}
+
+fn read_fixtures(fixtures: &[Fixture]) -> Result<HashMap<String, Vec<u8>>, String> {
     let mut seen = HashSet::new();
-    let mut selected = None;
+    let mut verified = HashMap::new();
     for fixture in fixtures {
         if !fixture.path.starts_with("metadata-fixtures/")
             || fixture
@@ -242,12 +367,15 @@ fn read_closure(path: &str, fixtures: &[Fixture]) -> Result<HashMap<String, Node
         if fixture.sha256 != actual {
             return Err("fixture digest mismatch".into());
         }
-        if fixture.path == path {
-            selected = Some(bytes);
-        }
+        verified.insert(fixture.path.clone(), bytes);
     }
-    let bytes = selected.ok_or("schema closure fixture missing")?;
-    let text = std::str::from_utf8(&bytes).map_err(|_| "schema closure is not UTF-8")?;
+    Ok(verified)
+}
+
+fn read_closure(path: &str, fixtures: &[Fixture]) -> Result<HashMap<String, NodeUri>, String> {
+    let verified = read_fixtures(fixtures)?;
+    let bytes = verified.get(path).ok_or("schema closure fixture missing")?;
+    let text = std::str::from_utf8(bytes).map_err(|_| "schema closure is not UTF-8")?;
     let value = morphir_core::ir::json::read(text).map_err(|_| "invalid schema closure JSON")?;
     let predicates = value["predicates"]
         .as_array()

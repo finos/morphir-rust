@@ -260,7 +260,7 @@ done
                 "a transport cause here should be the closed-stdout race: {}",
                 error.message
             ),
-            ChannelCause::Json => panic!("unexpected JSON cause: {}", error.message),
+            other => panic!("unexpected {other:?} cause: {}", error.message),
         }
     }
 

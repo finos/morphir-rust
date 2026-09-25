@@ -13,6 +13,7 @@ use std::sync::Arc;
 ///
 /// Installed providers have higher selection precedence than built-ins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum ProviderOrigin {
     /// A provider linked into the host process.
     Builtin,
@@ -31,6 +32,7 @@ pub enum InvocationPolicy {
 
 /// The transport selected for one resolved provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum InvocationMode {
     /// Invoke an in-process typed native handle.
     NativeDirect,
@@ -44,6 +46,7 @@ pub enum InvocationMode {
 
 /// How much of a provider's capability metadata the registry knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CapabilityMetadataScope {
     /// The capability snapshot includes every member reported by the provider.
     Complete,

@@ -13,6 +13,7 @@ pub enum ChannelState {
 
 /// What a transport failure began as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ChannelCause {
     /// The transport itself failed: a timeout, a closed pipe the host
     /// detected, a stopped guest.

@@ -23,7 +23,7 @@ pub mod distribution;
 pub mod legacy;
 pub mod linked_metadata;
 mod linked_metadata_project;
-mod linked_metadata_scan;
+pub(crate) mod linked_metadata_scan;
 pub mod literal;
 pub mod module;
 pub mod package;
@@ -99,7 +99,8 @@ pub use value::{
 /// Top-level IR file structure.
 ///
 /// `formatVersion` comes first and `distribution` second. The optional `$meta`
-/// belongs to the single-file document in the proposed 4.1.0 profile.
+/// belongs to the document in the proposed 4.1.0 profile; a document tree stores it
+/// in its manifest.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IRFile {
     pub format_version: FormatVersion,

@@ -288,7 +288,7 @@ impl LinkedMetadataCarrier for Distribution {
 }
 
 /// Resolve every local carrier over the document defaults after the entire file is decoded.
-pub(super) fn validate_document_scopes(
+pub(crate) fn validate_document_scopes(
     distribution: &mut Distribution,
     metadata: Option<&DocumentMeta>,
 ) -> Result<(), String> {

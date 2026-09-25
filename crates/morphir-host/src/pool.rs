@@ -55,13 +55,25 @@ type Slot = Mutex<Option<SlotState>>;
 /// failure, from the retry's call or from opening its replacement, evicts the
 /// slot again (leaving it empty) and returns [`CallError::Failed`].
 ///
+/// # Cancellation
+///
+/// A session is held out of its slot for the duration of a call, not merely
+/// borrowed, and is put back only once the call completes (successfully or
+/// [`CallError::Rejected`]). Dropping a call's future before it completes,
+/// such as a caller's own timeout, therefore drops the session with it
+/// instead of leaving a cached session with a request permanently in flight:
+/// the next call for that key opens fresh.
+///
 /// # Abandon
 ///
 /// [`Pool::abandon`] removes the slot from the map immediately. When no call
 /// is using that slot, the removed session is closed right away. When a call
 /// is in flight, `abandon` only drops its own reference to the slot: the call
 /// in flight finishes against the session it already holds, and the session
-/// is dropped once that call releases the last reference.
+/// is dropped once that call releases the last reference. A caller already
+/// holding the removed `Arc` (in flight, or already waiting on its lock) thus
+/// still finishes against the abandoned session, while any new call for the
+/// same key finds no entry and opens a fresh guest.
 pub struct Pool<K> {
     config: HostConfig,
     slots: Mutex<HashMap<K, Arc<Slot>>>,
@@ -99,18 +111,30 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
         let mut guard = slot.lock().await;
 
         Self::ensure_matching(&mut guard, fingerprint, &open, &self.config).await?;
-        let session = &mut guard
-            .as_mut()
-            .expect("ensure_matching leaves the slot occupied")
-            .session;
+        // Taken out of the slot, not just borrowed: if this call's own future
+        // is dropped before it finishes (a caller's timeout), `state` drops
+        // with it mid-call, taking its session with it, and the slot is left
+        // empty rather than caching a session with a request permanently in
+        // flight. It is put back only once the call actually completes.
+        let mut state = guard
+            .take()
+            .expect("ensure_matching leaves the slot occupied");
 
-        match call_on(session, method, params).await {
-            Ok(value) => Ok(value),
-            Err(CallError::Rejected(error)) => Err(CallError::Rejected(error)),
+        match call_on(&mut state.session, method, params).await {
+            Ok(value) => {
+                *guard = Some(state);
+                Ok(value)
+            }
+            Err(CallError::Rejected(error)) => {
+                *guard = Some(state);
+                Err(CallError::Rejected(error))
+            }
             Err(CallError::Failed(_)) => {
                 // The connection already tore its own transport down on this
-                // failure, so there is nothing left to close.
-                *guard = None;
+                // failure, so there is nothing left to close: just drop the
+                // broken session. The slot is already empty since it was
+                // taken above.
+                drop(state);
                 let mut session = open_session(&open, &self.config)
                     .await
                     .map_err(CallError::Failed)?;

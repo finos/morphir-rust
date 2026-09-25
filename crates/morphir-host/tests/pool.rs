@@ -3,7 +3,7 @@
 //! (direct-provider) behaviour stays there: a `Pool` always opens a session.
 
 use async_trait::async_trait;
-use morphir_extension_sdk::protocol::{ExtensionResponse, PeerInfo, PeerKind, RpcError};
+use morphir_extension_sdk::protocol::{ExtensionResponse, PeerInfo, PeerKind, RpcError, methods};
 use morphir_host::testing::{MemoryChannel, frontend_initialize_result};
 use morphir_host::{
     BasicChecks, CallError, Channel, ChannelCause, ChannelError, ChannelState, GuestConnection,
@@ -11,11 +11,27 @@ use morphir_host::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::future::Ready;
+use std::collections::VecDeque;
+use std::future::{Future, Ready};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use tokio::sync::oneshot;
 use tokio::time::{Duration, timeout};
+
+/// Poll `future` once with a no-op waker and assert it is still
+/// [`Poll::Pending`]. Proves the future was actually attempted, not merely
+/// skipped by whatever drove it, so a later "the other one completed
+/// meanwhile" assertion means what it says.
+fn assert_pending<F: Future>(future: Pin<&mut F>) {
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    match future.poll(&mut cx) {
+        Poll::Pending => {}
+        Poll::Ready(_) => panic!("expected the future to still be pending"),
+    }
+}
 
 fn config() -> HostConfig {
     HostConfig::new(PeerInfo {
@@ -279,24 +295,28 @@ async fn a_changed_fingerprint_replaces_the_cached_session() {
     assert_eq!(opens.load(Ordering::SeqCst), 2);
 }
 
-/// A channel whose second `receive` (the one answering a real call) waits on
-/// a [`oneshot::Receiver`] before it hands back the scripted answer. The
-/// first `receive` (the handshake) answers right away.
+/// A channel whose first post-handshake `receive` (the one answering the
+/// first real call) waits on a [`oneshot::Receiver`] before it hands back
+/// its scripted answer. The handshake answers right away, and any further
+/// calls after the gated one answer right away too, from `answers` in
+/// order: a session a gated call shares with another call (same key,
+/// cached) must still be able to serve that second call once the gate
+/// opens.
 struct GatedChannel {
     handshake: Option<ExtensionResponse>,
-    answer: Option<ExtensionResponse>,
+    answers: VecDeque<ExtensionResponse>,
     gate: Option<oneshot::Receiver<()>>,
 }
 
 impl GatedChannel {
     fn new(
         handshake: ExtensionResponse,
-        answer: ExtensionResponse,
+        answers: impl IntoIterator<Item = ExtensionResponse>,
         gate: oneshot::Receiver<()>,
     ) -> Self {
         Self {
             handshake: Some(handshake),
-            answer: Some(answer),
+            answers: answers.into_iter().collect(),
             gate: Some(gate),
         }
     }
@@ -315,7 +335,7 @@ impl Channel for GatedChannel {
         if let Some(gate) = self.gate.take() {
             let _ = gate.await;
         }
-        self.answer.take().ok_or_else(|| ChannelError {
+        self.answers.pop_front().ok_or_else(|| ChannelError {
             message: "GatedChannel has no scripted answer".into(),
             state: ChannelState::Stopped,
             cause: ChannelCause::Transport,
@@ -333,18 +353,30 @@ impl Channel for GatedChannel {
 
 // Requirement: the map lock guards the map only. A call on one key that is
 // stuck waiting on its guest must not delay a call on another key.
+//
+// This deliberately does not use `tokio::select!` to race the two calls:
+// `select!` polls its branches in a random order by default, so a run that
+// happens to poll `call_b` first would let it complete before `call_a` ever
+// takes a lock, silently skipping the very interleaving this test exists to
+// prove. Polling `call_a` once and asserting it is still `Pending` makes the
+// interleaving explicit and the test deterministic: if a bug held some lock
+// across the whole call, `call_b` would also observe `Pending` here, and the
+// surrounding `timeout` would fail the test instead of it passing by luck.
 #[tokio::test]
 async fn a_slow_provider_does_not_block_another() {
     let (release_tx, release_rx) = oneshot::channel();
     let pool: Pool<String> = Pool::new(config());
 
+    let opens_a = Arc::new(AtomicUsize::new(0));
     let open_a = {
+        let opens_a = Arc::clone(&opens_a);
         let gate = std::sync::Mutex::new(Some(release_rx));
         move || {
+            opens_a.fetch_add(1, Ordering::SeqCst);
             let gate = gate.lock().unwrap().take().expect("opened once");
             let channel = GatedChannel::new(
                 ok(1, frontend_initialize_result("slow")),
-                ok(2, json!({"provider": "a"})),
+                [ok(2, json!({"provider": "a"}))],
                 gate,
             );
             let connection: Box<dyn GuestConnection> =
@@ -368,12 +400,12 @@ async fn a_slow_provider_does_not_block_another() {
         tokio::pin!(call_a);
         tokio::pin!(call_b);
 
-        // Poll both concurrently. Key A's call is stuck on the gate, so only
-        // B's branch can become ready here.
-        let b_result = tokio::select! {
-            a = &mut call_a => panic!("the gated call must not finish before the other one: {a:?}"),
-            b = &mut call_b => b,
-        };
+        // Prove A is genuinely parked on its gate, not merely unpolled.
+        assert_pending(call_a.as_mut());
+        assert_eq!(opens_a.load(Ordering::SeqCst), 1);
+
+        // B, a different key, must complete even though A is still stuck.
+        let b_result = call_b.await;
         assert_eq!(b_result.unwrap(), json!({"provider": "b"}));
         assert_eq!(opens_b.load(Ordering::SeqCst), 1);
 
@@ -385,4 +417,232 @@ async fn a_slow_provider_does_not_block_another() {
     })
     .await
     .expect("the slow call must not hang once released");
+}
+
+// Requirement (item 2, cancellation safety): dropping a call's future before
+// it completes (a caller's own timeout) must not leave a session cached with
+// a request permanently in flight. The channel here never answers the real
+// call, so the only way this test finishes is if the dropped call's session
+// is dropped with it and the next call for the same key opens fresh.
+#[tokio::test]
+async fn a_dropped_call_lets_the_next_call_open_a_fresh_guest() {
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    // Kept alive for the whole hung call: dropping the sender would make the
+    // gated receive resolve with an error immediately instead of hanging.
+    let (_keep_alive, never_rx) = oneshot::channel::<()>();
+    let hung_gate = std::sync::Mutex::new(Some(never_rx));
+    let open_hung = move || {
+        let gate = hung_gate.lock().unwrap().take().expect("opened once");
+        let channel = GatedChannel::new(
+            ok(1, frontend_initialize_result("guest")),
+            [ok(2, json!({"call": "never answered"}))],
+            gate,
+        );
+        let connection: Box<dyn GuestConnection> =
+            Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")));
+        std::future::ready(Ok(connection))
+    };
+
+    let hung = timeout(
+        Duration::from_millis(50),
+        pool.call::<_, Value, _, _>(&key, "fp", open_hung, "compile", &()),
+    )
+    .await;
+    assert!(
+        hung.is_err(),
+        "the call must still be pending when the short timeout fires"
+    );
+
+    let opens = Arc::new(AtomicUsize::new(0));
+    let open_fresh = opener("guest", Arc::clone(&opens), |_attempt| {
+        vec![
+            Ok(ok(1, frontend_initialize_result("guest"))),
+            Ok(ok(2, json!({"call": "fresh"}))),
+        ]
+    });
+    let result: Value = pool
+        .call(&key, "fp", open_fresh, "compile", &())
+        .await
+        .unwrap();
+
+    assert_eq!(result, json!({"call": "fresh"}));
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+}
+
+// (Minor, item 3a) An open failure is not cached: the failed attempt leaves
+// nothing behind, so the next call opens again rather than reusing a slot
+// that was never actually populated.
+#[tokio::test]
+async fn an_open_failure_is_not_cached() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let opens_clone = Arc::clone(&opens);
+    let open = move || {
+        let attempt = opens_clone.fetch_add(1, Ordering::SeqCst);
+        let result: Result<Box<dyn GuestConnection>, HostError> = if attempt == 0 {
+            Err(HostError::Invalid("scripted open failure".into()))
+        } else {
+            let channel = MemoryChannel::new()
+                .respond(ok(1, frontend_initialize_result("guest")))
+                .respond(ok(2, json!({"call": "opened"})));
+            let connection: Box<dyn GuestConnection> =
+                Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")));
+            Ok(connection)
+        };
+        std::future::ready(result)
+    };
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    let error = pool
+        .call::<_, Value, _, _>(&key, "fp", &open, "compile", &())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CallError::Failed(_)));
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+
+    let result: Value = pool.call(&key, "fp", &open, "compile", &()).await.unwrap();
+    assert_eq!(result, json!({"call": "opened"}));
+    assert_eq!(opens.load(Ordering::SeqCst), 2);
+}
+
+// (Minor, item 3b) A fingerprint change does not just forget the old
+// session: it closes it. The old channel must see the MEP shutdown sequence
+// (a `morphir.shutdown` request answered, then `morphir.exit`) and its
+// channel-level `close`.
+#[tokio::test]
+async fn a_changed_fingerprint_closes_the_old_session() {
+    let first_channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .respond(ok(2, json!({"opened": "first"})))
+        .respond(ok(3, json!({})));
+    let first_log = first_channel.log();
+    let first_connection: Box<dyn GuestConnection> = Box::new(JsonRpcConnection::new(
+        first_channel,
+        BasicChecks::new("guest"),
+    ));
+
+    let second_channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .respond(ok(2, json!({"opened": "second"})));
+    let second_connection: Box<dyn GuestConnection> = Box::new(JsonRpcConnection::new(
+        second_channel,
+        BasicChecks::new("guest"),
+    ));
+
+    let connections = Arc::new(std::sync::Mutex::new(VecDeque::from([
+        first_connection,
+        second_connection,
+    ])));
+    let open = move || {
+        let connection = connections
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("only two opens expected");
+        std::future::ready(Ok(connection))
+    };
+
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    let first: Value = pool
+        .call(&key, "fp-1", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    assert_eq!(first, json!({"opened": "first"}));
+
+    let second: Value = pool
+        .call(&key, "fp-2", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    assert_eq!(second, json!({"opened": "second"}));
+
+    assert_eq!(first_log.closes(), 1);
+    assert_eq!(
+        first_log.methods().last().map(String::as_str),
+        Some(methods::EXIT)
+    );
+}
+
+// (Minor, item 3c) Two concurrent first calls on the same key must not race
+// each other into opening two guests: the slot's own lock serializes them,
+// so the second call finds the session the first one opened.
+#[tokio::test]
+async fn two_concurrent_first_calls_on_the_same_key_open_only_one_guest() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let (release_tx, release_rx) = oneshot::channel();
+    let gate = Arc::new(std::sync::Mutex::new(Some(release_rx)));
+    let open = {
+        let opens = Arc::clone(&opens);
+        move || {
+            opens.fetch_add(1, Ordering::SeqCst);
+            let gate = gate.lock().unwrap().take().expect("opened once");
+            // Two answers: A's gated call (id 2) and, since B rides the same
+            // session once A's gate opens, B's call after it (id 3).
+            let channel = GatedChannel::new(
+                ok(1, frontend_initialize_result("guest")),
+                [
+                    ok(2, json!({"call": "shared"})),
+                    ok(3, json!({"call": "shared"})),
+                ],
+                gate,
+            );
+            let connection: Box<dyn GuestConnection> =
+                Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")));
+            std::future::ready(Ok(connection))
+        }
+    };
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    timeout(Duration::from_secs(5), async {
+        let call_a = pool.call::<_, Value, _, _>(&key, "fp", open.clone(), "compile", &());
+        let call_b = pool.call::<_, Value, _, _>(&key, "fp", open.clone(), "compile", &());
+        tokio::pin!(call_a);
+        tokio::pin!(call_b);
+
+        // A reaches the gate and parks there, holding the slot's lock.
+        assert_pending(call_a.as_mut());
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+
+        // B, the same key, is stuck waiting on the slot's lock: it cannot
+        // even attempt to open its own guest while A holds it.
+        assert_pending(call_b.as_mut());
+        assert_eq!(
+            opens.load(Ordering::SeqCst),
+            1,
+            "B must not open a second guest while A holds the slot"
+        );
+
+        release_tx
+            .send(())
+            .expect("call_a is still awaiting the gate");
+        let (a_result, b_result) = tokio::join!(call_a, call_b);
+        assert_eq!(a_result.unwrap(), json!({"call": "shared"}));
+        assert_eq!(b_result.unwrap(), json!({"call": "shared"}));
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+    })
+    .await
+    .expect("must not hang once released");
+}
+
+// (Item 6) `Pool::call`'s future must stay `Send` on native targets when its
+// generics are, so a caller can `tokio::spawn` it. Compile-time only: the
+// future is built and checked, never polled.
+#[test]
+fn pool_call_future_is_send_on_native_targets() {
+    fn assert_send<T: Send>(_: &T) {}
+
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let open = opener("guest", opens, |_attempt| {
+        vec![Ok(ok(1, frontend_initialize_result("guest")))]
+    });
+    let params = json!({});
+
+    let future = pool.call::<_, Value, _, _>(&key, "fp", open, "compile", &params);
+    assert_send(&future);
 }

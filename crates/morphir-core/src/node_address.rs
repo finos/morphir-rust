@@ -115,6 +115,12 @@ pub enum NodeStep {
     ExternalFallback,
     IncompletePartialBody,
     HoleExpectedType,
+    /// The semantic Type stored in a Value or Pattern's inferredType attribute.
+    InferredType,
+    /// An ordered annotation entry on a specification.
+    AnnotationEntry(usize),
+    /// An ordered Value argument within a structured annotation.
+    AnnotationArgument(usize),
 }
 
 impl NodeStep {
@@ -123,6 +129,8 @@ impl NodeStep {
         matches!(
             self,
             Self::ConstructorArgument(_)
+                | Self::AnnotationEntry(_)
+                | Self::AnnotationArgument(_)
                 | Self::ReferenceArgument(_)
                 | Self::ListElement(_)
                 | Self::TupleElement(_)
@@ -226,6 +234,8 @@ impl NodeFingerprintBuilder {
     pub fn push<T: Serialize>(&mut self, step: &NodeStep, child: &T) -> Result<(), NodeUriError> {
         let (role, index) = match step {
             NodeStep::ConstructorArgument(index) => ("constructor/argument", *index),
+            NodeStep::AnnotationEntry(index) => ("annotation/entry", *index),
+            NodeStep::AnnotationArgument(index) => ("annotation/argument", *index),
             NodeStep::ReferenceArgument(index) => ("reference/argument", *index),
             NodeStep::ListElement(index) => ("list/element", *index),
             NodeStep::TupleElement(index) => ("tuple/element", *index),
@@ -658,6 +668,15 @@ impl fmt::Display for NodeUri {
                 NodeStep::HoleExpectedType => {
                     root.extend(["hole".to_owned(), "expected-type".to_owned()])
                 }
+                NodeStep::InferredType => root.push("inferred-type".to_owned()),
+                NodeStep::AnnotationEntry(index) => root.extend([
+                    "annotation".to_owned(),
+                    "entry".to_owned(),
+                    index.to_string(),
+                ]),
+                NodeStep::AnnotationArgument(index) => {
+                    root.extend(["argument".to_owned(), index.to_string()])
+                }
             }
         }
         write!(f, "/{}", root.join("/"))
@@ -784,7 +803,14 @@ fn parse_steps(parts: &[&str]) -> Result<Vec<NodeStep>, NodeUriError> {
             ["derived", "base-type", ..] => (NodeStep::DerivedBaseType, 2),
             ["incomplete", "partial-type", ..] => (NodeStep::PartialTypeExpression, 2),
             ["constructor", name, ..] => (NodeStep::CustomConstructor(parse_name(name)?), 2),
-            ["argument", index, ..] => (NodeStep::ConstructorArgument(parse_index(index)?), 2),
+            ["argument", index, ..] => (
+                if matches!(steps.last(), Some(NodeStep::AnnotationEntry(_))) {
+                    NodeStep::AnnotationArgument(parse_index(index)?)
+                } else {
+                    NodeStep::ConstructorArgument(parse_index(index)?)
+                },
+                2,
+            ),
             ["record", "field", name, ..] => (NodeStep::RecordField(parse_name(name)?), 3),
             ["extensible-record", "field", name, ..] => {
                 (NodeStep::ExtensibleRecordField(parse_name(name)?), 3)
@@ -830,6 +856,10 @@ fn parse_steps(parts: &[&str]) -> Result<Vec<NodeStep>, NodeUriError> {
             ["external", "fallback", ..] => (NodeStep::ExternalFallback, 2),
             ["incomplete", "partial-body", ..] => (NodeStep::IncompletePartialBody, 2),
             ["hole", "expected-type", ..] => (NodeStep::HoleExpectedType, 2),
+            ["inferred-type", ..] => (NodeStep::InferredType, 1),
+            ["annotation", "entry", index, ..] => {
+                (NodeStep::AnnotationEntry(parse_index(index)?), 3)
+            }
             _ => return Err(invalid("unknown semantic child role")),
         };
         steps.push(step);

@@ -28,6 +28,7 @@ use super::distribution::{
 };
 use super::legacy::accept_legacy_form;
 use super::linked_metadata::{DocumentMeta, MetadataScope};
+use super::linked_metadata_project::expand_v4_single_file_graph;
 use super::linked_metadata_scan::validate_document_scopes;
 use super::linked_metadata_scan::{LinkedMetadataCarrier, StandaloneMetadata};
 use super::module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
@@ -51,6 +52,7 @@ use super::value::{
 use super::{FormatVersion, IRFile};
 use crate::format_version::{NormalizedFormatVersion, ScalarValue, SupportTable};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
+use crate::metadata::{ContextResources, DocumentId};
 use crate::naming::{ModuleName, Name, PackageName};
 
 /// Reads the node as JSON and hands it to a cursor-carrying decoder, starting at the root.
@@ -1417,11 +1419,27 @@ pub(in crate::ir) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<I
     }
     validate_document_scopes(&mut distribution, metadata.as_deref())
         .map_err(|error| invalid_type(cursor, error))?;
-    Ok(IRFile {
+    let file = IRFile {
         format_version,
         distribution,
         metadata,
-    })
+    };
+    if file
+        .metadata
+        .as_ref()
+        .is_some_and(|meta| !meta.assertion_sources.is_empty())
+    {
+        // Source selectors need every carrier and the containing file before
+        // they can be matched. The datatype placeholder gives typed @json
+        // objects a stable identity here; declaration validation follows at
+        // the acquired-provider boundary.
+        let owner = DocumentId::new("$document").expect("fixed nonempty identity");
+        expand_v4_single_file_graph(&file, &owner, &ContextResources::new("."), |predicate| {
+            Some(predicate.clone())
+        })
+        .map_err(|error| invalid_type(cursor, error.to_string()))?;
+    }
+    Ok(file)
 }
 
 /// Decodes `formatVersion` through the shared format-version contract, reporting its stable

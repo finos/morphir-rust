@@ -39,11 +39,10 @@ pub fn expand_v4_single_file_graph(
     resources: &ContextResources,
     json_datatype: impl Fn(&NodeUri) -> Option<NodeUri>,
 ) -> Result<GraphIndex, DocumentGraphError> {
-    let mut graph = if let Some(meta) = &file.metadata {
-        expand_document_graph(meta, owner, resources, &json_datatype)?
-    } else {
-        GraphIndex::new()
-    };
+    let mut graph = GraphIndex::new();
+    if let Some(meta) = &file.metadata {
+        insert_document_facts(&mut graph, meta, owner, resources, &json_datatype)?;
+    }
     let parent = file
         .metadata
         .as_ref()
@@ -96,6 +95,9 @@ pub fn expand_v4_single_file_graph(
             }
             _ => {}
         }
+    }
+    if let Some(meta) = &file.metadata {
+        apply_source_records(&mut graph, meta, owner, &json_datatype)?;
     }
     Ok(graph)
 }
@@ -152,13 +154,25 @@ pub fn expand_document_graph(
     resources: &ContextResources,
     json_datatype: impl Fn(&NodeUri) -> Option<NodeUri>,
 ) -> Result<GraphIndex, DocumentGraphError> {
+    let mut graph = GraphIndex::new();
+    insert_document_facts(&mut graph, metadata, owner, resources, &json_datatype)?;
+    apply_source_records(&mut graph, metadata, owner, &json_datatype)?;
+    Ok(graph)
+}
+
+fn insert_document_facts(
+    graph: &mut GraphIndex,
+    metadata: &DocumentMeta,
+    owner: &DocumentId,
+    resources: &ContextResources,
+    json_datatype: &impl Fn(&NodeUri) -> Option<NodeUri>,
+) -> Result<(), DocumentGraphError> {
     let context = metadata
         .context
         .as_ref()
         .map(|value| resolve_context(None, value.authored(), resources, None))
         .transpose()?
         .unwrap_or_default();
-    let mut graph = GraphIndex::new();
     for subject in &metadata.graph {
         let uri = parse_node(subject.id())?;
         for fact in expand_properties(
@@ -169,20 +183,29 @@ pub fn expand_document_graph(
                 .iter()
                 .map(|(key, value)| (key.as_str(), value)),
             &context,
-            &json_datatype,
+            json_datatype,
         )? {
             let key =
                 AssertionKey::new(owner.clone(), crate::metadata::Carrier::DocumentGraph, fact)?;
             graph.insert(Assertion::new(key))?;
         }
     }
+    Ok(())
+}
+
+fn apply_source_records(
+    graph: &mut GraphIndex,
+    metadata: &DocumentMeta,
+    owner: &DocumentId,
+    json_datatype: &impl Fn(&NodeUri) -> Option<NodeUri>,
+) -> Result<(), DocumentGraphError> {
     let records = metadata
         .assertion_sources
         .iter()
         .map(|record| source_record(record, owner, &json_datatype))
         .collect::<Result<Vec<_>, _>>()?;
     graph.apply_source_records(owner, &records)?;
-    Ok(graph)
+    Ok(())
 }
 
 fn source_record(
@@ -190,14 +213,17 @@ fn source_record(
     owner: &DocumentId,
     json_datatype: &impl Fn(&NodeUri) -> Option<NodeUri>,
 ) -> Result<SourceRecord, DocumentGraphError> {
-    if record.selector.carrier != "documentGraph" {
-        return Err(DocumentGraphError::InvalidSelectorObject);
-    }
     let subject = parse_node(&record.selector.subject)?;
+    let carrier = match record.selector.carrier.as_str() {
+        "documentGraph" => Carrier::DocumentGraph,
+        "attributesFacts" => Carrier::AttributesFacts(subject.clone()),
+        "annotationsFacts" => Carrier::AnnotationsFacts(subject.clone()),
+        _ => return Err(DocumentGraphError::InvalidSelectorObject),
+    };
     let predicate = parse_node(&record.selector.predicate)?;
     let object = selector_object(&record.selector.object, &predicate, json_datatype)?;
     let fact = Fact::new(subject, predicate, object, GraphName::Default);
-    let key = AssertionKey::new(owner.clone(), crate::metadata::Carrier::DocumentGraph, fact)?;
+    let key = AssertionKey::new(owner.clone(), carrier, fact)?;
     let sources = record
         .sources
         .iter()

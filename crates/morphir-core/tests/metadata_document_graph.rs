@@ -1,7 +1,7 @@
 use morphir_core::ir::v4::{
     DocumentMeta, IRFile, expand_document_graph, expand_v4_single_file_graph,
 };
-use morphir_core::metadata::{AssertionSource, ContextResources, DocumentId, ObjectTerm};
+use morphir_core::metadata::{AssertionSource, Carrier, ContextResources, DocumentId, ObjectTerm};
 use morphir_core::node_address::NodeUri;
 use serde_json::json;
 
@@ -171,4 +171,123 @@ fn single_file_projection_keeps_type_value_and_annotation_carriers() {
         .map(|assertion| std::mem::discriminant(assertion.key().carrier()))
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(carriers.len(), 3);
+}
+
+#[test]
+fn inferred_type_node_has_an_address_and_its_own_fact() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/ir/v4/complete-example.json")).unwrap();
+    let predicate = uri("deprecated");
+    document["formatVersion"] = json!("4.1.0");
+    document["$meta"] = json!({"@context": {"deprecated": predicate}});
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["values"]["calculate-total"]["ExpressionBody"]["body"]["Literal"] = json!({
+        "attributes": {
+            "inferredType": {"Unit": {"attributes": {"facts": {"deprecated": true}}}}
+        },
+        "literal": {"FloatLiteral": 0.0}
+    });
+    let file: IRFile = serde_json::from_value(document).unwrap();
+    let graph = expand_v4_single_file_graph(
+        &file,
+        &DocumentId::new("library.json").unwrap(),
+        &ContextResources::new("."),
+        |_| None,
+    )
+    .unwrap();
+    assert_eq!(graph.facts().len(), 1);
+    assert!(
+        graph.facts()[0]
+            .subject()
+            .to_string()
+            .ends_with("/inferred-type")
+    );
+}
+
+#[test]
+fn annotation_argument_value_has_an_address_and_its_own_fact() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/ir/v4/complete-example.json")).unwrap();
+    let predicate = uri("deprecated");
+    document["formatVersion"] = json!("4.1.0");
+    document["$meta"] = json!({"@context": {"deprecated": predicate}});
+    document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+        ["add"]["annotations"] = json!([{
+        "name": "morphir/SDK:basics#add",
+        "arguments": [
+            {"Unit": {"attributes": {"facts": {"deprecated": true}}}}
+        ]
+    }]);
+    let file: IRFile = serde_json::from_value(document).unwrap();
+    let graph = expand_v4_single_file_graph(
+        &file,
+        &DocumentId::new("library.json").unwrap(),
+        &ContextResources::new("."),
+        |_| None,
+    )
+    .unwrap();
+    assert_eq!(graph.facts().len(), 1);
+    assert!(
+        graph.facts()[0]
+            .subject()
+            .to_string()
+            .contains("/annotation/entry/0/argument/0")
+    );
+}
+
+#[test]
+fn node_carrier_source_rows_match_only_their_own_authored_assertions() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/ir/v4/complete-example.json")).unwrap();
+    let predicate = uri("deprecated");
+    document["formatVersion"] = json!("4.1.0");
+    document["$meta"] = json!({"@context": {"deprecated": predicate}});
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["types"]["data-tables"]["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"] =
+        json!({"facts": {"deprecated": true}});
+    document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+        ["add"]["annotations"] = json!({"facts": {"deprecated": true}});
+    let file: IRFile = serde_json::from_value(document.clone()).unwrap();
+    let owner = DocumentId::new("library.json").unwrap();
+    let graph =
+        expand_v4_single_file_graph(&file, &owner, &ContextResources::new("."), |_| None).unwrap();
+    assert_eq!(graph.assertions().len(), 2);
+    let rows = graph
+        .assertions()
+        .iter()
+        .map(|assertion| {
+            let (carrier, source) = match assertion.key().carrier() {
+                Carrier::AttributesFacts(_) => ("attributesFacts", "type"),
+                Carrier::AnnotationsFacts(_) => ("annotationsFacts", "annotation"),
+                _ => unreachable!(),
+            };
+            json!({
+                "selector": {
+                    "carrier": carrier,
+                    "subject": assertion.key().fact().subject().to_string(),
+                    "predicate": predicate,
+                    "object": {"@value": true}
+                },
+                "sources": [{"kind": "author", "ref": source}]
+            })
+        })
+        .collect::<Vec<_>>();
+    document["$meta"]["assertionSources"] = json!(rows);
+    let file: IRFile = serde_json::from_value(document.clone()).unwrap();
+    let graph =
+        expand_v4_single_file_graph(&file, &owner, &ContextResources::new("."), |_| None).unwrap();
+    assert_eq!(graph.assertions().len(), 2);
+    assert!(graph.assertions().iter().all(|assertion| matches!(
+        assertion.sources().as_slice(),
+        [AssertionSource::Author { .. }]
+    )));
+
+    document["$meta"]["assertionSources"][0]["selector"]["object"] = json!({"@value": false});
+    let error = serde_json::from_value::<IRFile>(document)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unmatched") || error.contains("matching"),
+        "{error}"
+    );
 }

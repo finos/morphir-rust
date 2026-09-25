@@ -610,6 +610,16 @@ impl NodeIndex {
                 IndexedNodeKind::Module,
                 specification,
             )?;
+            self.v4_annotations(
+                &WalkContext::v4_root(
+                    NodeRoot::Module {
+                        owner: owner.clone(),
+                        module: module.clone(),
+                    },
+                    self.format,
+                ),
+                &specification.annotations,
+            )?;
             for (name, documented) in &specification.types {
                 let context = WalkContext::v4_root(
                     NodeRoot::Type {
@@ -688,6 +698,13 @@ impl NodeIndex {
         context: &WalkContext,
         specification: &v4::TypeSpecification,
     ) -> Result<(), NodeResolutionError> {
+        let annotations = match specification {
+            v4::TypeSpecification::TypeAliasSpecification { annotations, .. }
+            | v4::TypeSpecification::OpaqueTypeSpecification { annotations, .. }
+            | v4::TypeSpecification::CustomTypeSpecification { annotations, .. }
+            | v4::TypeSpecification::DerivedTypeSpecification { annotations, .. } => annotations,
+        };
+        self.v4_annotations(context, annotations)?;
         match specification {
             v4::TypeSpecification::TypeAliasSpecification { type_expr, .. } => {
                 self.v4_type(&context.named(NodeStep::TypeExpression), type_expr)?
@@ -799,6 +816,7 @@ impl NodeIndex {
         context: &WalkContext,
         specification: &v4::ValueSpecification,
     ) -> Result<(), NodeResolutionError> {
+        self.v4_annotations(context, &specification.annotations)?;
         for (name, ty) in &specification.inputs {
             self.v4_type(
                 &context.named(NodeStep::ValueInputType(parse_name(name)?)),
@@ -811,12 +829,41 @@ impl NodeIndex {
         )
     }
 
+    fn v4_annotations(
+        &mut self,
+        context: &WalkContext,
+        annotations: &v4::Annotations,
+    ) -> Result<(), NodeResolutionError> {
+        for (index, entry) in annotations.entries.iter().enumerate() {
+            let entry_context = context.ordered(NodeStep::AnnotationEntry(index), entry)?;
+            let args = match entry {
+                v4::Annotation::Structured { args, .. }
+                | v4::Annotation::LinkedStructured { args, .. }
+                | v4::Annotation::PendingStructured { args, .. } => args,
+                _ => continue,
+            };
+            for (index, arg) in args.iter().enumerate() {
+                let value = match arg {
+                    v4::AnnotationArgument::Positional(value)
+                    | v4::AnnotationArgument::Named { value, .. } => value,
+                };
+                let arg_context =
+                    entry_context.ordered(NodeStep::AnnotationArgument(index), value)?;
+                self.v4_value(&arg_context, value)?;
+            }
+        }
+        Ok(())
+    }
+
     fn v4_value(
         &mut self,
         context: &WalkContext,
         value: &v4::Value,
     ) -> Result<(), NodeResolutionError> {
         self.add(context, IndexedNodeKind::ValueExpression, value)?;
+        if let Some(inferred) = &value.attributes().inferred_type {
+            self.v4_type(&context.named(NodeStep::InferredType), inferred)?;
+        }
         match value {
             v4::Value::Apply(_, function, argument) => {
                 self.v4_value(&context.named(NodeStep::ApplyFunction), function)?;
@@ -922,6 +969,9 @@ impl NodeIndex {
         pattern: &v4::Pattern,
     ) -> Result<(), NodeResolutionError> {
         self.add(context, IndexedNodeKind::Pattern, pattern)?;
+        if let Some(inferred) = &pattern.attributes().inferred_type {
+            self.v4_type(&context.named(NodeStep::InferredType), inferred)?;
+        }
         match pattern {
             v4::Pattern::AsPattern(_, child, _) => {
                 self.v4_pattern(&context.named(NodeStep::AsPatternChild), child)?

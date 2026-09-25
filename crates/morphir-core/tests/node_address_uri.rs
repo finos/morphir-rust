@@ -69,6 +69,8 @@ fn every_child_role_has_one_parseable_spelling() {
         NodeStep::ExternalFallback,
         NodeStep::IncompletePartialBody,
         NodeStep::HoleExpectedType,
+        NodeStep::InferredType,
+        NodeStep::AnnotationEntry(2),
     ];
     for step in steps {
         let address = NodeUri::new(
@@ -89,6 +91,20 @@ fn every_child_role_has_one_parseable_spelling() {
         let uri = address.to_string();
         assert_eq!(NodeUri::parse(&uri).unwrap(), address, "{uri}");
     }
+}
+
+#[test]
+fn annotation_argument_address_round_trips_under_its_entry() {
+    let uri = "morphir://ir/pkg/acme/orders?format=4.1.0&rev=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#/module/api/value/submit-order/annotation/entry/2/argument/1";
+    let parsed = NodeUri::parse(uri).unwrap();
+    assert_eq!(parsed.to_string(), uri);
+    assert_eq!(
+        parsed.steps(),
+        &[
+            NodeStep::AnnotationEntry(2),
+            NodeStep::AnnotationArgument(1)
+        ]
+    );
 }
 
 #[test]

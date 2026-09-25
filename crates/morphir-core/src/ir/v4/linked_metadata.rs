@@ -366,10 +366,11 @@ impl DocumentMeta {
             if record.sources.is_empty() {
                 return Err("assertionSources entries require at least one source".to_owned());
             }
-            if record.selector.carrier != "documentGraph" {
-                return Err(
-                    "node-carrier assertion source selectors require owner resolution".to_owned(),
-                );
+            if !matches!(
+                record.selector.carrier.as_str(),
+                "documentGraph" | "attributesFacts" | "annotationsFacts"
+            ) {
+                return Err("unknown assertion source carrier".to_owned());
             }
             NodeUri::parse(&record.selector.subject).map_err(|error| error.to_string())?;
             NodeUri::parse(&record.selector.predicate).map_err(|error| error.to_string())?;

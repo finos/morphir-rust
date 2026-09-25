@@ -85,7 +85,8 @@ impl fmt::Display for ExtensionError {
 /// Reads tags into the context. An extension that owns a namespace (`syntax` for `@syntax:elm`)
 /// always receives a tag in that namespace; an unknown value is then an error, not a label. An
 /// extension can also claim unnamespaced tags through `matches`. A tag no extension claims stays
-/// a plain label.
+/// a plain label. When more than one extension matches a plain tag, the first one registered
+/// handles it.
 pub trait TagExtension: Send + Sync {
     /// The namespace this extension owns, if any.
     fn namespace(&self) -> Option<&str>;
@@ -96,7 +97,8 @@ pub trait TagExtension: Send + Sync {
     fn apply(&self, tag: &Tag, scope: Scope, ctx: &mut Context) -> Result<Effect, String>;
 }
 
-/// Reads a free fence (a fenced block that is not a step's doc string) into the context.
+/// Reads a free fence (a fenced block that is not a step's doc string) into the context. When
+/// more than one extension matches a fence, the first one registered handles it.
 pub trait FenceExtension: Send + Sync {
     fn matches(&self, fence: &Fence) -> bool;
     fn apply(&self, fence: &Fence, scope: Scope, ctx: &mut Context) -> Result<(), String>;
@@ -128,12 +130,16 @@ impl Extensions {
         Self::default()
     }
 
+    /// Registers a tag extension. When more than one extension matches a plain tag, the first
+    /// one registered handles it.
     #[must_use]
     pub fn with_tags(mut self, extension: impl TagExtension + 'static) -> Self {
         self.tags.push(Box::new(extension));
         self
     }
 
+    /// Registers a fence extension. When more than one extension matches a fence, the first one
+    /// registered handles it.
     #[must_use]
     pub fn with_fences(mut self, extension: impl FenceExtension + 'static) -> Self {
         self.fences.push(Box::new(extension));
@@ -158,11 +164,25 @@ impl Extensions {
     ///
     /// Only the description of the feature, the rule, the scenario and the examples is read. The
     /// document's preamble, a step's notes and an examples block's notes are not read here.
+    ///
+    /// `scenario` must name a scenario. A path that names a rule, a feature or anything else
+    /// fails with `"not a scenario"`.
     pub fn context_for(
         &self,
         doc: &Document,
         scenario: &NodePath,
     ) -> Result<(Context, Effect), Vec<ExtensionError>> {
+        match doc.node(scenario) {
+            Some(Node::Scenario(_)) => {}
+            other => {
+                let span = other.map(|node| node.span()).unwrap_or_default();
+                return Err(vec![ExtensionError {
+                    path: scenario.clone(),
+                    span,
+                    message: "not a scenario".to_owned(),
+                }]);
+            }
+        }
         let mut ctx = Context::default();
         let mut effect = Effect::Continue;
         let mut errors = Vec::new();

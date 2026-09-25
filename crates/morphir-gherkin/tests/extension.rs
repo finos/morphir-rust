@@ -125,3 +125,107 @@ fn an_unclaimed_tag_is_a_label() {
     .unwrap();
     assert!(extensions().context_for(&doc, &scenario(0)).is_ok());
 }
+
+#[derive(Debug, PartialEq)]
+struct First;
+struct FirstWip;
+impl TagExtension for FirstWip {
+    fn namespace(&self) -> Option<&str> {
+        None
+    }
+    fn matches(&self, tag: &Tag) -> bool {
+        tag.name == "wip"
+    }
+    fn apply(&self, _tag: &Tag, _scope: Scope, ctx: &mut Context) -> Result<Effect, String> {
+        ctx.insert(First);
+        Ok(Effect::Continue)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct Second;
+struct SecondWip;
+impl TagExtension for SecondWip {
+    fn namespace(&self) -> Option<&str> {
+        None
+    }
+    fn matches(&self, tag: &Tag) -> bool {
+        tag.name == "wip"
+    }
+    fn apply(&self, _tag: &Tag, _scope: Scope, ctx: &mut Context) -> Result<Effect, String> {
+        ctx.insert(Second);
+        Ok(Effect::Continue)
+    }
+}
+
+#[test]
+fn when_two_tag_extensions_both_match_the_first_registered_handles_it() {
+    let (doc, _) = read_str("f.feature", TEXT).unwrap();
+    let (ctx, _) = Extensions::new()
+        .with_tags(FirstWip)
+        .with_tags(SecondWip)
+        .context_for(&doc, &scenario(3))
+        .unwrap();
+    assert_eq!(ctx.get::<First>(), Some(&First));
+    assert_eq!(ctx.get::<Second>(), None);
+}
+
+#[derive(Debug, PartialEq)]
+struct FirstFence;
+struct FirstOptionsFence;
+impl FenceExtension for FirstOptionsFence {
+    fn matches(&self, fence: &Fence) -> bool {
+        fence.info.language == "yaml" && fence.info.words == ["morphir"]
+    }
+    fn apply(&self, _fence: &Fence, _scope: Scope, ctx: &mut Context) -> Result<(), String> {
+        ctx.insert(FirstFence);
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct SecondFence;
+struct SecondOptionsFence;
+impl FenceExtension for SecondOptionsFence {
+    fn matches(&self, fence: &Fence) -> bool {
+        fence.info.language == "yaml" && fence.info.words == ["morphir"]
+    }
+    fn apply(&self, _fence: &Fence, _scope: Scope, ctx: &mut Context) -> Result<(), String> {
+        ctx.insert(SecondFence);
+        Ok(())
+    }
+}
+
+#[test]
+fn when_two_fence_extensions_both_match_the_first_registered_handles_it() {
+    let (doc, _) = read_str("f.feature", TEXT).unwrap();
+    let (ctx, _) = Extensions::new()
+        .with_fences(FirstOptionsFence)
+        .with_fences(SecondOptionsFence)
+        .context_for(&doc, &scenario(0))
+        .unwrap();
+    assert_eq!(ctx.get::<FirstFence>(), Some(&FirstFence));
+    assert_eq!(ctx.get::<SecondFence>(), None);
+}
+
+const RULE_TEXT: &str = "Feature: F\n  Rule: R\n    Scenario: s\n      Given a step\n";
+
+#[test]
+fn a_rule_path_is_not_a_scenario() {
+    let (doc, _) = read_str("f.feature", RULE_TEXT).unwrap();
+    let rule = NodePath::feature().push(morphir_gherkin::Segment::Rule(0));
+    let errors = extensions().context_for(&doc, &rule).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].path, rule);
+    assert!(errors[0].to_string().contains("not a scenario"));
+}
+
+#[test]
+fn a_step_path_is_not_a_scenario() {
+    let (doc, _) = read_str("f.feature", TEXT).unwrap();
+    let step = scenario(0).push(morphir_gherkin::Segment::Step(0));
+    let errors = extensions().context_for(&doc, &step).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].path, step);
+    assert!(errors[0].to_string().contains("not a scenario"));
+}

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `morphir-core` linked metadata assertions can apply optional detailed source
+  records by expanded owner, carrier and fact, preserving sources across fact
+  rewrites and rejecting unsafe source-dependent edits (finos/morphir#883).
 - The new `morphir-gherkin` crate reads `.feature` and `.feature.md` files
   (Markdown with Gherkin) into one Gherkin document model, with source spans,
   node paths, and visitor and cursor navigation. Prose is parsed as Markdown.

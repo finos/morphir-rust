@@ -3,6 +3,7 @@
 //! This module models the default graph after context expansion. It does not
 //! interpret authored keys, resolve declarations, or load documents.
 
+pub mod admission;
 mod assertion;
 mod context;
 mod graph;

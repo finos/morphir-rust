@@ -297,3 +297,117 @@ fn an_examples_path_that_does_not_exist_is_not_a_scenario() {
     assert_eq!(errors.len(), 1);
     assert!(errors[0].to_string().contains("not a scenario"));
 }
+
+/// A processor that counts how many times it runs, and records a [`Seeded`] component it finds in
+/// the context as a [`SawSeed`].
+struct CountCalls(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[derive(Debug, PartialEq)]
+struct Seeded(u32);
+
+#[derive(Debug, PartialEq)]
+struct SawSeed(u32);
+
+impl Processor for CountCalls {
+    fn process(
+        &self,
+        _doc: &morphir_gherkin::Document,
+        _at: &NodePath,
+        ctx: &mut Context,
+    ) -> Result<(), String> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(Seeded(n)) = ctx.get::<Seeded>() {
+            let n = *n;
+            ctx.insert(SawSeed(n));
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn effect_for_runs_no_processor() {
+    let (doc, _) = read_str("f.feature", TEXT).unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let extensions = extensions().with_processor(CountCalls(calls.clone()));
+    for i in 0..4 {
+        let _ = extensions.effect_for(&doc, &scenario(i));
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    extensions.context_for(&doc, &scenario(0)).unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn effect_for_gives_the_same_effect_as_context_for() {
+    let (doc, _) = read_str("f.feature", TEXT).unwrap();
+    let extensions = extensions();
+    // scenario(0) is plain; scenario(3) is `@wip`.
+    for i in [0, 3] {
+        let (_, effect) = extensions.context_for(&doc, &scenario(i)).unwrap();
+        assert_eq!(extensions.effect_for(&doc, &scenario(i)).unwrap(), effect);
+    }
+    assert_eq!(
+        extensions.effect_for(&doc, &scenario(3)).unwrap(),
+        Effect::Skip("work in progress".to_owned())
+    );
+    assert_eq!(
+        extensions.effect_for(&doc, &scenario(0)).unwrap(),
+        Effect::Continue
+    );
+}
+
+#[test]
+fn effect_for_gives_the_scope_errors_context_for_gives() {
+    let (doc, _) = read_str("f.feature", TEXT).unwrap();
+    let errors = extensions().effect_for(&doc, &scenario(2)).unwrap_err();
+    assert_eq!(
+        errors,
+        extensions().context_for(&doc, &scenario(2)).unwrap_err()
+    );
+}
+
+/// A tag extension that records whether a [`Seeded`] component was already in the context when
+/// it ran.
+struct SeenBySyntax;
+#[derive(Debug, PartialEq)]
+struct TagSawSeed(bool);
+impl TagExtension for SeenBySyntax {
+    fn namespace(&self) -> Option<&str> {
+        Some("syntax")
+    }
+    fn apply(&self, _tag: &Tag, _scope: Scope, ctx: &mut Context) -> Result<Effect, String> {
+        let saw = ctx.get::<Seeded>().is_some();
+        ctx.insert(TagSawSeed(saw));
+        Ok(Effect::Continue)
+    }
+}
+
+#[test]
+fn context_for_seeded_lets_extensions_and_processors_see_the_seed() {
+    let (doc, _) = read_str("f.feature", TEXT).unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let extensions = Extensions::new()
+        .with_tags(SeenBySyntax)
+        .with_processor(CountCalls(calls.clone()));
+    let mut seed = Context::default();
+    seed.insert(Seeded(9));
+    let (ctx, effect) = extensions
+        .context_for_seeded(&doc, &scenario(0), seed)
+        .unwrap();
+    assert_eq!(effect, Effect::Continue);
+    assert_eq!(ctx.get::<Seeded>(), Some(&Seeded(9)));
+    assert_eq!(ctx.get::<TagSawSeed>(), Some(&TagSawSeed(true)));
+    assert_eq!(ctx.get::<SawSeed>(), Some(&SawSeed(9)));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn an_extension_replaces_a_seeded_component_of_the_same_type() {
+    let (doc, _) = read_str("f.feature", TEXT).unwrap();
+    let mut seed = Context::default();
+    seed.insert(Syntax("seeded".to_owned()));
+    let (ctx, _) = extensions()
+        .context_for_seeded(&doc, &scenario(0), seed)
+        .unwrap();
+    assert_eq!(ctx.get::<Syntax>(), Some(&Syntax("elm".to_owned())));
+}

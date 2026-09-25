@@ -3,10 +3,10 @@
 //! persisted types, duplicate installed IDs, and a real session opened
 //! through `Registry::resolve_frontend` -> `Resolved::connect`.
 //!
-//! The plain-record fixtures below are ported from the daemon's
-//! `provider_registry` tests (`crates/morphir-daemon/tests/provider_registry.rs`)
-//! without a dependency on `morphir-daemon`. The live-guest tests reuse
-//! `tests/support/activation.rs`, shared with `tests/activation.rs`.
+//! The plain-record fixtures below are ported from the `provider_registry`
+//! tests that `morphir-daemon` had before its registry was removed. The
+//! live-guest tests reuse `tests/support/activation.rs`, shared with
+//! `tests/activation.rs`.
 
 #[allow(dead_code)]
 #[path = "support/activation.rs"]

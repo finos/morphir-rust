@@ -23,7 +23,7 @@ morphir
 
 ## Provider registry
 
-The CLI constructs a fresh transport-neutral provider registry, represented by `ExtensionRegistry`, for each operation that needs a provider. It registers the native Gleam extension as a built-in and then adds validated installed-state snapshots. Built-in registration belongs to the CLI because the executable decides which implementations it links. The daemon has no Gleam dependency.
+The CLI constructs a fresh transport-neutral provider registry, represented by `morphir_host::Registry`, for each operation that needs a provider. It registers the native Gleam extension as a built-in and then adds validated installed-state snapshots. Built-in registration belongs to the CLI because the executable decides which implementations it links. `morphir-host` has no Gleam dependency.
 
 The registry records two independent properties:
 
@@ -77,7 +77,7 @@ Extensions return artifact descriptions. They do not choose arbitrary host files
 
 ## MEP execution
 
-`NativeMep`, `ProcessMep`, and `WasmMep` share the daemon's validated session lifecycle. The host initializes the session, checks provider identity and capabilities, invokes the operation, and shuts the session down. A failed transport preserves whether the peer stopped or entered an indeterminate state.
+`NativeMep`, `ProcessMep`, and `WasmMep` share the validated session lifecycle of `morphir_host::Session`. The host initializes the session, checks provider identity and capabilities, invokes the operation, and shuts the session down. A failed transport preserves whether the peer stopped or entered an indeterminate state.
 
 Installed providers reach that session only after the distribution layer verifies the selected artifact against its catalog and lock state. The registry never treats an unverified file beside the CLI executable as a built-in.
 

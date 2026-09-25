@@ -94,8 +94,8 @@ It fails if the artifact is missing or ambiguous. To inspect any built guest dir
 cargo run --locked -p morphir-host-native --bin extension-claims -- path/to/guest.wasm
 ```
 
-The tool uses the daemon's shared Extism container and sends
-`morphir.extension.describe` before initialization. Stdout contains only the
+The tool uses the shared Extism container in `morphir_host_native::extism`
+and sends `morphir.extension.describe` before initialization. Stdout contains only the
 returned claim set as JSON, including `claimsVersion`, `protocolVersions`,
 `extension`, `capabilities`, and any `requires` or `critical` members. Validation
 uses the SDK claim-set reader; output preserves the guest's JSON members rather

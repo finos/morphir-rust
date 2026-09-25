@@ -149,9 +149,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Stopped`, `NegotiatedSession`, `FailedSession`, `InvokeOutcome`,
   `Indeterminate`), `MepTransport`, `TransportError` and `TransportState`,
   the session actor (`SessionHandle`, `spawn_session`,
-  `spawn_session_with_idle_timeout`), `ExtensionSession`,
-  `SpawnedProcessSession`, `SpawnedProcessTransport`, `ExtismSession`,
-  `ExtismTransport`, `NativeMepSession`, `NativeMepTransport`,
+  `spawn_session_with_idle_timeout`), `ExtensionSession` and
+  `ExtensionSessionState`, `SpawnedProcessSession`,
+  `SpawnedProcessTransport`, `ExtismSession`, `ExtismTransport`,
+  `NativeMepSession`, `NativeMepTransport`,
   `activate_transport` and `BoxedMepTransport`, `ExtensionResponseExt`,
   `ConnectedDaemonSession`, `ConnectedDaemonTransport` and
   `DaemonConnection`, `ProcessDescription`, and the `ExtensionContainer`,
@@ -166,6 +167,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `morphir_host_native::http::HttpChannel` (feature `http`).
   `morphir-daemon` keeps `DaemonError` (with `From<HostError>`),
   `ExtensionLoader`, `VirtualPathConfig`, `FileSandbox` and `workspace`.
+- `ProcessChild::exchange` in `morphir-host-native`, a hidden helper that
+  only the daemon's compatibility session called. Use `ProcessChild::write`
+  and `ProcessChild::read_within`, or a `ProcessChannel`.
 
 ### Fixed
 - Installed extensions retain frontend `multiDocument` and `fragments` from

@@ -48,7 +48,8 @@ cargo test --locked -p morphir-host-native --test python_extension -- --ignored 
 
 The example returns JSON containing IR and generated Python. The WASM test
 performs capability negotiation, compilation, generation and recompilation
-through the daemon's actual extension container. CI runs it with a release guest.
+through the Extism container in `morphir_host_native::extism`. CI runs it
+with a release guest.
 
 ## Install a release bundle
 

@@ -263,3 +263,19 @@ fn node_object_form_cannot_override_a_boolean_output_signature() {
         PredicateClosure::from_v4_provider(&provider, &ContextResources::new("contexts")).is_err()
     );
 }
+
+#[test]
+fn native_schema_declaration_rejects_typed_json_string() {
+    let mut authored = provider_document();
+    authored["$meta"]["@context"]["object-form"] = json!({
+        "@id": format!("{SCHEMA_VOCAB}object-form"),
+        "@type": "@json"
+    });
+    let provider = read_provider(&authored);
+    assert!(matches!(
+        PredicateClosure::from_v4_provider(&provider, &ContextResources::new("contexts")),
+        Err(ProviderDeclarationError::Invalid(
+            "schema object must be an untyped string literal"
+        ))
+    ));
+}

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `morphir-core` can derive predicate declarations from native V4.1 provider
+  facts, requiring public values with matching output types and rejecting
+  malformed declaration objects (finos/morphir#999).
 - Opted-in Ion draft.2 reads and writes 4.1.0 linked metadata in datagrams and
   document trees, and reads the equivalent `$meta` member in a single record.
   Document context defaults, protected bindings, Type/Value attributes and

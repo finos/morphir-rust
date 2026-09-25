@@ -122,14 +122,19 @@ fn declaration(
             .ok_or(ProviderDeclarationError::Invalid("schema predicate"))?;
         let ObjectTerm::Value(value) = fact.object() else {
             return Err(ProviderDeclarationError::Invalid(
-                "schema object must be a literal",
+                "schema object must be an untyped string literal",
             ));
         };
+        if value.datatype().is_some() {
+            return Err(ProviderDeclarationError::Invalid(
+                "schema object must be an untyped string literal",
+            ));
+        }
         let value = value
             .value()
             .as_str()
             .ok_or(ProviderDeclarationError::Invalid(
-                "schema object must be a string",
+                "schema object must be an untyped string literal",
             ))?;
         match term {
             "subject-role" => roles.push(subject_role(value)?),

@@ -4,19 +4,31 @@ use crate::model::*;
 use crate::path::{NodePath, Segment};
 use crate::span::Span;
 
+/// A node of a document, as seen by a `Visitor` or `Cursor`: a borrow of the model value the
+/// node's path names.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Node<'d> {
+    /// A feature.
     Feature(&'d Feature),
+    /// A background.
     Background(&'d Background),
+    /// A rule.
     Rule(&'d Rule),
+    /// A scenario.
     Scenario(&'d Scenario),
+    /// An examples block.
     Examples(&'d Examples),
+    /// A step.
     Step(&'d Step),
+    /// A free fence of a description or of notes.
     Fence(&'d Fence),
+    /// A prose block of a description or of notes.
     Prose(&'d ProseBlock),
 }
 
 impl Node<'_> {
+    /// The node's own span. For a step, this covers only its line, not its argument or notes;
+    /// see `crate::cursor` for the node that owns an offset inside those.
     pub fn span(&self) -> Span {
         match self {
             Node::Feature(n) => n.span,
@@ -31,16 +43,47 @@ impl Node<'_> {
     }
 }
 
+/// What `walk` does after a `Visitor::enter` call: descend into the node's children, or move on
+/// without them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Walk {
+    /// Visit the node's children next.
     Children,
+    /// Move on to the node's next sibling, without visiting its children.
     Skip,
 }
 
+/// Visits a document's nodes in source order. `walk` calls `enter` before a node's children and
+/// `exit` after them; both have a default that does nothing, so a visitor implements only the
+/// one it needs.
+///
+/// ```
+/// use morphir_gherkin::read_str;
+/// use morphir_gherkin::visit::{Node, Visitor, Walk, walk};
+///
+/// struct CountSteps(usize);
+/// impl<'d> Visitor<'d> for CountSteps {
+///     fn enter(&mut self, _path: &morphir_gherkin::NodePath, node: Node<'d>) -> Walk {
+///         if matches!(node, Node::Step(_)) {
+///             self.0 += 1;
+///         }
+///         Walk::Children
+///     }
+/// }
+///
+/// let (doc, _) = read_str("f.feature", "Feature: F\n  Scenario: S\n    Given a\n    Then b\n")
+///     .unwrap();
+/// let mut counter = CountSteps(0);
+/// walk(&doc, &mut counter);
+/// assert_eq!(counter.0, 2);
+/// ```
 pub trait Visitor<'d> {
+    /// Called when `walk` reaches a node, before its children (if any are visited). The default
+    /// always descends into the node's children.
     fn enter(&mut self, _path: &NodePath, _node: Node<'d>) -> Walk {
         Walk::Children
     }
+    /// Called when `walk` leaves a node, after its children (if `enter` chose to visit them).
     fn exit(&mut self, _path: &NodePath, _node: Node<'d>) {}
 }
 

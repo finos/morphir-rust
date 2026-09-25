@@ -3,14 +3,18 @@
 /// A byte range into the original file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Span {
+    /// The byte offset of the span's start, inclusive.
     pub start: usize,
+    /// The byte offset of the span's end, exclusive.
     pub end: usize,
 }
 
 /// A 1-based line and column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LineCol {
+    /// The 1-based line number.
     pub line: usize,
+    /// The 1-based column, counting characters rather than bytes.
     pub col: usize,
 }
 
@@ -22,6 +26,15 @@ pub struct SourceText {
 }
 
 impl SourceText {
+    /// Wraps `text` and indexes the start offset of each of its lines.
+    ///
+    /// ```
+    /// use morphir_gherkin::SourceText;
+    ///
+    /// let source = SourceText::new("a\nb\n");
+    /// assert_eq!(source.line_start(2), 2);
+    /// assert_eq!(source.line_col(2).line, 2);
+    /// ```
     pub fn new(text: &str) -> Self {
         let mut line_starts = vec![0];
         line_starts.extend(text.match_indices('\n').map(|(at, _)| at + 1));
@@ -31,6 +44,7 @@ impl SourceText {
         }
     }
 
+    /// The wrapped text.
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -58,6 +72,7 @@ impl SourceText {
         self.line_starts.len()
     }
 
+    /// The text of `span`.
     pub fn slice(&self, span: Span) -> &str {
         &self.text[span.start..span.end]
     }

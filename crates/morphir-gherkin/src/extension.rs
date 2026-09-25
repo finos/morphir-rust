@@ -15,6 +15,7 @@ use crate::path::{NodePath, Segment};
 use crate::span::Span;
 use crate::visit::Node;
 
+/// A value an extension can store in a `Context`: any owned, thread-safe, debuggable type.
 pub trait Component: Any + Send + Sync + fmt::Debug {}
 impl<T: Any + Send + Sync + fmt::Debug> Component for T {}
 
@@ -26,22 +27,26 @@ pub struct Context {
 }
 
 impl Context {
+    /// Stores `value`, replacing any value of the same type already stored.
     pub fn insert<T: Component>(&mut self, value: T) {
         self.components.insert(TypeId::of::<T>(), Box::new(value));
     }
 
+    /// The stored value of type `T`, if one has been inserted.
     pub fn get<T: Component>(&self) -> Option<&T> {
         self.components
             .get(&TypeId::of::<T>())
             .and_then(|value| value.downcast_ref())
     }
 
+    /// A mutable reference to the stored value of type `T`, if one has been inserted.
     pub fn get_mut<T: Component>(&mut self) -> Option<&mut T> {
         self.components
             .get_mut(&TypeId::of::<T>())
             .and_then(|value| value.downcast_mut())
     }
 
+    /// Removes and returns the stored value of type `T`, if one has been inserted.
     pub fn remove<T: Component>(&mut self) -> Option<T> {
         self.components
             .remove(&TypeId::of::<T>())
@@ -53,16 +58,22 @@ impl Context {
 /// The scope an extension is applying at: which kind of node owns the tag, fence or prose block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
+    /// A feature's own tag, fence or prose block.
     Feature,
+    /// A rule's own tag, fence or prose block.
     Rule,
+    /// A scenario's own tag, fence or prose block.
     Scenario,
+    /// An examples block's own tag, fence or prose block.
     Examples,
 }
 
 /// The outcome of building a context: run the scenario, or skip it with a reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
+    /// Run the scenario.
     Continue,
+    /// Skip the scenario, with a human-readable reason.
     Skip(String),
 }
 
@@ -71,8 +82,11 @@ pub enum Effect {
 /// from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionError {
+    /// The path of the node whose tag, fence or prose block caused the error.
     pub path: NodePath,
+    /// The span of the tag, fence or prose block that caused the error.
     pub span: Span,
+    /// A human-readable description of what went wrong.
     pub message: String,
 }
 
@@ -94,24 +108,32 @@ pub trait TagExtension: Send + Sync {
     fn matches(&self, _tag: &Tag) -> bool {
         false
     }
+    /// Reads `tag` into `ctx`. Returns `Effect::Skip` to skip the scenario, or an error message
+    /// naming what was wrong with the tag.
     fn apply(&self, tag: &Tag, scope: Scope, ctx: &mut Context) -> Result<Effect, String>;
 }
 
 /// Reads a free fence (a fenced block that is not a step's doc string) into the context. When
 /// more than one extension matches a fence, the first one registered handles it.
 pub trait FenceExtension: Send + Sync {
+    /// Whether this extension reads `fence`.
     fn matches(&self, fence: &Fence) -> bool;
+    /// Reads `fence` into `ctx`. Returns an error message naming what was wrong with it.
     fn apply(&self, fence: &Fence, scope: Scope, ctx: &mut Context) -> Result<(), String>;
 }
 
 /// Reads a prose block into the context. Every prose block goes to every prose extension; an
 /// extension decides for itself whether a block matters.
 pub trait ProseExtension: Send + Sync {
+    /// Reads `prose` into `ctx`, if it matters to this extension. Returns an error message
+    /// naming what was wrong with it.
     fn apply(&self, prose: &ProseBlock, scope: Scope, ctx: &mut Context) -> Result<(), String>;
 }
 
 /// Runs after every scope has been applied, to derive further context from the whole document.
 pub trait Processor: Send + Sync {
+    /// Derives further context for the scenario at `at`. Returns an error message naming what
+    /// went wrong.
     fn process(&self, doc: &Document, at: &NodePath, ctx: &mut Context) -> Result<(), String>;
 }
 
@@ -126,6 +148,7 @@ pub struct Extensions {
 }
 
 impl Extensions {
+    /// An empty set of extensions.
     pub fn new() -> Self {
         Self::default()
     }
@@ -146,12 +169,16 @@ impl Extensions {
         self
     }
 
+    /// Registers a prose extension. Every prose block is offered to every registered prose
+    /// extension.
     #[must_use]
     pub fn with_prose(mut self, extension: impl ProseExtension + 'static) -> Self {
         self.prose.push(Box::new(extension));
         self
     }
 
+    /// Registers a processor, to run once a scenario's context is built from its tags, fences
+    /// and prose.
     #[must_use]
     pub fn with_processor(mut self, processor: impl Processor + 'static) -> Self {
         self.processors.push(Box::new(processor));

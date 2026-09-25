@@ -5,27 +5,40 @@
 use std::fmt;
 use std::str::FromStr;
 
+/// One segment of a `NodePath`: the kind of node it names, plus the index among its siblings of
+/// the same kind for the segments that need one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Segment {
+    /// The document's feature.
     Feature,
     /// The root of the document's preamble: the Markdown before the `Feature` heading of a
     /// `.feature.md` file.
     Preamble,
+    /// A feature's or a rule's background.
     Background,
+    /// A rule under the feature, by index among the feature's rules.
     Rule(usize),
+    /// A scenario under a feature or a rule, by index among its scenarios.
     Scenario(usize),
+    /// An examples block under a scenario, by index among its examples blocks.
     Examples(usize),
+    /// A step under a scenario or a background, by index among its steps.
     Step(usize),
+    /// A fence of a description or notes, by index among that description's fences.
     Fence(usize),
+    /// A prose block of a description or notes, by index among that description's prose blocks.
     Prose(usize),
 }
 
+/// A path to a node of a document, as a sequence of `Segment`s from a root (`feature` or
+/// `preamble`) down to the node.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NodePath {
     segments: Vec<Segment>,
 }
 
 impl NodePath {
+    /// The path to the document's feature.
     pub fn feature() -> Self {
         Self {
             segments: vec![Segment::Feature],
@@ -39,6 +52,7 @@ impl NodePath {
         }
     }
 
+    /// A new path with `segment` appended, naming a child of the node this path names.
     #[must_use]
     pub fn push(&self, segment: Segment) -> Self {
         let mut segments = self.segments.clone();
@@ -53,16 +67,19 @@ impl NodePath {
         }
     }
 
+    /// The path to this path's parent node, or `None` for a root path (`feature` or `preamble`).
     pub fn parent(&self) -> Option<Self> {
         (self.segments.len() > 1).then(|| Self {
             segments: self.segments[..self.segments.len() - 1].to_vec(),
         })
     }
 
+    /// The path's segments, from its root to the node it names.
     pub fn segments(&self) -> &[Segment] {
         &self.segments
     }
 
+    /// The path's last segment: the segment that names the node itself.
     pub fn last(&self) -> Segment {
         *self
             .segments
@@ -94,9 +111,13 @@ impl fmt::Display for NodePath {
     }
 }
 
+/// A string that does not parse as a `NodePath`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("not a node path: {0}")]
-pub struct NodePathError(pub String);
+pub struct NodePathError(
+    /// The string that failed to parse.
+    pub String,
+);
 
 impl FromStr for NodePath {
     type Err = NodePathError;

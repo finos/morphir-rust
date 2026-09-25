@@ -240,6 +240,7 @@ async fn protocol_only_resolution_opens_a_native_mep_session_through_shutdown() 
         .resolve_frontend("exact-lang", "4", InvocationPolicy::ProtocolOnly)
         .unwrap();
     assert_eq!(resolved.invocation_mode(), InvocationMode::NativeMep);
+    assert!(resolved.native().is_none());
 
     let connection = resolved
         .connect(Path::new("."))

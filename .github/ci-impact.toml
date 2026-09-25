@@ -95,9 +95,7 @@ crates = [
 paths = [".mise/tasks/build/workspace-wasm"]
 
 [jobs.test-native-extension]
-# The tests live in morphir-host-native; the fixture guest is still an
-# example of morphir-daemon.
-crates = ["morphir-host", "morphir-host-native", "morphir-daemon"]
+crates = ["morphir-host", "morphir-host-native"]
 paths = [".mise/tasks/test/process"]
 
 [jobs.test-http-extension]

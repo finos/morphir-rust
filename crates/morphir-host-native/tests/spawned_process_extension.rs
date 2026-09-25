@@ -2,7 +2,7 @@
 //!
 //! Build the fixture and provide its path before running this ignored test:
 //!
-//! `cargo build -p morphir-daemon --example mep-native-backend`
+//! `cargo build -p morphir-host-native --example mep-native-backend`
 //! `MEP_NATIVE_FIXTURE=target/debug/examples/mep-native-backend cargo test -p morphir-host-native --test spawned_process_extension -- --ignored`
 
 mod support;

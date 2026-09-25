@@ -599,3 +599,121 @@ fn a_quiet_console_prints_nothing_the_basic_writer_would() {
         "Console::Off must print nothing cucumber's Basic writer would, got:\n{stdout}"
     );
 }
+
+/// A2 fix round 1: an undefined step gives `event::ScenarioFinished::StepSkipped`, not
+/// `StepFailed` — cucumber's own vocabulary for "no step definition matched" is the same
+/// `StepSkipped` event a deliberately skipped step gets, only reclassified as a failure by
+/// `fail_on_skipped()` inside the writer chain. `scenario_outcome` must reclassify it the same
+/// way, or a caller reading `ScenarioOutcome::failure` (such as `morphir itest`'s PASS/FAIL line)
+/// would see a pass where `SuiteResult::failed` already counts one.
+#[tokio::test]
+async fn an_undefined_step_reports_one_outcome_with_a_failure() {
+    let seen = Arc::new(Mutex::new(Vec::<ScenarioOutcome>::new()));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "u.feature",
+        "Feature: U\n  Scenario: undefined\n    Given a step that no library defines\n",
+    );
+    let sink = seen.clone();
+    let result = driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .on_scenario_finished(move |o| sink.lock().unwrap().push(o.clone()))
+        })
+        .await;
+    assert!(!result.succeeded(), "{result:?}");
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(seen[0].failure.is_some(), "{:?}", seen[0]);
+}
+
+/// A2 fix round 1: a before-hook failure (here, an extension's `apply` returning `Err`) reaches
+/// the callback as a `ScenarioOutcome` whose `failure` carries the extension's own message, not
+/// just a generic "hook failed" text.
+#[tokio::test]
+async fn a_before_hook_failure_is_reported_with_the_extensions_message() {
+    let seen = Arc::new(Mutex::new(Vec::<ScenarioOutcome>::new()));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "e.feature",
+        "Feature: E\n  @refuse:x\n  Scenario: refused\n    Given the step library is linked\n",
+    );
+    driver.given_extensions(Extensions::new().with_tags(Refuse));
+    let sink = seen.clone();
+    driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .on_scenario_finished(move |o| sink.lock().unwrap().push(o.clone()))
+        })
+        .await;
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(
+        seen[0]
+            .failure
+            .as_deref()
+            .unwrap()
+            .contains("refused on purpose"),
+        "{:?}",
+        seen[0].failure
+    );
+}
+
+/// A2 fix round 1: a `@wip` scenario next to a normal one is skipped before it starts (the
+/// default extensions' `WipTag`), so cucumber never runs it and the `after` hook never fires for
+/// it: only the normal scenario is reported.
+#[tokio::test]
+async fn a_wip_scenario_next_to_a_normal_one_is_not_reported() {
+    let seen = Arc::new(Mutex::new(Vec::<ScenarioOutcome>::new()));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "w.feature",
+        "Feature: W\n  @wip\n  Scenario: not ready\n    Given the step library is linked\n\n  Scenario: ready\n    Given the step library is linked\n",
+    );
+    let sink = seen.clone();
+    driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .on_scenario_finished(move |o| sink.lock().unwrap().push(o.clone()))
+        })
+        .await;
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].name, "ready");
+}
+
+/// A2 fix round 1: an outline's two `Examples` rows each get their own `ScenarioOutcome`, with
+/// the row's own expanded name (`<x>` substituted, not the template) and the row's `Examples`
+/// tags, already merged into `scenario.tags` by cucumber before the `after` hook sees it.
+#[tokio::test]
+async fn an_outline_reports_each_row_with_its_expanded_name_and_examples_tags() {
+    let seen = Arc::new(Mutex::new(Vec::<ScenarioOutcome>::new()));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "o.feature",
+        "Feature: O\n  Scenario Outline: row <x>\n    Given the step library is linked\n\n    @ex:a\n    Examples: only\n      | x |\n      | 1 |\n      | 2 |\n",
+    );
+    let sink = seen.clone();
+    driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .on_scenario_finished(move |o| sink.lock().unwrap().push(o.clone()))
+        })
+        .await;
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    let mut names: Vec<&str> = seen.iter().map(|o| o.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["row 1", "row 2"]);
+    for outcome in seen.iter() {
+        assert!(
+            outcome.tags.contains(&"ex:a".to_owned()),
+            "{:?}",
+            outcome.tags
+        );
+    }
+}

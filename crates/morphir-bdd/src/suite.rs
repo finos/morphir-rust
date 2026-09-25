@@ -49,8 +49,9 @@ pub struct ScenarioOutcome {
     /// How many steps the scenario ran: its background steps (the feature's, plus the rule's if
     /// the scenario is under one) plus its own steps.
     pub steps: usize,
-    /// Why the scenario did not pass: the failing step's error message, or a hook error message.
-    /// `None` if the scenario passed.
+    /// Why the scenario did not pass: the failing step's error message, a hook error message, or
+    /// a message naming an undefined or otherwise skipped step. `None` only if the scenario
+    /// passed: the suite runs with `fail_on_skipped()`, so a skipped step is always a failure too.
     pub failure: Option<String>,
 }
 
@@ -79,7 +80,17 @@ fn scenario_outcome(
         event::ScenarioFinished::BeforeHookFailed(info) => {
             Some(format!("before hook failed: {}", panic_payload_text(info)))
         }
-        event::ScenarioFinished::StepPassed | event::ScenarioFinished::StepSkipped => None,
+        // cucumber's own `StepSkipped` covers both a step deliberately skipped and a step that
+        // matched no step definition (undefined). Nothing in this event or in `ExecutionFailure`
+        // (its source in cucumber 0.23) says which `gherkin::Step` it was: `ExecutionFailure::StepSkipped`
+        // carries only `Option<World>`, no step reference, so there is no step text to add here.
+        // The suite always runs with `fail_on_skipped()` (see `Suite::run`), which reclassifies a
+        // skipped step as a failed one in the writer chain (`SuiteResult::failed`), so this must
+        // count as a failure too, not a pass.
+        event::ScenarioFinished::StepSkipped => {
+            Some("a step was skipped or matched no step definition".to_owned())
+        }
+        event::ScenarioFinished::StepPassed => None,
     };
 
     ScenarioOutcome {

@@ -1,14 +1,98 @@
 //! Runs the BDD suites for `morphir-bdd` itself. It proves the spike question: a step library
 //! defined in this crate links into this integration test binary.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use cucumber::writer::Stats as _;
 use cucumber::{World as _, then};
+use morphir_bdd::parser::MorphirParser;
 use morphir_bdd::steps::probe::Linked;
 use morphir_bdd::world::MorphirWorld;
+use morphir_gherkin::Tag;
+use morphir_gherkin::extension::{Context, Effect, Extensions, Scope, TagExtension};
 
 #[then("the linked flag is set")]
 fn linked_flag(world: &mut MorphirWorld) {
     assert_eq!(world.context.get::<Linked>(), Some(&Linked(true)));
+}
+
+#[derive(Debug, PartialEq)]
+struct Probe(String);
+
+struct ProbeTags;
+impl TagExtension for ProbeTags {
+    fn namespace(&self) -> Option<&str> {
+        Some("probe")
+    }
+    fn apply(&self, tag: &Tag, _scope: Scope, ctx: &mut Context) -> Result<Effect, String> {
+        ctx.insert(Probe(
+            tag.namespaced()
+                .map(|(_, v)| v.to_owned())
+                .unwrap_or_default(),
+        ));
+        Ok(Effect::Continue)
+    }
+}
+
+#[then(expr = "the probe value is {string}")]
+fn probe_value(world: &mut MorphirWorld, expected: String) {
+    assert_eq!(world.context.get::<Probe>(), Some(&Probe(expected)));
+}
+
+/// Runs `tests/features/context`: extensions fill the context from feature and scenario tags, a
+/// failing step still reports the source line its list item is on, and a `@wip` scenario is
+/// filtered out before it starts.
+async fn context_run() {
+    let extensions = Arc::new(
+        Extensions::new()
+            .with_tags(ProbeTags)
+            .with_tags(morphir_bdd::tags::WipTag),
+    );
+    // The failing step's list item is at line 17 of context.feature.md. An `after` hook is the
+    // simplest way to check it in cucumber 0.23: it hands back the same `gherkin::Scenario` the
+    // runner executed, so its last step's `position.line` is read directly, with no writer output
+    // to parse.
+    let failing_step_line = Arc::new(AtomicUsize::new(0));
+    let writer = MorphirWorld::cucumber::<&str>()
+        .with_parser(MorphirParser::new(extensions.clone()))
+        .before({
+            let extensions = extensions.clone();
+            move |feature, _rule, scenario, world| {
+                let extensions = extensions.clone();
+                Box::pin(async move {
+                    morphir_bdd::parser::prepare(world, feature, scenario, &extensions)
+                        .expect("extensions apply");
+                })
+            }
+        })
+        .after({
+            let failing_step_line = failing_step_line.clone();
+            move |_feature, _rule, scenario, _event, _world| {
+                if scenario.name == "A failing step reports the markdown line"
+                    && let Some(step) = scenario.steps.last()
+                {
+                    failing_step_line.store(step.position.line, Ordering::SeqCst);
+                }
+                Box::pin(async {})
+            }
+        })
+        .filter_run(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/features/context"),
+            {
+                let extensions = extensions.clone();
+                move |feature, rule, scenario| {
+                    morphir_bdd::parser::skip_reason(feature, rule, scenario, &extensions).is_none()
+                }
+            },
+        )
+        .await;
+    assert_eq!(writer.failed_steps(), 1, "only the 'never' step fails");
+    assert_eq!(
+        failing_step_line.load(Ordering::SeqCst),
+        17,
+        "the failing step's report names context.feature.md at line 17"
+    );
 }
 
 #[tokio::main]
@@ -31,4 +115,6 @@ async fn main() {
         writer.execution_has_failed(),
         "a missing step must fail its scenario"
     );
+
+    context_run().await;
 }

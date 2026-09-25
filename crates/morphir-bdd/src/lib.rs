@@ -4,7 +4,9 @@
 //! first step. Step libraries in any crate write steps against it. A runner runs every suite the
 //! same way.
 
+pub mod parser;
 pub mod steps;
+pub mod tags;
 pub mod world;
 
 /// Keeps the base step libraries in a test binary.

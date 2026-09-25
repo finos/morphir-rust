@@ -227,13 +227,18 @@ impl Resolved {
         self.invocation_mode
     }
 
-    /// Return the built-in extension behind a native source.
+    /// Return the built-in extension whose typed handles the caller invokes
+    /// directly.
     ///
-    /// This is `Some` for [`InvocationMode::NativeDirect`] and
-    /// [`InvocationMode::NativeMep`]. The caller uses its typed handles only
-    /// under `NativeDirect`, and [`Self::connect`] otherwise.
+    /// This is `Some` only under [`InvocationMode::NativeDirect`]. Under every
+    /// other mode, [`InvocationMode::NativeMep`] included, it is `None`, so a
+    /// caller that asked for [`InvocationPolicy::ProtocolOnly`] goes through
+    /// [`Self::connect`] and gets MEP negotiation and result checks.
     pub fn native(&self) -> Option<&NativeExtension> {
-        self.source.native()
+        match self.invocation_mode {
+            InvocationMode::NativeDirect => self.source.native(),
+            _ => None,
+        }
     }
 
     /// Whether this provider declares workspace discovery, and so can

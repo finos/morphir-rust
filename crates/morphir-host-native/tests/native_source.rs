@@ -226,9 +226,9 @@ fn invocation_policy_selects_direct_or_native_protocol_mode() {
         protocol_backend.invocation_mode(),
         InvocationMode::NativeMep
     );
-    // A native protocol source still holds its built-in: the caller picks
-    // direct handles or `connect` by the invocation mode.
-    assert!(protocol_backend.native().is_some());
+    // Under `NativeMep` the built-in stays behind `connect`, so a
+    // protocol-only caller cannot skip MEP negotiation and result checks.
+    assert!(protocol_backend.native().is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]

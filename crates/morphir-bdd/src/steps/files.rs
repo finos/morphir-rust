@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use cucumber::gherkin::Step;
 use cucumber::{given, then};
 
-use crate::diff::unified_diff;
+use crate::diff::{same_text, unified_diff};
 use crate::world::MorphirWorld;
 
 /// The scenario's own temporary directory. File steps read and write only inside it.
@@ -27,19 +27,24 @@ pub fn workspace(world: &mut MorphirWorld) -> &Workspace {
 
 /// Resolves `path` against the scenario's [`Workspace`], creating the workspace if needed.
 ///
-/// Panics if `path` is absolute or has a `..` component: file steps must stay inside the
-/// scenario's temporary directory, never touch the rest of the filesystem.
+/// Panics if `path` is absolute, or has a `..`, root (`/x`) or drive-prefix (`C:\x`) component:
+/// file steps must stay inside the scenario's temporary directory, never touch the rest of the
+/// filesystem. `Path::is_absolute` alone is not enough on Windows, where a rooted path such as
+/// `\Windows\x` is not absolute but still escapes the workspace once joined onto it, so every
+/// escaping component is refused directly.
 fn resolve(world: &mut MorphirWorld, path: &str) -> PathBuf {
     let candidate = Path::new(path);
+    let escapes = candidate.is_absolute()
+        || candidate.components().any(|c| {
+            matches!(
+                c,
+                Component::RootDir | Component::Prefix(_) | Component::ParentDir
+            )
+        });
     assert!(
-        !candidate.is_absolute(),
-        "file step path {path:?} must be relative to the workspace, not absolute"
-    );
-    assert!(
-        !candidate
-            .components()
-            .any(|c| matches!(c, Component::ParentDir)),
-        "file step path {path:?} must not contain a `..` component"
+        !escapes,
+        "file step path {path:?} must stay inside the workspace: no absolute path, root, drive \
+         prefix or `..` component is allowed"
     );
     workspace(world).dir.path().join(candidate)
 }
@@ -76,14 +81,16 @@ fn the_file_should_exist(world: &mut MorphirWorld, path: String) {
 }
 
 /// `Then the file {string} should contain:` asserts that `path`'s contents equal the doc string,
-/// printing a unified diff on mismatch.
+/// printing a unified diff on mismatch. As with `stdout should be:`, trailing whitespace is not
+/// significant: Gherkin doc strings never end with a newline, but files written by real tools
+/// usually do.
 #[then(expr = "the file {string} should contain:")]
 fn the_file_should_contain(world: &mut MorphirWorld, path: String, step: &Step) {
     let expected = doc_string(step).to_owned();
     let target = resolve(world, &path);
     let actual = std::fs::read_to_string(&target)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", target.display()));
-    if actual != expected {
+    if !same_text(&expected, &actual) {
         panic!(
             "{path} differs:\n{}",
             unified_diff(
@@ -112,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "must be relative to the workspace, not absolute")]
+    #[should_panic(expected = "must stay inside the workspace")]
     fn resolve_refuses_an_absolute_path() {
         let mut world = MorphirWorld::new();
 
@@ -120,10 +127,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "must not contain a `..` component")]
+    #[should_panic(expected = "must stay inside the workspace")]
     fn resolve_refuses_a_path_with_a_parent_dir_component() {
         let mut world = MorphirWorld::new();
 
         resolve(&mut world, "../escape.txt");
+    }
+
+    #[test]
+    #[should_panic(expected = "must stay inside the workspace")]
+    fn resolve_refuses_a_root_only_path() {
+        let mut world = MorphirWorld::new();
+
+        // On Unix `/x` is absolute, but it is also, independently, a `Component::RootDir` path:
+        // the check this exercises must not rely on `Path::is_absolute` alone, since a rooted
+        // path is not always absolute (for example `\Windows\x` on Windows).
+        resolve(&mut world, "/x");
     }
 }

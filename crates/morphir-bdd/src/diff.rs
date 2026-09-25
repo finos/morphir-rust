@@ -42,9 +42,28 @@ pub fn unified_diff(
     capped
 }
 
+/// Compares `expected` and `actual` the way every text-comparison step does: trailing whitespace
+/// is not significant. Gherkin doc strings never end with a newline, but real command output and
+/// files written by real tools usually do, so comparing raw bytes would fail suites on that
+/// difference alone.
+///
+/// A mismatch should still be reported with the untrimmed texts (see [`unified_diff`]), so the
+/// trimming here is only for the pass/fail decision, not for what a diff shows.
+#[must_use]
+pub fn same_text(expected: &str, actual: &str) -> bool {
+    expected.trim_end() == actual.trim_end()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::unified_diff;
+    use super::{same_text, unified_diff};
+
+    #[test]
+    fn same_text_ignores_a_trailing_newline() {
+        assert!(same_text("a\nb\n", "a\nb"));
+        assert!(same_text("a\nb", "a\nb\n"));
+        assert!(!same_text("a\nb\n", "a\nB\n"));
+    }
 
     #[test]
     fn a_diff_has_headers_hunks_and_context() {

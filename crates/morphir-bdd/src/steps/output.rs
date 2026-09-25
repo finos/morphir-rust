@@ -3,8 +3,23 @@
 use cucumber::gherkin::Step;
 use cucumber::{given, then};
 
-use crate::diff::unified_diff;
+use crate::diff::{same_text, unified_diff};
 use crate::world::MorphirWorld;
+
+/// Caps how much raw text a panic message echoes back, so a huge document does not flood the
+/// failure output.
+const MAX_ECHOED_CHARS: usize = 2000;
+
+/// Truncates `text` to at most [`MAX_ECHOED_CHARS`] characters, for a panic message that must
+/// show the offending text without risking an unbounded one.
+fn truncated(text: &str) -> String {
+    if text.chars().count() <= MAX_ECHOED_CHARS {
+        return text.to_owned();
+    }
+    let mut shown: String = text.chars().take(MAX_ECHOED_CHARS).collect();
+    shown.push_str("… (truncated)");
+    shown
+}
 
 /// The stdout, stderr and exit status of the last command a scenario ran.
 ///
@@ -66,12 +81,13 @@ fn stderr_contains(world: &mut MorphirWorld, text: String) {
 }
 
 /// `Then stdout should be:` asserts that the last command's stdout equals the doc string,
-/// printing a unified diff on mismatch. Trailing newlines are not significant.
+/// printing a unified diff on mismatch. Trailing whitespace is not significant: Gherkin doc
+/// strings never end with a newline, but real command output usually does.
 #[then("stdout should be:")]
 fn stdout_is(world: &mut MorphirWorld, step: &Step) {
     let expected = doc_string(step);
     let actual = &last(world).stdout;
-    if expected.trim_end() != actual.trim_end() {
+    if !same_text(expected, actual) {
         panic!(
             "stdout differs:\n{}",
             unified_diff(expected, actual, "expected stdout", "actual stdout")
@@ -81,16 +97,25 @@ fn stdout_is(world: &mut MorphirWorld, step: &Step) {
 
 /// `Then the JSON output at {string} should be:` parses the last command's stdout as JSON, reads
 /// the value at the given JSON pointer, and compares it to the doc string, parsed as JSON too.
-/// A mismatch prints a unified diff of the two values, pretty-printed.
+/// A mismatch prints a unified diff of the two values, pretty-printed. Every panic (invalid
+/// stdout, an invalid doc string, or a missing pointer) echoes the offending text back, truncated
+/// past [`MAX_ECHOED_CHARS`].
 #[then(expr = "the JSON output at {string} should be:")]
 fn json_at(world: &mut MorphirWorld, pointer: String, step: &Step) {
-    let actual: serde_json::Value =
-        serde_json::from_str(&last(world).stdout).expect("stdout is JSON");
-    let expected: serde_json::Value =
-        serde_json::from_str(doc_string(step)).expect("the doc string is JSON");
-    let found = actual
-        .pointer(&pointer)
-        .unwrap_or_else(|| panic!("no value at {pointer}"));
+    let stdout = &last(world).stdout;
+    let actual: serde_json::Value = serde_json::from_str(stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON: {e}\nstdout:\n{}", truncated(stdout)));
+    let doc = doc_string(step);
+    let expected: serde_json::Value = serde_json::from_str(doc).unwrap_or_else(|e| {
+        panic!(
+            "the doc string is not JSON: {e}\ndoc string:\n{}",
+            truncated(doc)
+        )
+    });
+    let found = actual.pointer(&pointer).unwrap_or_else(|| {
+        let document = serde_json::to_string_pretty(&actual).expect("serialize");
+        panic!("no value at {pointer}\ndocument:\n{}", truncated(&document))
+    });
     if *found != expected {
         let pretty = |v: &serde_json::Value| {
             format!("{}\n", serde_json::to_string_pretty(v).expect("serialize"))

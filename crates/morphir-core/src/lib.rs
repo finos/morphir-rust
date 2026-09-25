@@ -1,5 +1,6 @@
 pub mod traversal;
 
+pub mod data_value;
 pub mod error;
 pub mod format_version;
 pub mod ir;

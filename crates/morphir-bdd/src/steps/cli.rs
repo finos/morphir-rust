@@ -147,6 +147,12 @@ pub struct CustomCliRunner(pub Arc<dyn CliRunner>);
 /// it), and this returns `Err` naming `program.path` and the timeout in seconds, with the text
 /// `timed out`.
 ///
+/// This kill reaches only the direct child, not any process the child starts of its own accord
+/// (for example a shell `&` background job, as in `sh -c "sleep 6 & wait"`): such a grandchild is
+/// not tracked here and can outlive the timeout. A [`CliRunner`] that needs to guarantee a whole
+/// process tree is gone, the way `morphir itest`'s own runner does with Windows job objects, owns
+/// that termination itself.
+///
 /// Returns `Err` naming `program.path` if the process fails to start, for example because the
 /// binary is missing. It never reports an empty [`LastOutput`] in that case.
 pub async fn run_program(

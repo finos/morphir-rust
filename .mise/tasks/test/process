@@ -1,14 +1,18 @@
 #!/bin/sh
-#MISE description="Build a real native extension and run its MEP conformance and describe tests"
+#MISE description="Build real native extensions and run their MEP conformance, describe and parity tests"
 
 set -e
 
-cargo build -p morphir-host-native --example mep-native-backend
+cargo build -p morphir-host-native --example mep-native-backend --example mep-native-frontend
 
-FIXTURE="target/debug/examples/mep-native-backend"
-if [ -f "$FIXTURE.exe" ]; then
-    FIXTURE="$FIXTURE.exe"
-fi
+fixture() {
+    if [ -f "target/debug/examples/$1.exe" ]; then
+        echo "target/debug/examples/$1.exe"
+    else
+        echo "target/debug/examples/$1"
+    fi
+}
 
-MEP_NATIVE_FIXTURE="$FIXTURE" \
-    cargo test -p morphir-host-native --test spawned_process_extension --test process_describe -- --ignored
+MEP_NATIVE_FIXTURE="$(fixture mep-native-backend)" \
+MEP_NATIVE_FRONTEND_FIXTURE="$(fixture mep-native-frontend)" \
+    cargo test -p morphir-host-native --test spawned_process_extension --test process_describe --test guest_parity -- --ignored

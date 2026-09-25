@@ -81,6 +81,45 @@ fn record_my_name(world: &mut MorphirWorld) {
     log.lock().expect("name log").push(name);
 }
 
+/// A key that tells every scenario and outline row apart, even two rows from different
+/// `Examples` blocks of the same outline: those share both their (unsubstituted)
+/// [`running_scenario_name`] and their block-local [`ScenarioRef::row`], so neither alone
+/// distinguishes them. Combining the document's file name with the scenario name and the row
+/// does: two different files never share a name, and two rows that share a name only collide
+/// when they are also in the same block (where `row` alone already tells them apart).
+///
+/// [`ScenarioRef::row`]: morphir_bdd::world::ScenarioRef::row
+fn running_scenario_key(world: &MorphirWorld) -> String {
+    let name = running_scenario_name(world);
+    let scenario = world
+        .scenario
+        .as_ref()
+        .expect("no running scenario: `prepare` has not filled the world yet");
+    let file = scenario
+        .document
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("<unknown file>");
+    format!("{file}:{name}:{:?}", scenario.row)
+}
+
+/// `Then I record my scenario` appends [`running_scenario_key`] to the scenario's [`NameLog`]
+/// component. Unlike `Then I record my name`, which records only the bare scenario name (fine
+/// when every scenario in a run has a distinct one), this also tells apart outline rows from
+/// different `Examples` blocks of the same outline.
+#[then("I record my scenario")]
+fn record_my_scenario(world: &mut MorphirWorld) {
+    let key = running_scenario_key(world);
+    let log = world
+        .context
+        .get::<NameLog>()
+        .expect("no NameLog component: the suite must call `.with_component(NameLog(…))`")
+        .0
+        .clone();
+    log.lock().expect("name log").push(key);
+}
+
 #[tokio::test]
 async fn a_suite_writes_json_and_junit_and_honours_a_tag_expression() {
     let mut driver = SuiteDriver::new();
@@ -422,5 +461,58 @@ async fn a_sequential_run_keeps_parse_order() {
     assert_eq!(result.passed, 20, "{result:?}");
     let seen = names.lock().expect("name log").clone();
     let expected: Vec<String> = (0..20).map(|i| format!("s{i:02}")).collect();
+    assert_eq!(seen, expected);
+}
+
+/// `Suite::max_concurrent_scenarios(1)` keeps parse order not only within one file's plain
+/// scenarios ([`a_sequential_run_keeps_parse_order`]), but also across feature files and across
+/// an outline's `Examples` blocks. `a.feature` holds three plain scenarios; `b.feature` holds two
+/// plain scenarios and a `Scenario Outline` with two `Examples` blocks (2 rows, then 3 rows). The
+/// expected order is every scenario of `a.feature`, then every scenario of `b.feature`, with the
+/// outline's rows in block-then-row order — the same order [`MorphirParser`](morphir_bdd::parser::MorphirParser)
+/// discovers files (sorted path order: `a.feature` before `b.feature`) and registers each block's
+/// rows (block order, then row order within a block).
+///
+/// Each step records [`running_scenario_key`], not the bare name `a_sequential_run_keeps_parse_order`
+/// uses: two rows from different `Examples` blocks of this outline share both an (unsubstituted)
+/// scenario name (`row <n>`) and a block-local row index, so the bare name or the row alone would
+/// not tell a first-block row from a second-block row with the same index.
+#[tokio::test]
+async fn a_sequential_run_keeps_parse_order_across_files_and_outline_blocks() {
+    let names = Arc::new(Mutex::new(Vec::new()));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "a.feature",
+        "Feature: A\n  Scenario: a0\n    Then I record my scenario\n  Scenario: a1\n    Then I record my scenario\n  Scenario: a2\n    Then I record my scenario\n",
+    );
+    driver.given_a_feature(
+        "b.feature",
+        "Feature: B\n  Scenario: b0\n    Then I record my scenario\n  Scenario: b1\n    Then I record my scenario\n\n  Scenario Outline: row <n>\n    Then I record my scenario\n\n    Examples: first\n      | n |\n      | 1 |\n      | 2 |\n\n    Examples: second\n      | n |\n      | 3 |\n      | 4 |\n      | 5 |\n",
+    );
+    let result = driver
+        .when_the_suite_runs_with(|s| {
+            s.clear_tags()
+                .max_concurrent_scenarios(1)
+                .with_component(NameLog(names.clone()))
+        })
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 10, "{result:?}");
+    let seen = names.lock().expect("name log").clone();
+    let expected: Vec<String> = [
+        "a.feature:a0:None",
+        "a.feature:a1:None",
+        "a.feature:a2:None",
+        "b.feature:b0:None",
+        "b.feature:b1:None",
+        "b.feature:row <n>:Some(0)",
+        "b.feature:row <n>:Some(1)",
+        "b.feature:row <n>:Some(0)",
+        "b.feature:row <n>:Some(1)",
+        "b.feature:row <n>:Some(2)",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
     assert_eq!(seen, expected);
 }

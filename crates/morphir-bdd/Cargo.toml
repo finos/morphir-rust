@@ -17,7 +17,7 @@ categories.workspace = true
 morphir-gherkin = { path = "../morphir-gherkin" }
 cucumber = { version = "0.23", features = ["output-json", "output-junit"] }
 futures = "0.3"
-similar = "2"
+similar = "3"
 tempfile = { workspace = true }
 serde_json = "1.0"
 # `process` only: `When I run {string}` waits on `tokio::process`. The runtime itself comes from

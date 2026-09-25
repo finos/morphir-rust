@@ -45,6 +45,3 @@ wat = "1"
 name = "mep-http-backend"
 required-features = ["http"]
 
-[[test]]
-name = "http_channel"
-required-features = ["http"]

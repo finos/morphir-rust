@@ -6,6 +6,10 @@
 //! `MEP_HTTP_FIXTURE=target/debug/examples/mep-http-backend cargo test -p morphir-host-native --features http --test http_channel -- --ignored`
 //!
 //! `mise run test:http` does both.
+//!
+//! Without the `http` feature this target compiles to nothing, so a plain
+//! `cargo test --test '*'` still builds every integration target.
+#![cfg(feature = "http")]
 
 mod support;
 

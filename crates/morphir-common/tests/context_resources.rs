@@ -118,6 +118,136 @@ fn configured_resource_count_and_depth_are_enforced() {
 }
 
 #[test]
+fn cached_resource_still_counts_toward_each_import_chain_depth() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("a.jsonld"), context(json!("b.jsonld"))).unwrap();
+    std::fs::write(root.path().join("b.jsonld"), context(json!({}))).unwrap();
+    let a = json!("a.jsonld");
+    let b = json!("b.jsonld");
+    let requests = [ContextRequest::at_root(&a), ContextRequest::at_root(&b)];
+    assert!(matches!(
+        load_context_resources(
+            root.path(),
+            &requests,
+            None,
+            ContextResourceLimits::new(1024, 4096, 8, 1)
+        ),
+        Err(ContextResourceError::ImportDepthExceeded)
+    ));
+}
+
+#[test]
+fn import_depth_never_exceeds_the_core_resolver_limit() {
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..=128 {
+        let value = if index == 128 {
+            json!({})
+        } else {
+            json!(format!("{}.jsonld", index + 1))
+        };
+        std::fs::write(root.path().join(format!("{index}.jsonld")), context(value)).unwrap();
+    }
+    assert!(matches!(
+        load_context_resources(
+            root.path(),
+            &[ContextRequest::at_root(&json!("0.jsonld"))],
+            None,
+            ContextResourceLimits::new(1024, 128 * 1024, 256, 256)
+        ),
+        Err(ContextResourceError::ImportDepthExceeded)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn local_symlink_alias_counts_as_a_duplicate_import() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("real.jsonld"), context(json!({}))).unwrap();
+    symlink("real.jsonld", root.path().join("alias.jsonld")).unwrap();
+    assert!(matches!(
+        load(root.path(), &json!(["real.jsonld", "alias.jsonld"])),
+        Err(ContextResourceError::Context(
+            ContextError::DuplicateImport(_)
+        ))
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn separate_alias_requests_still_count_each_loaded_path() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let bytes = context(json!({}));
+    std::fs::write(root.path().join("real.jsonld"), &bytes).unwrap();
+    symlink("real.jsonld", root.path().join("alias.jsonld")).unwrap();
+    let real = json!("real.jsonld");
+    let alias = json!("alias.jsonld");
+    let requests = [
+        ContextRequest::at_root(&real),
+        ContextRequest::at_root(&alias),
+    ];
+    assert!(matches!(
+        load_context_resources(
+            root.path(),
+            &requests,
+            None,
+            ContextResourceLimits::new(1024, 4096, 1, 8)
+        ),
+        Err(ContextResourceError::ResourceCountExceeded)
+    ));
+    assert!(matches!(
+        load_context_resources(
+            root.path(),
+            &requests,
+            None,
+            ContextResourceLimits::new(1024, bytes.len(), 8, 8)
+        ),
+        Err(ContextResourceError::TotalBytesExceeded)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn local_symlink_directory_alias_counts_as_an_import_cycle() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("a")).unwrap();
+    std::fs::write(
+        root.path().join("a/one.jsonld"),
+        context(json!("loop/one.jsonld")),
+    )
+    .unwrap();
+    symlink(".", root.path().join("a/loop")).unwrap();
+    assert!(matches!(
+        load(root.path(), &json!("a/one.jsonld")),
+        Err(ContextResourceError::Context(ContextError::ImportCycle(_)))
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn named_pipe_context_is_rejected_without_blocking() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    let pipe = root.path().join("pipe.jsonld");
+    let name = CString::new(pipe.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = load(root.path(), &json!("pipe.jsonld"));
+        sender
+            .send(matches!(result, Err(ContextResourceError::NotFile(_))))
+            .unwrap();
+    });
+    assert!(receiver.recv_timeout(Duration::from_secs(2)).unwrap());
+}
+
+#[test]
 fn lexical_escape_and_missing_or_directory_resources_fail() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("folder.jsonld")).unwrap();

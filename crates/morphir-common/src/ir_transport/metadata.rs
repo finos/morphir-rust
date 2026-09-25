@@ -4,17 +4,44 @@
 //! loader only reads paths below a caller-selected tree or archive directory,
 //! or asks a caller-supplied digest resolver. It never performs network I/O.
 
+#[cfg(unix)]
+use cap_fs_ext::OpenOptionsSyncExt;
 use cap_std::ambient_authority;
-use cap_std::fs::Dir;
+use cap_std::fs::{Dir, OpenOptions};
 use morphir_core::metadata::{ContextError, ContextResources, resolve_context};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 const DIGEST_PREFIX: &str = "morphir://context/sha256/";
+// The pure resolver has the same ceiling. Never acquire a deeper closure
+// even when the caller configures a larger budget.
+const MAX_CORE_IMPORT_DEPTH: usize = 128;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum ResourceIdentity {
+    Local(PathBuf),
+    Digest(String),
+}
+
+struct CachedResource {
+    bytes: Vec<u8>,
+    context: Value,
+}
+
+struct Loader<'a> {
+    directory: Dir,
+    root: PathBuf,
+    resolver: Option<&'a dyn ContextDigestResolver>,
+    limits: ContextResourceLimits,
+    resources: ContextResources,
+    cache: BTreeMap<ResourceIdentity, CachedResource>,
+    loaded_paths: BTreeSet<String>,
+    total_bytes: usize,
+}
 
 /// One authored context and the containing local document, if it has one.
 #[derive(Debug, Clone, Copy)]
@@ -52,7 +79,8 @@ pub struct ContextResourceLimits {
     pub total_bytes: usize,
     /// Maximum number of unique resources.
     pub resource_count: usize,
-    /// Maximum import chain depth, including the first resource.
+    /// Maximum import chain depth, including the first resource. The core
+    /// resolver's ceiling of 128 applies even if this value is higher.
     pub import_depth: usize,
 }
 
@@ -153,8 +181,9 @@ pub enum ContextResourceError {
 /// The `root` is an explicit document tree or extracted archive directory. Paths
 /// are checked lexically and against the canonical root; capability-based file
 /// opening keeps the read confined if a symlink changes during acquisition.
-/// Each request is finally resolved by `morphir-core`, which detects duplicate
-/// imports, cycles, invalid envelopes, and term conflicts.
+/// Each request is finally resolved by `morphir-core`, which checks the bounded
+/// grammar and term conflicts. This loader also compares canonical file
+/// identities so symlink aliases cannot hide a duplicate import or cycle.
 ///
 /// ```
 /// use morphir_common::ir_transport::metadata::{ContextRequest, ContextResourceLimits, load_context_resources};
@@ -175,110 +204,166 @@ pub fn load_context_resources(
     let canonical_root = fs::canonicalize(root).map_err(ContextResourceError::Root)?;
     let directory = Dir::open_ambient_dir(&canonical_root, ambient_authority())
         .map_err(ContextResourceError::Root)?;
-    let mut resources = ContextResources::new(".");
-    let mut seen = BTreeSet::new();
-    let mut total_bytes = 0usize;
-    let mut pending = Vec::new();
+    let mut loader = Loader {
+        directory,
+        root: canonical_root,
+        resolver,
+        limits,
+        resources: ContextResources::new("."),
+        cache: BTreeMap::new(),
+        loaded_paths: BTreeSet::new(),
+        total_bytes: 0,
+    };
     for request in requests {
         let base = request
             .base_file
             .map(|value| normalize_relative_path(value, None))
             .transpose()?;
-        enqueue_references(request.authored, base.as_deref(), 1, &mut pending)?;
+        loader.visit_value(
+            request.authored,
+            base.as_deref(),
+            1,
+            &mut BTreeSet::new(),
+            &mut BTreeSet::new(),
+        )?;
     }
-    while let Some((reference, base, depth)) = pending.pop() {
+    for request in requests {
+        resolve_context(None, request.authored, &loader.resources, request.base_file)?;
+    }
+    Ok(loader.resources)
+}
+
+impl Loader<'_> {
+    fn visit_value(
+        &mut self,
+        value: &Value,
+        base: Option<&str>,
+        depth: usize,
+        seen: &mut BTreeSet<ResourceIdentity>,
+        active: &mut BTreeSet<ResourceIdentity>,
+    ) -> Result<(), ContextResourceError> {
+        match value {
+            Value::String(reference) => self.visit_reference(reference, base, depth, seen, active),
+            Value::Array(items) => {
+                for item in items {
+                    if let Value::String(reference) = item {
+                        self.visit_reference(reference, base, depth, seen, active)?;
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn visit_reference(
+        &mut self,
+        reference: &str,
+        base: Option<&str>,
+        depth: usize,
+        seen: &mut BTreeSet<ResourceIdentity>,
+        active: &mut BTreeSet<ResourceIdentity>,
+    ) -> Result<(), ContextResourceError> {
         let is_digest = reference.starts_with(DIGEST_PREFIX);
         let identity = if is_digest {
-            validate_digest_reference(&reference)?;
-            reference.clone()
+            validate_digest_reference(reference)?;
+            reference.to_owned()
         } else {
-            if base.as_deref() == Some(DIGEST_PREFIX) {
+            if base == Some(DIGEST_PREFIX) {
                 return Err(ContextError::RelativeImportWithoutBase.into());
             }
-            normalize_local(&reference, base.as_deref())?
+            normalize_local(reference, base)?
         };
-        if !seen.insert(identity.clone()) {
-            continue;
-        }
-        if depth > limits.import_depth {
+        if depth > self.limits.import_depth.min(MAX_CORE_IMPORT_DEPTH) {
             return Err(ContextResourceError::ImportDepthExceeded);
         }
-        if seen.len() > limits.resource_count {
+        let canonical = if is_digest {
+            ResourceIdentity::Digest(identity.clone())
+        } else {
+            ResourceIdentity::Local(canonical_local(&self.root, &identity)?)
+        };
+        if active.contains(&canonical) {
+            return Err(ContextError::ImportCycle(identity).into());
+        }
+        if !seen.insert(canonical.clone()) {
+            return Err(ContextError::DuplicateImport(identity).into());
+        }
+        active.insert(canonical.clone());
+        let new_path = !self.loaded_paths.contains(&identity);
+        if new_path && self.loaded_paths.len() >= self.limits.resource_count {
             return Err(ContextResourceError::ResourceCountExceeded);
         }
-        let bytes = if is_digest {
-            let admitted = resolver
-                .ok_or_else(|| ContextError::ResourceUnavailable(identity.clone()))?
-                .resolve(&identity, limits.per_resource_bytes)
-                .map_err(|error| ContextResourceError::Resolver(identity.clone(), error))?
-                .ok_or_else(|| ContextError::ResourceUnavailable(identity.clone()))?;
-            let bytes = match admitted {
-                ResolvedContextResource::Trusted(bytes) => bytes,
-                ResolvedContextResource::Untrusted => {
-                    return Err(ContextError::ResourceUntrusted(identity).into());
-                }
+        if !self.cache.contains_key(&canonical) {
+            let bytes = if is_digest {
+                self.read_digest(&identity)?
+            } else {
+                read_local(&self.directory, &identity, self.limits.per_resource_bytes)?
             };
-            check_byte_limits(&identity, bytes.len(), &mut total_bytes, limits)?;
-            let digest = Sha256::digest(&bytes)
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-            if !identity.ends_with(&digest) {
-                return Err(ContextError::DigestMismatch(identity).into());
-            }
-            resources.insert_verified(&identity, bytes.clone(), true);
-            bytes
-        } else {
-            let bytes = read_local(
-                &directory,
-                &canonical_root,
+            let document: Value = serde_json::from_slice(&bytes)
+                .map_err(|_| ContextError::InvalidResource(identity.clone()))?;
+            let context = document
+                .as_object()
+                .filter(|object| object.len() == 1)
+                .and_then(|object| object.get("@context"))
+                .ok_or_else(|| ContextError::InvalidResource(identity.clone()))?
+                .clone();
+            self.cache
+                .insert(canonical.clone(), CachedResource { bytes, context });
+        }
+        let cached = self.cache.get(&canonical).expect("resource was cached");
+        if new_path {
+            check_byte_limits(
                 &identity,
-                limits.per_resource_bytes,
+                cached.bytes.len(),
+                &mut self.total_bytes,
+                self.limits,
             )?;
-            check_byte_limits(&identity, bytes.len(), &mut total_bytes, limits)?;
-            resources.insert_local(&identity, bytes.clone());
-            bytes
-        };
-        let document: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| ContextError::InvalidResource(identity.clone()))?;
-        let context = document
-            .as_object()
-            .filter(|object| object.len() == 1)
-            .and_then(|object| object.get("@context"))
-            .ok_or_else(|| ContextError::InvalidResource(identity.clone()))?;
+            self.loaded_paths.insert(identity.clone());
+        }
+        if is_digest {
+            self.resources
+                .insert_verified(&identity, cached.bytes.clone(), true);
+        } else {
+            self.resources.insert_local(&identity, cached.bytes.clone());
+        }
+        let context = cached.context.clone();
         let child_base = if is_digest {
             DIGEST_PREFIX
         } else {
             identity.as_str()
         };
-        enqueue_references(context, Some(child_base), depth + 1, &mut pending)?;
+        let result = self.visit_value(&context, Some(child_base), depth + 1, seen, active);
+        active.remove(&canonical);
+        result
     }
-    for request in requests {
-        resolve_context(None, request.authored, &resources, request.base_file)?;
-    }
-    Ok(resources)
-}
 
-fn enqueue_references(
-    value: &Value,
-    base: Option<&str>,
-    depth: usize,
-    pending: &mut Vec<(String, Option<String>, usize)>,
-) -> Result<(), ContextResourceError> {
-    match value {
-        Value::String(reference) => {
-            pending.push((reference.clone(), base.map(str::to_owned), depth))
-        }
-        Value::Array(items) => {
-            for item in items.iter().rev() {
-                if let Value::String(reference) = item {
-                    pending.push((reference.clone(), base.map(str::to_owned), depth));
-                }
+    fn read_digest(&self, identity: &str) -> Result<Vec<u8>, ContextResourceError> {
+        let admitted = self
+            .resolver
+            .ok_or_else(|| ContextError::ResourceUnavailable(identity.to_owned()))?
+            .resolve(identity, self.limits.per_resource_bytes)
+            .map_err(|error| ContextResourceError::Resolver(identity.to_owned(), error))?
+            .ok_or_else(|| ContextError::ResourceUnavailable(identity.to_owned()))?;
+        let bytes = match admitted {
+            ResolvedContextResource::Trusted(bytes) => bytes,
+            ResolvedContextResource::Untrusted => {
+                return Err(ContextError::ResourceUntrusted(identity.to_owned()).into());
             }
+        };
+        if bytes.len() > self.limits.per_resource_bytes {
+            return Err(ContextResourceError::ResourceBytesExceeded(
+                identity.to_owned(),
+            ));
         }
-        _ => {}
+        let digest = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if !identity.ends_with(&digest) {
+            return Err(ContextError::DigestMismatch(identity.to_owned()).into());
+        }
+        Ok(bytes)
     }
-    Ok(())
 }
 
 fn validate_digest_reference(reference: &str) -> Result<(), ContextResourceError> {
@@ -333,12 +418,7 @@ fn normalize_relative_path(
     Ok(path.to_string_lossy().replace('\\', "/"))
 }
 
-fn read_local(
-    directory: &Dir,
-    root: &Path,
-    identity: &str,
-    max_bytes: usize,
-) -> Result<Vec<u8>, ContextResourceError> {
+fn canonical_local(root: &Path, identity: &str) -> Result<PathBuf, ContextResourceError> {
     let path = root.join(identity);
     let canonical = fs::canonicalize(&path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => ContextResourceError::Missing(identity.to_owned()),
@@ -347,7 +427,23 @@ fn read_local(
     if !canonical.starts_with(root) {
         return Err(ContextResourceError::PathEscape);
     }
-    let metadata = fs::metadata(&canonical)
+    Ok(canonical)
+}
+
+fn read_local(
+    directory: &Dir,
+    identity: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ContextResourceError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.nonblock(true);
+    let file = directory
+        .open_with(identity, &options)
+        .map_err(|error| ContextResourceError::Read(identity.to_owned(), error))?;
+    let metadata = file
+        .metadata()
         .map_err(|error| ContextResourceError::Read(identity.to_owned(), error))?;
     if !metadata.is_file() {
         return Err(ContextResourceError::NotFile(identity.to_owned()));
@@ -357,9 +453,6 @@ fn read_local(
             identity.to_owned(),
         ));
     }
-    let file = directory
-        .open(identity)
-        .map_err(|error| ContextResourceError::Read(identity.to_owned(), error))?;
     let mut bytes = Vec::new();
     file.take(max_bytes.saturating_add(1) as u64)
         .read_to_end(&mut bytes)

@@ -1,14 +1,23 @@
 //! Runs the BDD suites for `morphir-bdd` itself. It proves the spike question: a step library
 //! defined in this crate links into this integration test binary.
+//!
+//! `files_and_output_run` and `cli_run` orchestrate through `SuiteDriver` (see AGENTS.md's "BDD
+//! Test Drivers" rule): both run a `Suite` against a fixed features path already checked into
+//! `tests/features`, with no `SuiteDriver::given_a_feature` call needed. `context_run` stays on a
+//! raw cucumber chain instead: it hooks `after` to read back each scenario's own reported source
+//! line, which `Suite`/`SuiteResult` has no way to expose, so there is no `SuiteDriver` method
+//! this run could sit behind.
+
+mod drivers;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cucumber::writer::Stats as _;
 use cucumber::{World as _, then};
+use drivers::suite_driver::SuiteDriver;
 use morphir_bdd::parser::MorphirParser;
 use morphir_bdd::steps::probe::Linked;
-use morphir_bdd::suite::Suite;
 use morphir_bdd::world::MorphirWorld;
 use morphir_gherkin::Tag;
 use morphir_gherkin::extension::{Context, Effect, Extensions, Scope, TagExtension};
@@ -120,45 +129,44 @@ async fn context_run() {
     );
 }
 
-/// Runs `tests/features/files_and_output.feature` through [`Suite`], the same runner the CLI
-/// uses: file steps write inside a scenario-owned temporary directory, and output steps read a
-/// `LastOutput` a step sets directly, without running a command. Its reports go to a fresh
-/// temporary directory, never into the source tree.
+/// Runs `tests/features/files_and_output.feature` through [`Suite`](morphir_bdd::Suite), the
+/// same runner the CLI uses, via [`SuiteDriver`]: file steps write inside a scenario-owned
+/// temporary directory, and output steps read a `LastOutput` a step sets directly, without
+/// running a command. Its reports go to the driver's own temporary directory, never into the
+/// source tree.
 async fn files_and_output_run() {
-    let out_dir = tempfile::tempdir().expect("create a temporary report directory");
-    let result = Suite::new("files-and-output")
-        .clear_tags()
-        .features(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/features/files_and_output.feature"
-        ))
-        .out_dir(out_dir.path())
-        .run()
+    let mut driver = SuiteDriver::new();
+    driver
+        .when_the_suite_runs(
+            "files-and-output",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/features/files_and_output.feature"
+            ),
+        )
         .await;
-    assert!(result.succeeded(), "{result:?}");
-    assert_eq!(result.failed, 0, "{result:?}");
-    assert!(result.passed > 0, "{result:?}");
+    driver.then_it_succeeds();
+    assert_eq!(driver.result().failed, 0, "{:?}", driver.result());
+    assert!(driver.result().passed > 0, "{:?}", driver.result());
 }
 
-/// Runs `tests/features/cli.feature` through [`Suite`] with `Suite::cli` pointed at
-/// `tests/fixtures/echo.sh`: a stand-in for `morphir` that echoes its arguments and `$HOME`, and
-/// exits 3 for `fail`. Its reports go to a fresh temporary directory, never into the source tree.
-/// `.sh` does not run on Windows, so the caller only runs this under `cfg!(unix)`.
+/// Runs `tests/features/cli.feature` through [`Suite`](morphir_bdd::Suite), via [`SuiteDriver`],
+/// with its CLI program pointed at `tests/fixtures/echo.sh`: a stand-in for `morphir` that echoes
+/// its arguments, `$HOME` and `$MORPHIR_HOME`, and exits 3 for `fail`. Its reports go to the
+/// driver's own temporary directory, never into the source tree. `.sh` does not run on Windows,
+/// so the caller only runs this under `cfg!(unix)`.
 async fn cli_run() {
     let echo = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/echo.sh");
-    let out_dir = tempfile::tempdir().expect("create a temporary report directory");
-    let result = Suite::new("cli")
-        .clear_tags()
-        .features(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/features/cli.feature"
-        ))
-        .cli(echo)
-        .out_dir(out_dir.path())
-        .run()
+    let mut driver = SuiteDriver::new();
+    driver.given_the_cli(echo);
+    driver
+        .when_the_suite_runs(
+            "cli",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/features/cli.feature"),
+        )
         .await;
-    assert!(result.succeeded(), "{result:?}");
-    assert_eq!(result.failed, 0, "{result:?}");
+    driver.then_it_succeeds();
+    assert_eq!(driver.result().failed, 0, "{:?}", driver.result());
 }
 
 #[tokio::main]

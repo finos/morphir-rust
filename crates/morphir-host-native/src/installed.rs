@@ -4,13 +4,14 @@
 //! into the host process, an [`InstalledSource`] holds only the atomically
 //! validated catalog and lock pair the daemon reads through
 //! `morphir_distribution::list_installed`. Its guest is verified and started
-//! only when [`InstalledSource::connect`] runs.
+//! only when [`InstalledSource::activate`] (or its [`GuestSource::connect`])
+//! runs.
 
-use crate::activate;
+use crate::{ActivatedGuest, activate};
 use async_trait::async_trait;
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    ArtifactRuntime, InstalledExtensionSnapshot, activate_installed_snapshot,
+    ArtifactRuntime, DistributionError, InstalledExtensionSnapshot, activate_installed_snapshot,
 };
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
 use morphir_host::{
@@ -18,6 +19,44 @@ use morphir_host::{
     InvocationPolicy, ProviderOrigin,
 };
 use std::path::Path;
+
+/// Why [`InstalledSource::activate`] could not start an installed guest.
+///
+/// The `Display` texts are the texts [`GuestSource::connect`] reports. A
+/// caller that words its own texts matches on the variant and reads the
+/// inner error instead.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum InstalledSourceError {
+    /// The installed artifact failed verification against its lock.
+    #[error("Failed to verify installed provider '{id}': {error}")]
+    Verify {
+        /// The installed extension id.
+        id: String,
+        /// Why verification failed.
+        #[source]
+        error: DistributionError,
+    },
+    /// The verification worker stopped before it returned: it panicked, or
+    /// the runtime shut down.
+    #[error("Failed to verify installed provider '{id}': verification worker failed: {message}")]
+    VerifyWorker {
+        /// The installed extension id.
+        id: String,
+        /// What the worker reported.
+        message: String,
+    },
+    /// The verified artifact did not start.
+    #[error("Failed to activate installed provider '{id}': {error}")]
+    Activate {
+        /// The installed extension id.
+        id: String,
+        /// Why the guest did not start. The variant, channel state and cause
+        /// are the ones [`activate`] reported. Boxed to keep the error small.
+        #[source]
+        error: Box<HostError>,
+    },
+}
 
 /// An extension selected from the installed catalog.
 ///
@@ -56,6 +95,36 @@ impl InstalledSource {
     pub fn snapshot(&self) -> &InstalledExtensionSnapshot {
         &self.snapshot
     }
+
+    /// Verify the installed artifact and start its guest in `workspace`,
+    /// without the MEP handshake.
+    ///
+    /// Verification reads and hashes the installed bytes, so it runs on a
+    /// blocking worker. Unlike [`GuestSource::connect`], which flattens
+    /// every failure into [`HostError::Invalid`], this keeps the failure
+    /// typed.
+    pub async fn activate(&self, workspace: &Path) -> Result<ActivatedGuest, InstalledSourceError> {
+        let id = self.info.id.clone();
+        let home = self.home.clone();
+        let snapshot = self.snapshot.clone();
+        let artifact =
+            tokio::task::spawn_blocking(move || activate_installed_snapshot(&home, &snapshot))
+                .await
+                .map_err(|error| InstalledSourceError::VerifyWorker {
+                    id: id.clone(),
+                    message: error.to_string(),
+                })?
+                .map_err(|error| InstalledSourceError::Verify {
+                    id: id.clone(),
+                    error,
+                })?;
+        activate(artifact, workspace)
+            .await
+            .map_err(|error| InstalledSourceError::Activate {
+                id,
+                error: Box::new(error),
+            })
+    }
 }
 
 #[async_trait]
@@ -80,19 +149,13 @@ impl GuestSource for InstalledSource {
         self.mode
     }
 
+    /// [`InstalledSource::activate`], with its failure flattened into
+    /// [`HostError::Invalid`] carrying the same text.
     async fn connect(&self, workspace: &Path) -> Result<Box<dyn GuestConnection>, HostError> {
-        let id = &self.info.id;
-        let artifact =
-            activate_installed_snapshot(&self.home, &self.snapshot).map_err(|error| {
-                HostError::Invalid(format!(
-                    "Failed to verify installed provider '{id}': {error}"
-                ))
-            })?;
-        let guest = activate(artifact, workspace).await.map_err(|error| {
-            HostError::Invalid(format!(
-                "Failed to activate installed provider '{id}': {error}"
-            ))
-        })?;
+        let guest = self
+            .activate(workspace)
+            .await
+            .map_err(|error| HostError::Invalid(error.to_string()))?;
         Ok(Box::new(guest.connection))
     }
 }

@@ -20,10 +20,10 @@ use morphir_distribution::{
 use morphir_extension_sdk::ExtensionType;
 use morphir_extension_sdk::protocol::{PeerInfo, PeerKind};
 use morphir_host::{
-    CapabilityMetadataScope, GuestSource, HostConfig, InvocationMode, InvocationPolicy,
+    CapabilityMetadataScope, GuestSource, HostConfig, HostError, InvocationMode, InvocationPolicy,
     ProviderOrigin, Registry, Session,
 };
-use morphir_host_native::InstalledSource;
+use morphir_host_native::{InstalledSource, InstalledSourceError};
 use runtime_mother::InstalledFrontend;
 use std::fs;
 use std::sync::Arc;
@@ -550,4 +550,68 @@ async fn connect_wraps_a_verify_failure_with_the_provider_id() {
         "{error}"
     );
     assert!(error.contains("digest mismatch"), "{error}");
+}
+
+// -- `InstalledSource::activate` keeps the typed failure `connect` flattens:
+// a caller that words its own texts (the CLI's workspace provider) needs the
+// inner `HostError` variant, its channel state and cause, and the
+// distribution error, not a pre-formatted string. --
+
+#[tokio::test]
+async fn activate_keeps_an_invalid_activation_error_as_its_own_variant() {
+    let fixture = installed(Spec {
+        id: "typed-activate-failure",
+        runtime: Runtime::Wasm,
+        frontend: Some(("broken-lang", "4", true)),
+        backend: None,
+    });
+    let id = fixture.snapshot.installed().extension_info().id.clone();
+
+    let source = InstalledSource::new(fixture.home.clone(), fixture.snapshot.clone());
+    let error = match source.activate(&fixture.working_directory).await {
+        Ok(_) => panic!("bytes that are not a WebAssembly module should fail to activate"),
+        Err(error) => error,
+    };
+
+    let text = error.to_string();
+    match error {
+        InstalledSourceError::Activate { id: failed, error } => {
+            let HostError::Invalid(message) = *error else {
+                panic!("expected the inner Invalid variant, got {error:?}");
+            };
+            assert_eq!(failed, id);
+            assert_eq!(
+                text,
+                format!("Failed to activate installed provider '{id}': {message}")
+            );
+        }
+        other => panic!("expected Activate(Invalid), got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn activate_reports_a_verify_failure_as_verify() {
+    let (fixture, _capture, _args) = runtime_mother::process();
+    let id = fixture.snapshot.installed().extension_info().id.clone();
+    fs::write(&fixture.installed_path, b"corrupted after installation").unwrap();
+
+    let source = InstalledSource::new(fixture.home.clone(), fixture.snapshot.clone());
+    let error = match source.activate(&fixture.working_directory).await {
+        Ok(_) => panic!("corrupted installed bytes should fail verification"),
+        Err(error) => error,
+    };
+
+    let text = error.to_string();
+    match error {
+        InstalledSourceError::Verify { id: failed, error } => {
+            assert_eq!(failed, id);
+            assert_eq!(
+                text,
+                format!("Failed to verify installed provider '{id}': {error}")
+            );
+            assert!(error.to_string().contains("digest mismatch"), "{error}");
+        }
+        other => panic!("expected Verify, got {other:?}"),
+    }
 }

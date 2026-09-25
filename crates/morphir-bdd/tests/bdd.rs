@@ -1,8 +1,8 @@
 //! Runs the BDD suites for `morphir-bdd` itself. It proves the spike question: a step library
 //! defined in this crate links into this integration test binary.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use cucumber::writer::Stats as _;
 use cucumber::{World as _, then};
@@ -43,7 +43,9 @@ fn probe_value(world: &mut MorphirWorld, expected: String) {
 
 /// Runs `tests/features/context`: extensions fill the context from feature and scenario tags, a
 /// failing step still reports the source line its list item is on, and a `@wip` scenario is
-/// filtered out before it starts.
+/// filtered out before it starts. Each row of the outline sees only its own `Examples` block's
+/// `@probe:` value (or the feature's, for the untagged block), and each row reports the line of
+/// its own data row in the Markdown table.
 async fn context_run() {
     let extensions = Arc::new(
         Extensions::new()
@@ -55,6 +57,7 @@ async fn context_run() {
     // runner executed, so its last step's `position.line` is read directly, with no writer output
     // to parse.
     let failing_step_line = Arc::new(AtomicUsize::new(0));
+    let row_lines = Arc::new(Mutex::new(Vec::<(String, usize)>::new()));
     let writer = MorphirWorld::cucumber::<&str>()
         .with_parser(MorphirParser::new(extensions.clone()))
         .before({
@@ -69,11 +72,18 @@ async fn context_run() {
         })
         .after({
             let failing_step_line = failing_step_line.clone();
+            let row_lines = row_lines.clone();
             move |_feature, _rule, scenario, _event, _world| {
                 if scenario.name == "A failing step reports the markdown line"
                     && let Some(step) = scenario.steps.last()
                 {
                     failing_step_line.store(step.position.line, Ordering::SeqCst);
+                }
+                if scenario.name.ends_with("tag reaches an outline row") {
+                    row_lines
+                        .lock()
+                        .expect("row lines")
+                        .push((scenario.name.clone(), scenario.position.line));
                 }
                 Box::pin(async {})
             }
@@ -94,6 +104,20 @@ async fn context_run() {
         17,
         "the failing step's report names context.feature.md at line 17"
     );
+    let mut rows = row_lines.lock().expect("row lines").clone();
+    rows.sort();
+    let row =
+        |source: &str, line: usize| (format!("The {source} tag reaches an outline row"), line);
+    assert_eq!(
+        rows,
+        vec![
+            row("again", 30),
+            row("first", 29),
+            row("second", 38),
+            row("untagged", 44)
+        ],
+        "each outline row reports its own data row's line in context.feature.md"
+    );
 }
 
 /// Runs `tests/features/files_and_output.feature` through [`Suite`], the same runner the CLI
@@ -103,6 +127,7 @@ async fn context_run() {
 async fn files_and_output_run() {
     let out_dir = tempfile::tempdir().expect("create a temporary report directory");
     let result = Suite::new("files-and-output")
+        .clear_tags()
         .features(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/features/files_and_output.feature"
@@ -123,6 +148,7 @@ async fn cli_run() {
     let echo = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/echo.sh");
     let out_dir = tempfile::tempdir().expect("create a temporary report directory");
     let result = Suite::new("cli")
+        .clear_tags()
         .features(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/features/cli.feature"

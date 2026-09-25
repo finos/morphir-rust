@@ -8,7 +8,7 @@ use cucumber::feature::Ext as _;
 use cucumber::{gherkin, parser};
 use futures::stream;
 use morphir_gherkin::extension::{Effect, Extensions};
-use morphir_gherkin::{Document, NodePath, Segment, StepArgument, StepKind};
+use morphir_gherkin::{Document, Format, NodePath, Segment, StepArgument, StepKind};
 
 use crate::world::{MorphirWorld, ScenarioRef};
 
@@ -17,12 +17,22 @@ type ModelNode = (Arc<Document>, NodePath);
 
 static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Default::default);
 
+/// A cucumber-rs [`cucumber::Parser`] that reads `.feature` and `.feature.md` documents through
+/// morphir-gherkin instead of cucumber's own `gherkin` parser.
+///
+/// Given a file, it reads that file; given a directory, it reads every `.feature` and
+/// `.feature.md` file under it, recursively, in sorted path order. Each document is lowered to a
+/// `gherkin::Feature` and its outlines are expanded to one scenario per data row, as cucumber's
+/// own parser does. Each expanded scenario is registered with its model node, so [`prepare`] and
+/// [`skip_reason`] can build its context later. A document that cannot be read gives a parsing
+/// error that names the file, line and column.
 pub struct MorphirParser {
     #[allow(dead_code)]
     extensions: Arc<Extensions>,
 }
 
 impl MorphirParser {
+    /// A parser for a suite that builds its scenario contexts with `extensions`.
     pub fn new(extensions: Arc<Extensions>) -> Self {
         Self { extensions }
     }
@@ -68,20 +78,30 @@ fn discover(root: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// Wraps `message` as a cucumber parsing error whose `Display` carries that message.
+///
+/// cucumber 0.23 prints a [`parser::Error::Parsing`] through `gherkin::ParseFileError`'s own
+/// `Display`, which shows only the path (`Could not read path: {path}`) and never its source.
+/// Neither `ParseFileError` variant has a free-text field, and the one other error variant
+/// (`ExampleExpansion`) would print the message as an unresolved `<placeholder>`. So the message
+/// travels in the `path` field itself: `message` (which already names the file, line and column,
+/// as [`morphir_gherkin::ReadError`] does) becomes the path, and the console, JSON and JUnit
+/// reports all print it.
+fn parse_error(message: String) -> parser::Error {
+    parser::Error::Parsing(Arc::new(gherkin::ParseFileError::Reading {
+        path: PathBuf::from(&message),
+        source: std::io::Error::other(message),
+    }))
+}
+
 fn load(path: &Path) -> parser::Result<gherkin::Feature> {
-    let (document, _) = morphir_gherkin::read_document(path).map_err(|error| {
-        parser::Error::Parsing(Arc::new(gherkin::ParseFileError::Reading {
-            path: path.to_owned(),
-            source: std::io::Error::other(error.to_string()),
-        }))
-    })?;
+    let (document, _) =
+        morphir_gherkin::read_document(path).map_err(|error| parse_error(error.to_string()))?;
     let document = Arc::new(document);
-    let feature = document.feature.as_ref().ok_or_else(|| {
-        parser::Error::Parsing(Arc::new(gherkin::ParseFileError::Reading {
-            path: path.to_owned(),
-            source: std::io::Error::other("no Feature heading"),
-        }))
-    })?;
+    let feature = document
+        .feature
+        .as_ref()
+        .ok_or_else(|| parse_error(format!("{}: no Feature heading", path.display())))?;
     let root = NodePath::feature();
     let feature_slots = scenario_slots(&root, &feature.scenarios);
     let rule_slots: Vec<_> = feature
@@ -90,7 +110,7 @@ fn load(path: &Path) -> parser::Result<gherkin::Feature> {
         .enumerate()
         .map(|(r, rule)| scenario_slots(&root.push(Segment::Rule(r)), &rule.scenarios))
         .collect();
-    let lowered = lower_feature(path, feature);
+    let lowered = lower_feature(path, feature, document.format);
     // Expanding a Scenario Outline's Examples is the parser's job, not the runner's: `cucumber`'s
     // own `parser::Basic` does it here too, in `parser::basic::Basic::parse`.
     let expanded = lowered
@@ -103,9 +123,11 @@ fn load(path: &Path) -> parser::Result<gherkin::Feature> {
     Ok(expanded)
 }
 
-/// How many expanded scenarios a scenario becomes, and the model path that describes it: 1 for a
-/// plain scenario, or the sum of every `Examples` block's data rows for an outline — in the same
-/// block-then-row order `gherkin::Feature::expand_examples` walks them in.
+/// The model paths the scenarios expand to, each with how many expanded scenarios it covers, in
+/// the order `gherkin::Feature::expand_examples` produces them: a plain scenario is one slot of
+/// 1 at its scenario path; an outline is one slot per `Examples` block, at that block's
+/// `…/scenario[i]/examples[j]` path, covering the block's data rows. cucumber expands block by
+/// block and row by row, and skips a block with no table, which is a slot of 0 here.
 fn scenario_slots(
     root: &NodePath,
     scenarios: &[morphir_gherkin::Scenario],
@@ -113,29 +135,33 @@ fn scenario_slots(
     scenarios
         .iter()
         .enumerate()
-        .map(|(i, s)| (root.push(Segment::Scenario(i)), expanded_count(s)))
+        .flat_map(|(i, s)| {
+            let scenario = root.push(Segment::Scenario(i));
+            if s.examples.is_empty() {
+                vec![(scenario, 1)]
+            } else {
+                s.examples
+                    .iter()
+                    .enumerate()
+                    .map(|(j, e)| {
+                        let rows = e
+                            .table
+                            .as_ref()
+                            .map_or(0, |t| t.rows.len().saturating_sub(1));
+                        (scenario.push(Segment::Examples(j)), rows)
+                    })
+                    .collect()
+            }
+        })
         .collect()
-}
-
-fn expanded_count(s: &morphir_gherkin::Scenario) -> usize {
-    if s.examples.is_empty() {
-        1
-    } else {
-        s.examples
-            .iter()
-            .map(|e| {
-                e.table
-                    .as_ref()
-                    .map_or(0, |t| t.rows.len().saturating_sub(1))
-            })
-            .sum()
-    }
 }
 
 /// Registers every scenario cucumber actually produced, by its real expanded name and line: never
 /// predicted, always read back from `expand_examples`'s own output. `slots` and `expanded` line up
-/// because `expand_examples` keeps each scenario's row order and never reorders scenarios past one
-/// another; each slot claims exactly the `count` expanded scenarios that follow the ones before it.
+/// because `expand_examples` keeps each scenario's block and row order and never reorders
+/// scenarios past one another; each slot claims exactly the `count` expanded scenarios that follow
+/// the ones before it. An outline's row registers with its own examples block's path, so the
+/// context built for it sees only that block's tags.
 fn register_expanded(
     path: &Path,
     document: &Arc<Document>,
@@ -211,7 +237,23 @@ fn lower_steps(steps: &[morphir_gherkin::Step]) -> Vec<gherkin::Step> {
         .collect()
 }
 
-fn lower_scenario(s: &morphir_gherkin::Scenario) -> gherkin::Scenario {
+/// The line cucumber should see for an `Examples` block, so that its row formula (`Examples`
+/// line + row index + 2, in `cucumber::feature::Ext::expand_examples`) names each data row's real
+/// source line in the reports.
+///
+/// In a `.feature` file the table starts on the line after the keyword, so the keyword's own
+/// line is right and is kept. In a `.feature.md` file a blank line (and maybe tags or prose)
+/// comes between the heading and the table, and a separator row comes after the header, so the
+/// first data row is at the header's line + 2: the line to report is the header's line, which is
+/// the first data row's line − 2.
+fn examples_line(e: &morphir_gherkin::Examples, format: Format) -> usize {
+    match (format, &e.table) {
+        (Format::Markdown, Some(table)) => table.position.line,
+        _ => e.position.line,
+    }
+}
+
+fn lower_scenario(s: &morphir_gherkin::Scenario, format: Format) -> gherkin::Scenario {
     gherkin::Scenario {
         keyword: s.keyword.clone(),
         name: s.name.clone(),
@@ -231,7 +273,10 @@ fn lower_scenario(s: &morphir_gherkin::Scenario) -> gherkin::Scenario {
                 }),
                 tags: tags(&e.tags),
                 span: span(e.span),
-                position: position(e.position),
+                position: gherkin::LineCol {
+                    line: examples_line(e, format),
+                    col: e.position.col,
+                },
             })
             .collect(),
         tags: tags(&s.tags),
@@ -251,13 +296,17 @@ fn lower_background(b: &morphir_gherkin::Background) -> gherkin::Background {
     }
 }
 
-fn lower_feature(path: &Path, f: &morphir_gherkin::Feature) -> gherkin::Feature {
+fn lower_feature(path: &Path, f: &morphir_gherkin::Feature, format: Format) -> gherkin::Feature {
     gherkin::Feature {
         keyword: f.keyword.clone(),
         name: f.name.clone(),
         description: None,
         background: f.background.as_ref().map(lower_background),
-        scenarios: f.scenarios.iter().map(lower_scenario).collect(),
+        scenarios: f
+            .scenarios
+            .iter()
+            .map(|s| lower_scenario(s, format))
+            .collect(),
         rules: f
             .rules
             .iter()
@@ -266,7 +315,11 @@ fn lower_feature(path: &Path, f: &morphir_gherkin::Feature) -> gherkin::Feature 
                 name: rule.name.clone(),
                 description: None,
                 background: rule.background.as_ref().map(lower_background),
-                scenarios: rule.scenarios.iter().map(lower_scenario).collect(),
+                scenarios: rule
+                    .scenarios
+                    .iter()
+                    .map(|s| lower_scenario(s, format))
+                    .collect(),
                 tags: tags(&rule.tags),
                 span: span(rule.span),
                 position: position(rule.position),
@@ -292,6 +345,9 @@ fn lookup(
 }
 
 /// Fills the world before the first step: the running scenario and the context its extensions build.
+///
+/// For one row of a scenario outline, the context comes from the row's own `Examples` block, not
+/// from the outline's other blocks, and [`ScenarioRef::path`] is that block's path.
 pub fn prepare(
     world: &mut MorphirWorld,
     feature: &gherkin::Feature,
@@ -312,7 +368,9 @@ pub fn prepare(
     Ok(())
 }
 
-/// Why a scenario is skipped, decided from its static tags before it starts.
+/// Why a scenario is skipped, decided from its static tags before it starts. For one row of a
+/// scenario outline, only the tags of the row's own `Examples` block count, so `@wip` on one block
+/// skips only that block's rows.
 pub fn skip_reason(
     feature: &gherkin::Feature,
     _rule: Option<&gherkin::Rule>,
@@ -323,5 +381,31 @@ pub fn skip_reason(
     match extensions.context_for(&document, &path) {
         Ok((_, Effect::Skip(reason))) => Some(reason),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load;
+
+    /// The lines cucumber gives the expanded rows of the first outline in `text`, read as `name`.
+    fn row_lines(name: &str, text: &str) -> Vec<usize> {
+        let dir = tempfile::tempdir().expect("create a temporary directory");
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).expect("write the document");
+        let feature = load(&path).expect("the document reads");
+        feature.scenarios.iter().map(|s| s.position.line).collect()
+    }
+
+    #[test]
+    fn a_plain_feature_outline_row_keeps_cucumbers_own_line() {
+        let text = "Feature: F\n  Scenario Outline: o <x>\n    Given a\n    Examples:\n      | x |\n      | 1 |\n      | 2 |\n";
+        assert_eq!(row_lines("f.feature", text), vec![6, 7]);
+    }
+
+    #[test]
+    fn a_markdown_outline_row_reports_its_own_data_row_line() {
+        let text = "# Feature: F\n\n## Scenario Outline: o <x>\n\n* Given a\n\n### Examples: E\n\n`@t`\n\n| x |\n| - |\n| 1 |\n| 2 |\n";
+        assert_eq!(row_lines("f.feature.md", text), vec![13, 14]);
     }
 }

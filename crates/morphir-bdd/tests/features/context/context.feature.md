@@ -22,12 +22,23 @@
 
 ### Examples: First rows
 
-| source | value   |
-| ------ | ------- |
-| first  | feature |
+`@probe:first-block`
+
+| source | value       |
+| ------ | ----------- |
+| first  | first-block |
+| again  | first-block |
 
 ### Examples: Second rows
 
-| source | value   |
-| ------ | ------- |
-| second | feature |
+`@probe:second-block`
+
+| source | value        |
+| ------ | ------------ |
+| second | second-block |
+
+### Examples: Untagged rows
+
+| source   | value   |
+| -------- | ------- |
+| untagged | feature |

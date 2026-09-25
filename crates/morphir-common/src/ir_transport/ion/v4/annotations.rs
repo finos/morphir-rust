@@ -13,7 +13,7 @@ use ion_rs::Element;
 use morphir_core::ir::v4::{Annotation, AnnotationArgument, Annotations};
 
 use super::values::{read_value, write_value};
-use super::{fq_name, list, local_name, member};
+use super::{list, local_name, member};
 use crate::ir_transport::TransportDiagnostic;
 use crate::ir_transport::ion::{annotation_names, required_field, required_string, struct_fields};
 
@@ -24,12 +24,11 @@ pub(super) fn read_annotations(
         return Ok(Annotations::default());
     };
     if let Some(items) = element.as_list() {
-        return Ok(Annotations::new(
-            items
-                .iter()
-                .map(read_annotation)
-                .collect::<Result<_, _>>()?,
-        ));
+        let entries = items
+            .iter()
+            .map(entry_json)
+            .collect::<Result<Vec<_>, _>>()?;
+        return Annotations::parse_unresolved(&serde_json::Value::Array(entries)).map_err(member);
     }
     let envelope = struct_fields(element, "annotations")?;
     let mut object = serde_json::Map::new();
@@ -58,17 +57,30 @@ pub(super) fn with_annotations(
         .iter()
         .map(write_annotation)
         .collect::<Result<Vec<_>, _>>()?;
-    let Some(metadata) = &annotations.metadata else {
+    let linked_entries = annotations.entries.iter().any(|entry| {
+        matches!(
+            entry,
+            Annotation::LinkedCompact { .. }
+                | Annotation::LinkedStructured { .. }
+                | Annotation::PendingCompact { .. }
+                | Annotation::PendingStructured { .. }
+        )
+    });
+    if annotations.metadata.is_none() && !linked_entries {
         return Ok(builder.with_field("annotations", list(written)));
-    };
+    }
     let mut envelope = ion_rs::Struct::builder();
-    if let Some(context) = &metadata.context {
+    if let Some(metadata) = &annotations.metadata
+        && let Some(context) = &metadata.context
+    {
         envelope = envelope.with_field("@context", super::json::to_ion(context.authored())?);
     }
     if !annotations.entries.is_empty() {
         envelope = envelope.with_field("entries", list(written));
     }
-    if !metadata.facts.is_empty() {
+    if let Some(metadata) = &annotations.metadata
+        && !metadata.facts.is_empty()
+    {
         let value =
             serde_json::to_value(&metadata.facts).map_err(|error| member(error.to_string()))?;
         envelope = envelope.with_field("facts", super::json::to_ion(&value)?);
@@ -80,7 +92,18 @@ fn entry_json(element: &Element) -> Result<serde_json::Value, TransportDiagnosti
     if let Some(text) = element.as_string() {
         return Ok(serde_json::Value::String(text.to_owned()));
     }
+    if !annotation_names(element)?.is_empty() {
+        return Err(member("an annotation entry is an unannotated struct"));
+    }
     let fields = struct_fields(element, "annotation")?;
+    if let Some(unknown) = fields
+        .keys()
+        .find(|name| !["name", "arguments"].contains(name))
+    {
+        return Err(member(format!(
+            "an annotation entry has name and arguments, found {unknown}"
+        )));
+    }
     let mut object = serde_json::Map::new();
     object.insert(
         "name".to_owned(),
@@ -112,47 +135,6 @@ pub(super) fn refuse_on_definition(
         ));
     }
     Ok(())
-}
-
-fn read_annotation(element: &Element) -> Result<Annotation, TransportDiagnostic> {
-    if let Some(text) = element.as_string() {
-        let split = text
-            .find('#')
-            .and_then(|hash| text[hash + 1..].find(':').map(|colon| hash + 1 + colon));
-        let (name, free_text) = match split {
-            Some(at) => (&text[..at], Some(text[at + 1..].to_owned())),
-            None => (text, None),
-        };
-        return Ok(Annotation::Compact {
-            name: fq_name(name)?,
-            text: free_text,
-        });
-    }
-    if !annotation_names(element)?.is_empty() || element.as_struct().is_none() {
-        return Err(member("an annotation is a string or an unannotated struct"));
-    }
-    let fields = struct_fields(element, "annotation")?;
-    if let Some(unknown) = fields
-        .keys()
-        .find(|name| !["name", "arguments"].contains(name))
-    {
-        return Err(member(format!(
-            "an annotation has name and arguments, found {unknown}"
-        )));
-    }
-    let args = match fields.get("arguments") {
-        None => Vec::new(),
-        Some(arguments) => arguments
-            .as_list()
-            .ok_or_else(|| member("arguments is a list"))?
-            .iter()
-            .map(read_argument)
-            .collect::<Result<_, _>>()?,
-    };
-    Ok(Annotation::Structured {
-        name: fq_name(required_string(&fields, "name")?)?,
-        args,
-    })
 }
 
 fn write_annotation(annotation: &Annotation) -> Result<Element, TransportDiagnostic> {

@@ -85,9 +85,6 @@ pub(super) fn decode(
         return Err(member("only an application has entryPoints"));
     }
     let (body, metadata) = read_body(values)?;
-    if version == RELEASE && metadata.is_some() {
-        return Err(member("linked metadata requires formatVersion 4.1.0"));
-    }
     let distribution = match kind {
         "library" => {
             body.refuse_definition_dependencies(kind)?;
@@ -144,6 +141,9 @@ pub(super) fn decode(
         distribution,
         metadata,
     };
+    if version == RELEASE && file.has_linked_metadata() {
+        return Err(member("linked metadata requires formatVersion 4.1.0"));
+    }
     if version == LINKED_RELEASE {
         let authored = serde_json::to_value(&file).map_err(|error| member(error.to_string()))?;
         serde_json::from_value(authored).map_err(|error| member(error.to_string()))

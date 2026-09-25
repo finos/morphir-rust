@@ -12,3 +12,7 @@ fi
 
 MEP_HTTP_FIXTURE="$FIXTURE" \
     cargo test -p morphir-host-native --features http --test http_channel -- --ignored
+
+# The HttpChannel unit tests and doctest need the feature too.
+cargo test -p morphir-host-native --features http --lib http
+cargo test -p morphir-host-native --features http --doc http

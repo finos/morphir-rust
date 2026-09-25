@@ -32,6 +32,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-ext-core` | Core extension ABI and envelope protocol types. |
 | `morphir-ext-example` | Example TEA counter WebAssembly component extension. |
 | `morphir-extension-sdk` | SDK and MEP contracts for WebAssembly extensions. |
+| `morphir-gherkin` | Gherkin document model for `.feature` and `.feature.md` files: spans, navigation, prose, and tag, fence and prose extensions. |
 | `morphir-gleam-binding` | Gleam frontend and backend extension integration. |
 | `morphir-host` | Portable Morphir extension host: MEP handshake, sessions and channels. |
 | `morphir-host-native` | Native channels for the Morphir extension host: processes, Extism and in-process guests. |

@@ -126,11 +126,11 @@ pub(super) fn datagram(file: v4::IRFile) -> Result<ion_rs::Sequence, TransportDi
             "the Ion v4 profile supports 4.0.0, not linked metadata 4.1.0",
         ));
     }
-    if file.metadata.is_some() {
+    if file.has_linked_metadata() {
         return Err(IonCodec::error(
             "morphir::ir::ion::unsupported_metadata",
             Stage::Encoding,
-            "the Ion v4 profile does not carry document metadata",
+            "the Ion v4 profile does not carry linked metadata",
         ));
     }
     let mut sequence = ion_rs::Sequence::builder();

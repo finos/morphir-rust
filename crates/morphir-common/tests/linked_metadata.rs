@@ -6,7 +6,7 @@ use morphir_common::ir_transport::{
     JsonCodec, Layout, TransportDiagnostic, YamlCodec,
 };
 use morphir_common::vfs::memory_root;
-use morphir_core::traversal::SemanticEvent;
+use morphir_core::traversal::{DistributionHeader, SemanticEvent, SemanticEventKind};
 use serde_json::{Value, json};
 
 #[derive(Default)]
@@ -321,4 +321,230 @@ fn proposed_revision_is_not_emitted_as_a_document_tree() {
         .unwrap();
     let mut sink = DocumentTreeSink::new(memory_root(), tree_options).unwrap();
     assert!(sink.accept(events.0.remove(0)).is_err());
+}
+
+#[test]
+fn metadata_detection_only_visits_ir_carriers() {
+    let mut document: Value = serde_json::from_str(include_str!(
+        "../../morphir-core/tests/fixtures/ir/v4/complete-example.json"
+    ))
+    .unwrap();
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["types"]["data-tables"]["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"]["extensions"] =
+        json!({"annotations": {"facts": {"opaque": true}}});
+    let text = serde_json::to_string(&document).unwrap();
+    JsonCodec::new()
+        .decode(
+            &mut Cursor::new(text.as_bytes()),
+            &options(FormatId::json()),
+            &mut Events::default(),
+        )
+        .unwrap();
+
+    let module = document["distribution"]["Library"]["def"]["modules"]
+        .as_object_mut()
+        .unwrap()
+        .remove("u-s/f-r-2052-a/data-tables")
+        .unwrap();
+    document["distribution"]["Library"]["def"]["modules"]["annotations"] = module;
+    let text = serde_json::to_string(&document).unwrap();
+    JsonCodec::new()
+        .decode(
+            &mut Cursor::new(text.as_bytes()),
+            &options(FormatId::json()),
+            &mut Events::default(),
+        )
+        .unwrap();
+    let module = document["distribution"]["Library"]["def"]["modules"]
+        .as_object_mut()
+        .unwrap()
+        .remove("annotations")
+        .unwrap();
+    document["distribution"]["Library"]["def"]["modules"]["extensions"] = module;
+
+    document["distribution"]["Library"]["def"]["modules"]["extensions"]["value"]["types"]["data-tables"]
+        ["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"]["@context"] = json!({"deprecated": "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated"});
+    document["distribution"]["Library"]["def"]["modules"]["extensions"]["value"]["types"]["data-tables"]
+        ["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"]["facts"] =
+        json!({"deprecated": true});
+    let text = serde_json::to_string(&document).unwrap();
+    assert!(
+        JsonCodec::new()
+            .decode(
+                &mut Cursor::new(text.as_bytes()),
+                &options(FormatId::json()),
+                &mut Events::default(),
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn document_graph_source_selector_matches_one_typed_json_list() {
+    let mut document = example();
+    let predicate = "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/naming/value/aliases";
+    document["$meta"]["@context"]["aliases"] = json!({"@id": predicate, "@type": "@json"});
+    document["$meta"]["@graph"][0]["aliases"] = json!(["placeOrder", "createOrder"]);
+    document["$meta"]["assertionSources"][0]["selector"]["predicate"] = json!(predicate);
+    document["$meta"]["assertionSources"][0]["selector"]["object"] =
+        json!({"@value": ["placeOrder", "createOrder"], "@type": "@json"});
+    let text = serde_json::to_string(&document).unwrap();
+    assert_eq!(
+        roundtrip(&JsonCodec::new(), &text, FormatId::json())["$meta"],
+        document["$meta"]
+    );
+    document["$meta"]["assertionSources"][0]["selector"]["object"] =
+        json!({"@value": "placeOrder"});
+    assert!(
+        JsonCodec::new()
+            .decode(
+                &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+                &options(FormatId::json()),
+                &mut Events::default(),
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn ion_rejects_annotation_facts_even_with_a_4_0_header() {
+    let mut document = example();
+    document.as_object_mut().unwrap().remove("$meta");
+    document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+        ["add"]["annotations"]["entries"] = json!(["morphir/SDK:basics#add"]);
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["types"]["data-tables"]["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"] =
+        json!({});
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["values"]["calculate-total"]["ExpressionBody"]["body"]["Literal"]["attributes"] =
+        json!({});
+    let mut events = Events::default();
+    JsonCodec::new()
+        .decode(
+            &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+            &options(FormatId::json()),
+            &mut events,
+        )
+        .unwrap();
+    let (cursor, header) = events.0.remove(0).into_parts();
+    let SemanticEventKind::Begin(DistributionHeader::V4Library { package, .. }) = header else {
+        panic!("expected a V4 library header")
+    };
+    events.0.insert(
+        0,
+        SemanticEvent::new(
+            cursor,
+            SemanticEventKind::Begin(DistributionHeader::V4Library {
+                format_version: morphir_core::ir::v4::FormatVersion::Integer(4),
+                package,
+            }),
+        ),
+    );
+    let mut output = Vec::new();
+    assert!(
+        IonCodec::new()
+            .encode(
+                &mut Source(events.0.into()),
+                &mut output,
+                &CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::ion()),
+            )
+            .is_err()
+    );
+    assert!(output.is_empty());
+}
+
+#[test]
+fn document_context_supplies_defaults_without_changing_authored_node_scopes() {
+    let mut document = example();
+    let public_api = document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]
+        ["basics"]["values"]["add"]["annotations"]["@context"]["publicApi"]
+        .clone();
+    document["$meta"]["@context"]["publicApi"] = public_api;
+    document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]
+        ["basics"]["values"]["add"]["annotations"]
+        .as_object_mut()
+        .unwrap()
+        .remove("@context");
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]
+        ["value"]["types"]["data-tables"]["TypeAliasDefinition"]["typeExp"]["Record"]
+        ["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("@context");
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]
+        ["value"]["values"]["calculate-total"]["ExpressionBody"]["body"]["Literal"]
+        ["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("@context");
+    let text = serde_json::to_string(&document).unwrap();
+    let file: morphir_core::ir::v4::IRFile = serde_json::from_value(document.clone()).unwrap();
+    let morphir_core::ir::v4::Distribution::Library(content) = &file.distribution else {
+        panic!("expected library")
+    };
+    let annotation = &content.dependencies["morphir/SDK"].modules["basics"].values["add"]
+        .value
+        .annotations
+        .entries[0];
+    assert!(matches!(
+        annotation,
+        morphir_core::ir::v4::Annotation::LinkedCompact { declaration, .. }
+            if declaration.to_string() == document["$meta"]["@context"]["publicApi"].as_str().unwrap()
+    ));
+    let actual = roundtrip(&JsonCodec::new(), &text, FormatId::json());
+    assert_eq!(actual["$meta"], document["$meta"]);
+    assert_eq!(
+        actual["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+            ["add"]["annotations"]["facts"],
+        json!({"deprecated": true})
+    );
+    assert!(actual["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]
+        ["basics"]["values"]["add"]["annotations"]
+        .get("@context")
+        .is_none());
+    let yaml = morphir_core::ir::yaml::write_canonical(&document);
+    let yaml_actual = roundtrip(&YamlCodec::new(), &yaml, FormatId::yaml());
+    assert_eq!(yaml_actual["$meta"], document["$meta"]);
+    assert!(
+        yaml_actual["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]
+            ["values"]["add"]["annotations"]
+            .get("@context")
+            .is_none()
+    );
+}
+
+#[test]
+fn protected_document_alias_cannot_be_redefined_by_a_node_scope() {
+    let mut document = example();
+    let predicate = document["$meta"]["@context"]["deprecated"].clone();
+    document["$meta"]["@context"]["deprecated"] = json!({"@id": predicate, "@protected": true});
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["types"]["data-tables"]["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"]["@context"]
+        ["deprecated"] =
+        json!("morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/other");
+    assert!(
+        JsonCodec::new()
+            .decode(
+                &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+                &options(FormatId::json()),
+                &mut Events::default(),
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn malformed_local_context_is_a_decode_error() {
+    let mut document = example();
+    document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+        ["add"]["annotations"]["@context"] = json!({"publicApi": {"@id": 123}});
+    assert!(
+        JsonCodec::new()
+            .decode(
+                &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+                &options(FormatId::json()),
+                &mut Events::default(),
+            )
+            .is_err()
+    );
 }

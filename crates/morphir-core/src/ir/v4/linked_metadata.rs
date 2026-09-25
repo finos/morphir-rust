@@ -33,6 +33,18 @@ impl AuthoredContext {
         resolve_context(None, &self.0, &ContextResources::new("contexts"), None)
             .expect("authored context was validated at construction")
     }
+
+    pub(super) fn effective_over(
+        &self,
+        parent: Option<&EffectiveContext>,
+    ) -> Result<EffectiveContext, String> {
+        resolve_context(parent, &self.0, &ContextResources::new("contexts"), None)
+            .map_err(|error| error.to_string())
+    }
+
+    fn preserve_unresolved(value: Value) -> Self {
+        Self(value)
+    }
 }
 
 impl Serialize for AuthoredContext {
@@ -59,8 +71,30 @@ impl AuthoredFacts {
             .as_object()
             .ok_or_else(|| "facts must be an object".to_owned())?;
         let effective = context.map(AuthoredContext::effective).unwrap_or_default();
-        let mut facts = IndexMap::new();
-        for (key, value) in object {
+        let facts = Self(
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        );
+        facts.validate(&effective)?;
+        Ok(facts)
+    }
+
+    fn preserve_unresolved(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "facts must be an object".to_owned())?;
+        Ok(Self(
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        ))
+    }
+
+    fn validate(&self, effective: &EffectiveContext) -> Result<(), String> {
+        for (key, value) in &self.0 {
             let expanded = effective
                 .expand_key(key)
                 .map_err(|error| error.to_string())?;
@@ -76,9 +110,8 @@ impl AuthoredFacts {
                     NodeUri::parse(uri).map_err(|error| error.to_string())?;
                 }
             }
-            facts.insert(key.clone(), value.clone());
         }
-        Ok(Self(facts))
+        Ok(())
     }
 
     /// The preserved authored properties. A bare array denotes repeated objects.
@@ -120,6 +153,33 @@ impl MetadataScope {
         Ok(Self { context, facts })
     }
 
+    /// Preserve a local spelling until the enclosing document context is known.
+    pub(super) fn parse_unresolved(
+        context: Option<&Value>,
+        facts: Option<&Value>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            context: context.cloned().map(AuthoredContext::preserve_unresolved),
+            facts: facts
+                .map(AuthoredFacts::preserve_unresolved)
+                .transpose()?
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Validate this carrier against the document defaults without changing its spelling.
+    pub(super) fn validate_over(
+        &self,
+        parent: &EffectiveContext,
+    ) -> Result<EffectiveContext, String> {
+        let effective = self.context.as_ref().map_or_else(
+            || Ok(parent.clone()),
+            |context| context.effective_over(Some(parent)),
+        )?;
+        self.facts.validate(&effective)?;
+        Ok(effective)
+    }
+
     /// Whether this scope has neither bindings nor facts.
     pub fn is_empty(&self) -> bool {
         self.context.is_none() && self.facts.is_empty()
@@ -129,7 +189,8 @@ impl MetadataScope {
     pub fn expand_key(&self, key: &str) -> Result<NodeUri, String> {
         self.context
             .as_ref()
-            .map(AuthoredContext::effective)
+            .map(|context| context.effective_over(None))
+            .transpose()?
             .unwrap_or_default()
             .expand_key(key)
             .map(|expanded| expanded.uri().clone())
@@ -266,6 +327,13 @@ pub struct DocumentMeta {
 }
 
 impl DocumentMeta {
+    pub(super) fn effective_context(&self) -> EffectiveContext {
+        self.context
+            .as_ref()
+            .map(AuthoredContext::effective)
+            .unwrap_or_default()
+    }
+
     /// Decode and validate the document container without loading context resources.
     pub fn parse(value: &Value) -> Result<Self, String> {
         let object = value
@@ -319,9 +387,13 @@ impl DocumentMeta {
                 .object
                 .as_object()
                 .ok_or_else(|| "selector object must be @value or @id".to_owned())?;
-            if object.len() != 1 || (!object.contains_key("@value") && !object.contains_key("@id"))
-            {
-                return Err("selector object must be @value or @id".to_owned());
+            let valid_value = object.contains_key("@value")
+                && (object.len() == 1
+                    || (object.len() == 2
+                        && object.get("@type") == Some(&Value::String("@json".to_owned()))));
+            let valid_id = object.len() == 1 && object.contains_key("@id");
+            if !valid_value && !valid_id {
+                return Err("selector object must be @value, typed @json value, or @id".to_owned());
             }
             if let Some(id) = object.get("@id") {
                 let id = id
@@ -347,14 +419,17 @@ impl DocumentMeta {
                                 return false;
                             }
                             let values = match authored {
+                                _ if expanded.coercion() == Coercion::Json => vec![authored],
                                 Value::Array(items) => items.iter().collect::<Vec<_>>(),
                                 _ => vec![authored],
                             };
                             values.into_iter().any(|value| {
-                                let object = if expanded.coercion() == Coercion::NodeId {
-                                    serde_json::json!({"@id": value})
-                                } else {
-                                    serde_json::json!({"@value": value})
+                                let object = match expanded.coercion() {
+                                    Coercion::NodeId => serde_json::json!({"@id": value}),
+                                    Coercion::Json => {
+                                        serde_json::json!({"@value": value, "@type": "@json"})
+                                    }
+                                    Coercion::None => serde_json::json!({"@value": value}),
                                 };
                                 object == record.selector.object
                             })

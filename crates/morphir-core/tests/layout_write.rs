@@ -59,6 +59,21 @@ fn refusal(file: &IRFile, policy: &TreePolicy) -> Diagnostic {
     write_tree(file, policy).expect_err("this tree cannot be written")
 }
 
+#[test]
+fn proposed_revision_and_document_metadata_never_produce_tree_files() {
+    let mut file = json_document(DOCUMENT_0006);
+    file.format_version = FormatVersion::String("4.1.0".to_owned());
+    let error = refusal(&file, &policy(Profile::Json, 4000));
+    assert_eq!(error.code, DiagnosticCode::InvalidDistributionShape);
+
+    file.format_version = FormatVersion::Integer(4);
+    file.metadata = Some(Box::new(
+        morphir_core::ir::v4::DocumentMeta::parse(&serde_json::json!({})).unwrap(),
+    ));
+    let error = refusal(&file, &policy(Profile::Json, 4000));
+    assert_eq!(error.code, DiagnosticCode::InvalidDistributionShape);
+}
+
 fn assert_refusal(diagnostic: &Diagnostic, cursor: &str, message: &str) {
     assert_eq!(diagnostic.code, DiagnosticCode::InvalidDistributionShape);
     assert_eq!(diagnostic.stage, DiagnosticStage::Semantic);

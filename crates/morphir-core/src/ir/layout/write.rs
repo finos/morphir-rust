@@ -215,6 +215,16 @@ fn nodes<'a, T, N>(entries: &'a IndexMap<String, T>, node: fn(&'a T) -> N) -> In
 /// Fails with `invalid_distribution_shape` when the path budget cannot hold the tree, or when a
 /// module specification carries annotations a tree has nowhere to put.
 pub fn write_tree(file: &IRFile, policy: &TreePolicy) -> Result<Vec<(String, String)>, Diagnostic> {
+    if file.format_version == FormatVersion::String("4.1.0".to_owned())
+        || file.has_linked_metadata()
+    {
+        return Err(Diagnostic::new(
+            DiagnosticCode::InvalidDistributionShape,
+            DiagnosticStage::Semantic,
+            "",
+            "the proposed linked-metadata revision has no document-tree profile",
+        ));
+    }
     let mut out = Files::default();
     out.set(write_manifest(file, policy));
     let format_version = &file.format_version;

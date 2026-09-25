@@ -440,14 +440,13 @@ impl<'writer> V4JsonEventEncoder<'writer> {
 
     fn check_fragment_metadata(
         &self,
-        value: &impl serde::Serialize,
+        value: &impl v4::LinkedMetadataCarrier,
         cursor: &IrCursor,
     ) -> Result<(), TransportDiagnostic> {
         if self.release == Some(v4::FormatVersion::String("4.1.0".to_owned())) {
             return Ok(());
         }
-        let fragment = serde_json::to_value(value).map_err(JsonCodec::encode_error)?;
-        if v4::contains_linked_metadata(&fragment) {
+        if value.contains_linked_metadata() {
             return Err(json_stream_error(
                 "metadata_version_mismatch",
                 cursor,

@@ -28,6 +28,8 @@ use super::distribution::{
 };
 use super::legacy::accept_legacy_form;
 use super::linked_metadata::{DocumentMeta, MetadataScope};
+use super::linked_metadata_scan::LinkedMetadataCarrier;
+use super::linked_metadata_scan::validate_document_scopes;
 use super::module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
 use super::package::{PackageDefinition, PackageSpecification};
 use super::serde_tagged::{
@@ -257,7 +259,7 @@ pub(super) fn decode_annotations_value(
                 return Err(unknown_member(&format!("{cursor}/{key}"), key));
             }
         }
-        let metadata = MetadataScope::parse(object.get("@context"), object.get("facts"))
+        let metadata = MetadataScope::parse_unresolved(object.get("@context"), object.get("facts"))
             .map_err(|error| invalid_type(cursor, error))?;
         (object.get("entries"), metadata)
     } else {
@@ -306,15 +308,15 @@ fn decode_annotation(
                     name,
                     text: free_text,
                 }),
-                Err(_) if scope.context.is_some() && free_text.is_none() => {
-                    let declaration = scope
-                        .expand_key(name_text)
-                        .map_err(|error| invalid_type(cursor, error))?;
-                    Ok(Annotation::LinkedCompact {
+                Err(_) if free_text.is_none() => match scope.expand_key(name_text) {
+                    Ok(declaration) => Ok(Annotation::LinkedCompact {
                         authored_name: name_text.to_owned(),
                         declaration,
-                    })
-                }
+                    }),
+                    Err(_) => Ok(Annotation::PendingCompact {
+                        authored_name: name_text.to_owned(),
+                    }),
+                },
                 Err(diagnostic) => Err(diagnostic),
             }
         }
@@ -340,18 +342,20 @@ fn decode_annotation(
             };
             match decode_fqname(name_value, &name_cursor) {
                 Ok(name) => Ok(Annotation::Structured { name, args }),
-                Err(diagnostic) if scope.context.is_some() => {
+                Err(diagnostic) => {
                     let authored_name = name_value.as_str().ok_or(diagnostic)?.to_owned();
-                    let declaration = scope
-                        .expand_key(&authored_name)
-                        .map_err(|error| invalid_type(&name_cursor, error))?;
-                    Ok(Annotation::LinkedStructured {
-                        authored_name,
-                        declaration,
-                        args,
-                    })
+                    match scope.expand_key(&authored_name) {
+                        Ok(declaration) => Ok(Annotation::LinkedStructured {
+                            authored_name,
+                            declaration,
+                            args,
+                        }),
+                        Err(_) => Ok(Annotation::PendingStructured {
+                            authored_name,
+                            args,
+                        }),
+                    }
                 }
-                Err(diagnostic) => Err(diagnostic),
             }
         }
         _ => Err(invalid_type(
@@ -1376,49 +1380,30 @@ pub(in crate::ir) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<I
     };
     let format_version =
         decode_format_version(written_version, &format!("{cursor}/formatVersion"))?;
+    let metadata = root
+        .get("$meta")
+        .map(|value| {
+            DocumentMeta::parse(value)
+                .map_err(|error| invalid_type(&format!("{cursor}/$meta"), error))
+        })
+        .transpose()?
+        .map(Box::new);
+    let mut distribution = decode_distribution(distribution, &format!("{cursor}/distribution"))?;
     if format_version != FormatVersion::String("4.1.0".to_owned())
-        && has_linked_metadata(distribution)
+        && distribution.contains_linked_metadata()
     {
         return Err(invalid_type(
             cursor,
             "linked metadata requires formatVersion 4.1.0",
         ));
     }
+    validate_document_scopes(&mut distribution, metadata.as_deref())
+        .map_err(|error| invalid_type(cursor, error))?;
     Ok(IRFile {
         format_version,
-        distribution: decode_distribution(distribution, &format!("{cursor}/distribution"))?,
-        metadata: root
-            .get("$meta")
-            .map(|value| {
-                DocumentMeta::parse(value)
-                    .map_err(|error| invalid_type(&format!("{cursor}/$meta"), error))
-            })
-            .transpose()?
-            .map(Box::new),
+        distribution,
+        metadata,
     })
-}
-
-pub(super) fn has_linked_metadata(value: &JsonValue) -> bool {
-    match value {
-        JsonValue::Array(items) => items.iter().any(has_linked_metadata),
-        JsonValue::Object(members) => members.iter().any(|(key, value)| {
-            if matches!(key.as_str(), "extensions" | "constraints") {
-                return false;
-            }
-            if key == "attributes"
-                && value.as_object().is_some_and(|attrs| {
-                    attrs.contains_key("@context") || attrs.contains_key("facts")
-                })
-            {
-                return true;
-            }
-            if key == "annotations" && value.is_object() {
-                return true;
-            }
-            has_linked_metadata(value)
-        }),
-        _ => false,
-    }
 }
 
 /// Decodes `formatVersion` through the shared format-version contract, reporting its stable

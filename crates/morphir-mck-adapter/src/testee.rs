@@ -1362,6 +1362,27 @@ fn strip_annotations(mut annotations: Annotations) -> Annotations {
                     })
                     .collect(),
             },
+            Annotation::PendingCompact { authored_name } => {
+                Annotation::PendingCompact { authored_name }
+            }
+            Annotation::PendingStructured {
+                authored_name,
+                args,
+            } => Annotation::PendingStructured {
+                authored_name,
+                args: args
+                    .into_iter()
+                    .map(|argument| match argument {
+                        AnnotationArgument::Positional(value) => {
+                            AnnotationArgument::Positional(strip_value(value))
+                        }
+                        AnnotationArgument::Named { name, value } => AnnotationArgument::Named {
+                            name,
+                            value: strip_value(value),
+                        },
+                    })
+                    .collect(),
+            },
         })
         .collect();
     annotations

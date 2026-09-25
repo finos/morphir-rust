@@ -80,6 +80,17 @@ fn native_declaration_cannot_target_a_private_or_missing_library_value() {
         Err(ProviderDeclarationError::MissingPublicValue)
     ));
 
+    let mut private_module = provider_document();
+    let module =
+        private_module["distribution"]["Library"]["def"]["modules"]["lifecycle"]["Public"].clone();
+    private_module["distribution"]["Library"]["def"]["modules"]["lifecycle"] =
+        json!({"Private":module});
+    let private_module = read_provider(&private_module);
+    assert!(matches!(
+        PredicateClosure::from_v4_provider(&private_module, &ContextResources::new("contexts")),
+        Err(ProviderDeclarationError::MissingPublicValue)
+    ));
+
     let mut missing = provider_document();
     missing["$meta"]["@graph"][0]["@id"] =
         json!("morphir://ir/pkg/acme/metadata?format=4.1.0#/module/lifecycle/value/unknown");
@@ -87,6 +98,23 @@ fn native_declaration_cannot_target_a_private_or_missing_library_value() {
     assert!(
         PredicateClosure::from_v4_provider(&missing, &ContextResources::new("contexts")).is_err()
     );
+}
+
+#[test]
+fn native_declaration_subject_must_be_an_own_unpinned_value() {
+    for subject in [
+        "morphir://ir/pkg/other/metadata?format=4.1.0#/module/lifecycle/value/deprecated",
+        "morphir://ir/pkg/acme/metadata?format=4.1.0&rev=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#/module/lifecycle/value/deprecated",
+    ] {
+        let mut authored = provider_document();
+        authored["$meta"]["@graph"][0]["@id"] = json!(subject);
+        let provider = read_provider(&authored);
+        assert!(
+            PredicateClosure::from_v4_provider(&provider, &ContextResources::new("contexts"))
+                .is_err(),
+            "{subject}"
+        );
+    }
 }
 
 #[test]

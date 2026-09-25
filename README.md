@@ -25,7 +25,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-common` | Shared IR transport, loading, virtual filesystem, remote, home, cache, and pipeline utilities. |
 | `morphir-config` | Portable configuration parsing, merging, and environment rules. |
 | `morphir-core` | Morphir IR models, format versions, migration, traversal, and naming. |
-| `morphir-daemon` | Workspace, build, IDE, and extension services for long-running Morphir tooling. |
+| `morphir-daemon` | Daemon errors, extension file loading, virtual paths and workspaces, on top of `morphir-host`. |
 | `morphir-devkit` | Workspace, configuration, and extension discovery APIs for developer tools. |
 | `morphir-distribution` | Verified Morphir artifact acquisition, installation, and activation. |
 | `morphir-elm-binding` | Tree-sitter based Elm frontend and backend for type declarations in Morphir IR v3 and v4, with incremental compilation, available natively and as a WebAssembly extension. |

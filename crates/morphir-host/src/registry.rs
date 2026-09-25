@@ -1,7 +1,7 @@
 //! Transport-neutral extension provider registration and resolution.
 //!
-//! The rules and error texts are the daemon's `ExtensionRegistry` rules:
-//! resolution filters by language or target and by normalized IR release,
+//! The rules and error texts are the ones `morphir-daemon` used before this
+//! registry replaced its own: resolution filters by language or target and by normalized IR release,
 //! installed providers win over built-ins, and more than one match at the
 //! best origin is an error.
 

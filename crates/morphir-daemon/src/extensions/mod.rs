@@ -1,32 +1,12 @@
-//! Extension system for morphir-daemon
+//! Extension files and file access for morphir-daemon.
 //!
-//! This module provides the Extism-based plugin runtime for loading
-//! and executing Morphir extensions.
+//! The daemon does not run extensions itself. Resolution, activation and
+//! sessions live in `morphir-host` and `morphir-host-native`. This module
+//! keeps what is specific to the daemon: fetching and caching extension
+//! files, and mapping the virtual paths an extension sees to real paths.
 
-pub mod activation;
-pub mod connected;
-pub mod container;
-pub mod host_functions;
 pub mod loader;
-pub mod process;
-pub mod protocol;
-pub mod registry;
-pub mod session;
 pub mod virtual_paths;
 
-pub use activation::{BoxedMepTransport, activate_transport};
-pub use connected::{ConnectedDaemonSession, ConnectedDaemonTransport, DaemonConnection};
-pub use container::ExtensionContainer;
 pub use loader::ExtensionLoader;
-pub use process::{ProcessLaunch, SpawnedProcessSession, SpawnedProcessTransport};
-pub use protocol::{ExtensionRequest, ExtensionResponse};
-pub use registry::{
-    CapabilityMetadataScope, ExtensionRegistry, InvocationMode, InvocationPolicy, ProviderMetadata,
-    ProviderOrigin, ResolvedBackend, ResolvedFrontend,
-};
-pub use session::{
-    ExpectedExtension, ExtensionSession, ExtensionSessionState, ExtismSession, FailedSession,
-    Indeterminate, InvokeOutcome, Loaded, MepTransport, NativeMepSession, NativeMepTransport,
-    NegotiatedSession, PersistedExtensionCapabilities, Ready, Session, SessionHandle, Stopped,
-    TransportError, TransportState, spawn_session, spawn_session_with_idle_timeout,
-};
+pub use virtual_paths::{FileSandbox, SandboxError, VirtualPathConfig};

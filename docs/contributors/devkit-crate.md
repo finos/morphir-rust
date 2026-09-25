@@ -12,7 +12,7 @@ redirect_from:
 
 The `morphir-devkit` crate provides workspace discovery, configuration loading, and path conventions for tools that work on Morphir projects. The CLI, IDEs, and build tools can use it without depending on one another.
 
-It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-daemon`, which owns extension registration, resolution, and execution.
+It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-host`, which owns extension registration, resolution, and execution.
 
 ## Responsibilities
 
@@ -67,7 +67,7 @@ The provider registry in the daemon resolves providers by requested capability a
 
 Provider origin remains separate from invocation mode. A native built-in can run as `NativeDirect` under `PreferDirect` or as `NativeMep` under `ProtocolOnly`. Installed providers run as `ProcessMep` or `WasmMep` under either policy.
 
-The Morphir CLI owns the built-in Gleam registration. `morphir-daemon` stays language-neutral and does not depend on the Gleam extension.
+The Morphir CLI owns the built-in Gleam registration. `morphir-host` stays language-neutral and does not depend on the Gleam extension.
 
 ## Use in other tools
 

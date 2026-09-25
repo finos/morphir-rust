@@ -11,9 +11,9 @@ use morphir_host::{
 /// exported `handle` function.
 ///
 /// `close` and `abort` do not unload the plugin: they report `Stopped`
-/// without touching the container, matching the daemon's `ExtismTransport`.
-/// Every transport failure, including a malformed response, is
-/// `Indeterminate`: the container cannot prove the guest released its state.
+/// without touching the container. Every transport failure, including a
+/// malformed response, is `Indeterminate`: the container cannot prove the
+/// guest released its state.
 pub struct ExtismChannel {
     container: ExtensionContainer,
     expected: ExpectedExtension,

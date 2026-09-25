@@ -1,6 +1,7 @@
-//! Extension loader using Extism
+//! Extension file loader.
 //!
-//! This module handles loading WASM plugins from various sources.
+//! This module fetches WASM extension files from a local path, a URL or a
+//! GitHub release and caches them. It does not run them.
 
 use crate::error::{DaemonError, Result};
 use std::path::{Path, PathBuf};

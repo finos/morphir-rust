@@ -21,7 +21,7 @@ CI runs only the jobs a change can affect.
    turn it on.
 4. Extension bundles run as a matrix over `.github/extensions.toml`, filtered to
    extensions whose crate or artifact task is affected. Changes to
-   `morphir-daemon`, the extension registry or shared bundle packaging select
+   `morphir-host`, `morphir-host-native` or shared bundle packaging select
    all extensions. Rust guest and offline installation tests run in the Rust
    bundle task, so Rust-only changes do not also run the shared Extism job.
 

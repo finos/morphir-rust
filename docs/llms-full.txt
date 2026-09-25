@@ -1125,7 +1125,8 @@ The system consists of:
 - **CLI (morphir)**: User-facing commands
 - **Devkit (morphir-devkit)**: Configuration and extension discovery
 - **Common (morphir-common)**: Shared infrastructure
-- **Daemon (morphir-daemon)**: Runtime extension execution
+- **Host (morphir-host, morphir-host-native)**: Extension registration, resolution and execution
+- **Daemon (morphir-daemon)**: Daemon errors, extension file loading and workspaces, as a client of the host
 - **Extensions**: Language-specific implementations
 
 ## Crate Responsibilities
@@ -1642,7 +1643,7 @@ Source: https://finos.github.io/morphir-rust/contributors/devkit-crate
 
 The `morphir-devkit` crate provides workspace discovery, configuration loading, and path conventions for tools that work on Morphir projects. The CLI, IDEs, and build tools can use it without depending on one another.
 
-It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-daemon`, which owns extension registration, resolution, and execution.
+It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-host`, which owns extension registration, resolution, and execution.
 
 ## Responsibilities
 
@@ -1697,7 +1698,7 @@ The provider registry in the daemon resolves providers by requested capability a
 
 Provider origin remains separate from invocation mode. A native built-in can run as `NativeDirect` under `PreferDirect` or as `NativeMep` under `ProtocolOnly`. Installed providers run as `ProcessMep` or `WasmMep` under either policy.
 
-The Morphir CLI owns the built-in Gleam registration. `morphir-daemon` stays language-neutral and does not depend on the Gleam extension.
+The Morphir CLI owns the built-in Gleam registration. `morphir-host` stays language-neutral and does not depend on the Gleam extension.
 
 ## Use in other tools
 
@@ -1731,7 +1732,7 @@ CI runs only the jobs a change can affect.
    turn it on.
 4. Extension bundles run as a matrix over `.github/extensions.toml`, filtered to
    extensions whose crate or artifact task is affected. Changes to
-   `morphir-daemon`, the extension registry or shared bundle packaging select
+   `morphir-host`, `morphir-host-native` or shared bundle packaging select
    all extensions. Rust guest and offline installation tests run in the Rust
    bundle task, so Rust-only changes do not also run the shared Extism job.
 

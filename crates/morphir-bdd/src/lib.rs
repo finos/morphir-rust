@@ -6,6 +6,7 @@
 
 pub mod parser;
 pub mod steps;
+pub mod suite;
 pub mod tags;
 pub mod world;
 

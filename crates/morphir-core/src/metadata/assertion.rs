@@ -135,11 +135,11 @@ pub enum AssertionSource {
     },
 }
 
-/// One authored assertion and its optional extra source claims.
+/// One authored assertion and its optional complete source override.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assertion {
     key: AssertionKey,
-    detail: Vec<AssertionSource>,
+    source_override: Option<Vec<AssertionSource>>,
 }
 
 impl Assertion {
@@ -147,7 +147,7 @@ impl Assertion {
     pub fn new(key: AssertionKey) -> Self {
         Self {
             key,
-            detail: Vec::new(),
+            source_override: None,
         }
     }
 
@@ -156,9 +156,18 @@ impl Assertion {
         &self.key
     }
 
-    /// Additional persisted claims, excluding implicit document provenance.
-    pub fn detail(&self) -> &[AssertionSource] {
-        &self.detail
+    /// Persisted claims other than the document source.
+    pub fn detail(&self) -> Vec<&AssertionSource> {
+        self.source_override
+            .iter()
+            .flatten()
+            .filter(|source| !matches!(source, AssertionSource::Document(_)))
+            .collect()
+    }
+
+    /// The explicit source override, if one was recorded in the document.
+    pub fn source_override(&self) -> Option<&[AssertionSource]> {
+        self.source_override.as_deref()
     }
 
     /// Add a compiler or author claim once. Document provenance is derived
@@ -167,21 +176,106 @@ impl Assertion {
         if matches!(source, AssertionSource::Document(_)) {
             return Err(MetadataError::DocumentProvenanceIsImplicit);
         }
-        if !self.detail.contains(&source) {
-            self.detail.push(source);
-            self.detail.sort();
+        let mut sources = self.sources();
+        sources.push(source);
+        self.set_source_override(sources)?;
+        Ok(())
+    }
+
+    /// Sources visible to a query. The document is implicit only without an override.
+    pub fn sources(&self) -> Vec<AssertionSource> {
+        self.source_override
+            .clone()
+            .unwrap_or_else(|| vec![AssertionSource::Document(self.key.owner.clone())])
+    }
+
+    pub(crate) fn set_source_override(
+        &mut self,
+        mut sources: Vec<AssertionSource>,
+    ) -> Result<(), MetadataError> {
+        if sources.is_empty() {
+            return Err(MetadataError::EmptyAssertionSources);
+        }
+        if sources.iter().any(|source| {
+            matches!(source, AssertionSource::Document(owner) if owner != self.key.owner())
+        }) {
+            return Err(MetadataError::DocumentSourceOwnerMismatch);
+        }
+        sources.sort();
+        sources.dedup();
+        self.source_override = Some(sources);
+        Ok(())
+    }
+
+    pub(crate) fn merge_sources(&mut self, other: &Self) -> Result<(), MetadataError> {
+        if let Some(sources) = &other.source_override {
+            let mut merged = self.source_override.clone().unwrap_or_default();
+            merged.extend(sources.iter().cloned());
+            self.set_source_override(merged)?;
         }
         Ok(())
     }
 
-    /// Sources visible to a query, including the containing document.
-    pub fn sources(&self) -> Vec<AssertionSource> {
-        let mut sources = vec![AssertionSource::Document(self.key.owner.clone())];
-        for source in &self.detail {
-            if !sources.contains(source) {
-                sources.push(source.clone());
-            }
-        }
-        sources
+    pub(crate) fn with_key(mut self, key: AssertionKey) -> Self {
+        self.key = key;
+        self
+    }
+}
+
+/// One optional detailed-source table row selected by an expanded assertion key.
+///
+/// Codecs expand aliases before constructing this row; no serialized offset or
+/// compact alias participates in matching.
+///
+/// ```
+/// use morphir_core::metadata::{Assertion, AssertionKey, AssertionSource, Carrier,
+///     DocumentId, Fact, GraphIndex, GraphName, ObjectTerm, SourceRecord};
+/// use morphir_core::node_address::NodeUri;
+/// use serde_json::json;
+///
+/// let subject = NodeUri::parse(
+///     "morphir://ir/pkg/acme/orders?format=4.0.0#/module/api/value/submit-order"
+/// ).unwrap();
+/// let predicate = NodeUri::parse(
+///     "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated"
+/// ).unwrap();
+/// let owner = DocumentId::new("orders/spec.json").unwrap();
+/// let fact = Fact::new(subject, predicate, ObjectTerm::value(json!(true)), GraphName::Default);
+/// let key = AssertionKey::new(owner.clone(), Carrier::DocumentGraph, fact).unwrap();
+/// let source = AssertionSource::Author { reference: "review/42".into() };
+/// let record = SourceRecord::new(key.clone(), vec![source.clone()]).unwrap();
+/// let mut graph = GraphIndex::new();
+/// graph.insert(Assertion::new(key)).unwrap();
+/// graph.apply_source_records(&owner, &[record]).unwrap();
+/// assert_eq!(graph.assertions()[0].sources(), vec![source]);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRecord {
+    selector: AssertionKey,
+    sources: Vec<AssertionSource>,
+}
+
+impl SourceRecord {
+    /// Create a row with at least one tagged source.
+    pub fn new(
+        selector: AssertionKey,
+        sources: Vec<AssertionSource>,
+    ) -> Result<Self, MetadataError> {
+        let mut assertion = Assertion::new(selector.clone());
+        assertion.set_source_override(sources)?;
+        Ok(Self {
+            selector,
+            sources: assertion.sources(),
+        })
+    }
+
+    /// The owner, semantic carrier and expanded fact selected by this row.
+    pub fn selector(&self) -> &AssertionKey {
+        &self.selector
+    }
+
+    /// The complete source set, replacing the implicit document default.
+    pub fn sources(&self) -> &[AssertionSource] {
+        &self.sources
     }
 }

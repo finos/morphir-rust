@@ -1,6 +1,9 @@
 //! Set-valued default-graph indexing over separately owned assertions.
 
-use super::{Assertion, Fact, GraphName, MetadataError, ObjectTerm};
+use super::{
+    Assertion, AssertionKey, AssertionSource, Carrier, DocumentId, Fact, GraphName, MetadataError,
+    ObjectTerm, SourceRecord,
+};
 use crate::node_address::NodeUri;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,9 +56,7 @@ impl GraphIndex {
         }
         let assertion_identity = assertion.key().identity();
         if let Some(&index) = self.assertion_ids.get(&assertion_identity) {
-            for source in assertion.detail() {
-                self.assertions[index].add_detail(source.clone())?;
-            }
+            self.assertions[index].merge_sources(&assertion)?;
             return Ok(());
         }
 
@@ -101,6 +102,117 @@ impl GraphIndex {
     /// Distinct document-and-carrier assertions in first-insertion order.
     pub fn assertions(&self) -> &[Assertion] {
         &self.assertions
+    }
+
+    /// Apply one document's optional detailed source table after all selectors validate.
+    ///
+    /// Selectors use the already-expanded assertion identity. Any invalid row
+    /// rejects the entire table without changing source ownership.
+    pub fn apply_source_records(
+        &mut self,
+        owner: &DocumentId,
+        records: &[SourceRecord],
+    ) -> Result<(), MetadataError> {
+        let mut seen = BTreeSet::new();
+        let mut matches = Vec::with_capacity(records.len());
+        for record in records {
+            if record.selector().owner() != owner {
+                return Err(MetadataError::SourceSelectorOwnerMismatch(Box::new(
+                    record.selector().clone(),
+                )));
+            }
+            if matches!(record.selector().carrier(), Carrier::Sidecar { .. }) {
+                return Err(MetadataError::SourceSelectorCarrierUnsupported(Box::new(
+                    record.selector().clone(),
+                )));
+            }
+            let identity = record.selector().identity();
+            if !seen.insert(identity.clone()) {
+                return Err(MetadataError::DuplicateSourceSelector(Box::new(
+                    record.selector().clone(),
+                )));
+            }
+            let Some(&index) = self.assertion_ids.get(&identity) else {
+                return Err(MetadataError::UnmatchedSourceSelector(Box::new(
+                    record.selector().clone(),
+                )));
+            };
+            matches.push((index, record.sources()));
+        }
+        for (index, sources) in matches {
+            self.assertions[index].set_source_override(sources.to_vec())?;
+        }
+        Ok(())
+    }
+
+    /// Replace one authored fact and its selector in one graph update.
+    ///
+    /// Existing explicit sources move with the assertion. A failed replacement
+    /// leaves both the graph and its source table association untouched.
+    pub fn rewrite_assertion(
+        &mut self,
+        old: &AssertionKey,
+        replacement: Fact,
+    ) -> Result<(), MetadataError> {
+        let Some(&index) = self.assertion_ids.get(&old.identity()) else {
+            return Err(MetadataError::AssertionNotFound);
+        };
+        let key = AssertionKey::new(old.owner().clone(), old.carrier().clone(), replacement)?;
+        let mut assertions = self.assertions.clone();
+        assertions[index] = assertions[index].clone().with_key(key);
+        *self = Self::from_assertions(assertions)?;
+        Ok(())
+    }
+
+    /// Remove a known source's contribution to one document's assertions.
+    ///
+    /// An assertion with only the implicit document source has unknown detailed
+    /// ownership, so source-dependent removal fails before changing anything.
+    /// Assertions without remaining sources are removed from the graph.
+    pub fn remove_source_from_owner(
+        &mut self,
+        owner: &DocumentId,
+        source: &AssertionSource,
+    ) -> Result<usize, MetadataError> {
+        if self.assertions.iter().any(|assertion| {
+            assertion.key().owner() == owner && assertion.source_override().is_none()
+        }) {
+            return Err(MetadataError::UnknownSourceOwnership);
+        }
+        let mut removed = 0;
+        let assertions = self
+            .assertions
+            .iter()
+            .filter_map(|assertion| {
+                if assertion.key().owner() != owner || !assertion.sources().contains(source) {
+                    return Some(assertion.clone());
+                }
+                removed += 1;
+                let remaining = assertion
+                    .sources()
+                    .into_iter()
+                    .filter(|candidate| candidate != source)
+                    .collect::<Vec<_>>();
+                if remaining.is_empty() {
+                    None
+                } else {
+                    let mut next = assertion.clone();
+                    next.set_source_override(remaining)
+                        .expect("removing one known source keeps valid owner sources");
+                    Some(next)
+                }
+            })
+            .collect();
+        *self = Self::from_assertions(assertions)?;
+        Ok(removed)
+    }
+
+    fn from_assertions(assertions: Vec<Assertion>) -> Result<Self, MetadataError> {
+        let mut graph = Self::new();
+        for assertion in assertions {
+            graph.insert(assertion)?;
+        }
+        Ok(graph)
     }
 
     /// All document-and-carrier assertions for one expanded fact.

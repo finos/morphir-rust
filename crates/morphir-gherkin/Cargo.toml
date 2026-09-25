@@ -1,0 +1,21 @@
+[package]
+name = "morphir-gherkin"
+description = "A Gherkin document model for Morphir: .feature and .feature.md, spans, navigation and extensions"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+gherkin = "0.16"
+pulldown-cmark = { version = "0.13", default-features = false }
+thiserror = { workspace = true }
+
+[dev-dependencies]

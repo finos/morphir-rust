@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The new `morphir-gherkin` crate reads `.feature` and `.feature.md` files
+  (Markdown with Gherkin) into one Gherkin document model, with source spans,
+  node paths, and visitor and cursor navigation. Prose is parsed as Markdown.
+  Tag, fence and prose extensions build a typed scenario context, and a
+  converter turns a `.feature.md` document into `.feature` text
+  (finos/morphir#946).
 - `Registry`, `GuestSource` and `Pool` in `morphir-host`: a portable provider
   registry that resolves frontends and backends from registered sources, and
   a warm-guest pool that opens one session per key and reuses it across
@@ -69,6 +75,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extension/gleam/v0.3.0`. Publishing them needs Morphir CLI `0.4.0-beta.7` or
   later; older CLIs cannot read the descriptors, so each release takes a new
   minor version (finos/morphir#921).
+- `test:cli-release` runs every bundle through Morphir CLI `0.4.0-beta.8`, and
+  it now covers `elm-native` too. The installed `morphir-elm-native` compiles
+  a project at IR v3 and v4, and then a two-file `--input` selection in one
+  request, where one module refers to a type in the other. A selection of
+  several files needs the installed provider's `frontend.multiDocument`,
+  which reaches the CLI from the bundle's claims from `0.4.0-beta.8`
+  (#266). Through `0.4.0-beta.7` the same selection is refused
+  (finos/morphir#921).
 - WASM extension bundles now carry version-2 (`2.0.0-draft.2`) release
   descriptors with capability claims read from the shipped guest and checked
   against `.github/extensions.toml`. Publishing requires Morphir CLI

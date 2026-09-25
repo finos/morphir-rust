@@ -1,14 +1,14 @@
-//! A standalone MEP backend daemon used to prove JSON-RPC HTTP hosting.
+//! A standalone MEP backend served over JSON-RPC HTTP, for the `http_channel` tests.
 
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::server::{RpcModule, ServerBuilder, ServerConfig};
 use jsonrpsee::types::ErrorObjectOwned;
-use morphir_daemon::extensions::protocol::MAX_MEP_PAYLOAD_BYTES;
 use morphir_extension_sdk::protocol::{ExtensionRequest, methods};
 use morphir_extension_sdk::{
     Artifact, Backend, BackendCapability, Diagnostic, DiagnosticSeverity, Extension,
     ExtensionCapabilities, ExtensionInfo, ExtensionType, GenerateRequest, GenerateResult, Result,
 };
+use morphir_host_native::process::MAX_MEP_PAYLOAD_BYTES;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;

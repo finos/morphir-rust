@@ -1,0 +1,14 @@
+#!/bin/sh
+#MISE description="Build a real HTTP extension server and run the HttpChannel conformance tests"
+
+set -e
+
+cargo build -p morphir-host-native --features http --example mep-http-backend
+
+FIXTURE="target/debug/examples/mep-http-backend"
+if [ -f "$FIXTURE.exe" ]; then
+    FIXTURE="$FIXTURE.exe"
+fi
+
+MEP_HTTP_FIXTURE="$FIXTURE" \
+    cargo test -p morphir-host-native --features http --test http_channel -- --ignored

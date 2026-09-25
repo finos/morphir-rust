@@ -100,9 +100,9 @@ paths = [".mise/tasks/build/workspace-wasm"]
 crates = ["morphir-host", "morphir-host-native", "morphir-daemon"]
 paths = [".mise/tasks/test/process"]
 
-[jobs.test-daemon-extension]
-crates = ["morphir-host", "morphir-host-native", "morphir-daemon"]
-paths = [".mise/tasks/test/daemon"]
+[jobs.test-http-extension]
+crates = ["morphir-host", "morphir-host-native"]
+paths = [".mise/tasks/test/http"]
 
 [jobs.test-extism]
 crates = [

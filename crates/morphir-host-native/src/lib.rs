@@ -4,10 +4,13 @@
 //! holds the parts that need a native runtime: child processes, Extism, and
 //! in-process Rust guests, each behind `morphir_host::Channel`. It also
 //! checks guest results before the host trusts them, and starts installed
-//! guests from their verified artifacts.
+//! guests from their verified artifacts. With the `http` feature, it also
+//! reaches an extension that runs as its own server over JSON-RPC HTTP.
 
 mod activate;
 pub mod extism;
+#[cfg(feature = "http")]
+pub mod http;
 mod installed;
 mod native;
 pub mod process;

@@ -41,6 +41,15 @@ pub struct GraphIndex {
     fact_assertions: BTreeMap<String, BTreeSet<usize>>,
 }
 
+/// A failed graph-wide URI binding; the input graph remains unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum GraphMapError<E> {
+    #[error("node URI binding failed: {0}")]
+    Map(E),
+    #[error(transparent)]
+    Model(#[from] MetadataError),
+}
+
 impl GraphIndex {
     /// Create an empty default graph.
     pub fn new() -> Self {
@@ -104,6 +113,64 @@ impl GraphIndex {
     /// Distinct document-and-carrier assertions in first-insertion order.
     pub fn assertions(&self) -> &[Assertion] {
         &self.assertions
+    }
+
+    /// Rebind every addressed term and carrier in one transaction. Source
+    /// detail travels with its assertion, so a published selector cannot be
+    /// left referring to the authoring identity. Literal data is never scanned
+    /// for URI-looking strings.
+    pub fn try_map_node_uris<E>(
+        &self,
+        mut map: impl FnMut(&NodeUri) -> Result<NodeUri, E>,
+    ) -> Result<Self, GraphMapError<E>> {
+        let mut output = Self::new();
+        for assertion in &self.assertions {
+            let fact = assertion.key().fact();
+            let object = match fact.object() {
+                ObjectTerm::NodeRef(uri) => {
+                    ObjectTerm::NodeRef(map(uri).map_err(GraphMapError::Map)?)
+                }
+                ObjectTerm::Value(value) => match value.datatype() {
+                    Some(datatype) => ObjectTerm::typed_json(
+                        value.value().clone(),
+                        map(datatype).map_err(GraphMapError::Map)?,
+                    ),
+                    None => ObjectTerm::value(value.value().clone()),
+                },
+            };
+            let graph = match fact.graph() {
+                GraphName::Default => GraphName::Default,
+                GraphName::Named(uri) => GraphName::Named(map(uri).map_err(GraphMapError::Map)?),
+            };
+            let mapped_fact = Fact::new(
+                map(fact.subject()).map_err(GraphMapError::Map)?,
+                map(fact.predicate()).map_err(GraphMapError::Map)?,
+                object,
+                graph,
+            );
+            let carrier = match assertion.key().carrier() {
+                Carrier::AttributesFacts(uri) => {
+                    Carrier::AttributesFacts(map(uri).map_err(GraphMapError::Map)?)
+                }
+                Carrier::AnnotationsFacts(uri) => {
+                    Carrier::AnnotationsFacts(map(uri).map_err(GraphMapError::Map)?)
+                }
+                Carrier::DocumentGraph => Carrier::DocumentGraph,
+                Carrier::Sidecar {
+                    target,
+                    entry_point,
+                } => Carrier::Sidecar {
+                    target: map(target).map_err(GraphMapError::Map)?,
+                    entry_point: map(entry_point).map_err(GraphMapError::Map)?,
+                },
+            };
+            let key = AssertionKey::new(assertion.key().owner().clone(), carrier, mapped_fact)
+                .map_err(GraphMapError::Model)?;
+            output
+                .insert(assertion.clone().with_key(key))
+                .map_err(GraphMapError::Model)?;
+        }
+        Ok(output)
     }
 
     /// Apply one document's optional detailed source table after all selectors validate.

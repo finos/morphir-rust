@@ -4,6 +4,8 @@
 
 mod sign;
 pub use sign::{LocalSigningKey, SignedLibrary};
+mod binding;
+pub use binding::{BindingError, PublicationBindings};
 
 use crate::{
     digest::Digest,

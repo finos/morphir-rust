@@ -15,7 +15,7 @@ pub use context::{
     Coercion, ContextError, ContextResources, EffectiveContext, ExpandedKey, expand_object,
     expand_properties, resolve_context,
 };
-pub use graph::GraphIndex;
+pub use graph::{GraphIndex, GraphMapError};
 pub use term::{Fact, GraphName, ObjectTerm, TypedValue};
 
 /// A metadata model or first-increment graph-execution error.

@@ -122,6 +122,44 @@ impl ExpandedKey {
 }
 
 impl EffectiveContext {
+    /// A self-contained authored spelling of the effective bindings.
+    /// Imported aliases are expanded to their canonical targets, so a writer
+    /// can carry the same scope without access to the import workspace.
+    pub fn to_inline_value(&self) -> Value {
+        let mut inline = Map::new();
+        if let Some(vocab) = &self.vocab {
+            inline.insert("@vocab".to_owned(), Value::String(vocab.clone()));
+        }
+        for (name, binding) in &self.terms {
+            let value =
+                if !binding.prefix && !binding.protected && binding.coercion == Coercion::None {
+                    Value::String(binding.target.clone())
+                } else {
+                    let mut definition = Map::new();
+                    definition.insert("@id".to_owned(), Value::String(binding.target.clone()));
+                    if binding.prefix {
+                        definition.insert("@prefix".to_owned(), Value::Bool(true));
+                    }
+                    if binding.protected {
+                        definition.insert("@protected".to_owned(), Value::Bool(true));
+                    }
+                    match binding.coercion {
+                        Coercion::None => {}
+                        Coercion::NodeId => {
+                            definition.insert("@type".to_owned(), Value::String("@id".to_owned()));
+                        }
+                        Coercion::Json => {
+                            definition
+                                .insert("@type".to_owned(), Value::String("@json".to_owned()));
+                        }
+                    }
+                    Value::Object(definition)
+                };
+            inline.insert(name.clone(), value);
+        }
+        Value::Object(inline)
+    }
+
     /// Expand an authored key. An exact alias precedes a prefix and `@vocab`.
     pub fn expand_key(&self, key: &str) -> Result<ExpandedKey, ContextError> {
         if let Some(binding) = self.terms.get(key) {

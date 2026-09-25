@@ -580,3 +580,28 @@ fn acyclic_import_chain_over_depth_budget_fails_without_recursing_further() {
     );
     assert!(resolve_context(None, &json!("1.jsonld"), &resources, None).is_ok());
 }
+
+#[test]
+fn materialized_context_keeps_scoped_coercion_and_protection() {
+    let mut resources = ContextResources::new(".");
+    resources.insert_local(
+        "terms.jsonld",
+        format!(
+            r#"{{"@context":{{"ops":{{"@id":"{NAMING}","@prefix":true,"@protected":true}},"alias":{{"@id":"{NAMING}aliases","@type":"@json"}}}}}}"#
+        )
+        .into_bytes(),
+    );
+    let resolved = resolve_context(
+        None,
+        &json!(["terms.jsonld", {"name": format!("{NAMING}name")}]),
+        &resources,
+        None,
+    )
+    .unwrap();
+    let materialized = resolved.to_inline_value();
+    assert_eq!(materialized["ops"]["@protected"], true);
+    assert_eq!(materialized["ops"]["@prefix"], true);
+    assert_eq!(materialized["alias"]["@type"], "@json");
+    let reread = resolve_context(None, &materialized, &ContextResources::new("."), None).unwrap();
+    assert_eq!(reread, resolved);
+}

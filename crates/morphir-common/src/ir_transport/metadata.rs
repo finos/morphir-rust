@@ -16,6 +16,12 @@ use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
+mod export;
+pub use export::{
+    ContextExport, ContextExportError, ContextExportRequest, ContextOutput, ContextStorage,
+    ExportedContextResource, export_contexts,
+};
+
 const DIGEST_PREFIX: &str = "morphir://context/sha256/";
 // The pure resolver has the same ceiling. Never acquire a deeper closure
 // even when the caller configures a larger budget.
@@ -204,6 +210,16 @@ pub fn load_context_resources(
     resolver: Option<&dyn ContextDigestResolver>,
     limits: ContextResourceLimits,
 ) -> Result<ContextResources, ContextResourceError> {
+    load_context_resources_inner(root, requests, resolver, limits, true)
+}
+
+fn load_context_resources_inner(
+    root: &Path,
+    requests: &[ContextRequest<'_>],
+    resolver: Option<&dyn ContextDigestResolver>,
+    limits: ContextResourceLimits,
+    validate_independently: bool,
+) -> Result<ContextResources, ContextResourceError> {
     let canonical_root = fs::canonicalize(root).map_err(ContextResourceError::Root)?;
     let directory = Dir::open_ambient_dir(&canonical_root, ambient_authority())
         .map_err(ContextResourceError::Root)?;
@@ -230,8 +246,10 @@ pub fn load_context_resources(
             &mut BTreeSet::new(),
         )?;
     }
-    for request in requests {
-        resolve_context(None, request.authored, &loader.resources, request.base_file)?;
+    if validate_independently {
+        for request in requests {
+            resolve_context(None, request.authored, &loader.resources, request.base_file)?;
+        }
     }
     Ok(loader.resources)
 }

@@ -63,10 +63,14 @@ struct Slot {
 /// of the retried call leaves the slot empty and returns
 /// [`CallError::Failed`].
 ///
+/// Because of that retry, a pooled call must be safe to send twice: when a
+/// session breaks mid-call the guest may already have run the first attempt.
+///
 /// [`CallError::Open`] means `open`, or the handshake on the connection it
-/// returned, failed, so the call never ran. It carries that error as it was.
-/// It is not retried and nothing is cached, whether it came from the first
-/// open or from opening the replacement for a broken session.
+/// returned, failed. It carries that error as it was. It is not retried and
+/// nothing is cached, whether it came from the first open or from opening
+/// the replacement for a broken session. Only in the first case is it
+/// certain that the call never reached a guest.
 ///
 /// # Cancellation
 ///

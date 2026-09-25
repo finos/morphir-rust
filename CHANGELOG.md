@@ -12,8 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registry that resolves frontends and backends from registered sources, and
   a warm-guest pool that opens one session per key and reuses it across
   calls, evicting and retrying once on a broken session. A call that was
-  waiting on a key when `Pool::abandon` removed it opens a fresh guest
-  instead of using the abandoned one. The registry's `ProviderOrigin`,
+  waiting on a key when `Pool::abandon` removed it runs against the key's
+  new slot, opening a guest only if none is cached there, instead of using
+  the abandoned one. The registry's `ProviderOrigin`,
   `InvocationMode` and `CapabilityMetadataScope` are `#[non_exhaustive]`.
 - `Registry::register` refuses a source whose origin, scope and mode
   disagree: a `Builtin` source must report `Complete` metadata scope and

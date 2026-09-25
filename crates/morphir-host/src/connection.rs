@@ -14,8 +14,12 @@ pub enum CallError {
     /// The session broke, and the connection closed its channel.
     #[error(transparent)]
     Failed(HostError),
-    /// No guest could be opened for the call, so the call never ran. The
-    /// error is the one opening the guest or its session reported.
+    /// No guest could be opened for this attempt. The error is the one
+    /// opening the guest or its session reported.
+    ///
+    /// When [`crate::Pool::call`] reports it while replacing a broken
+    /// session, an earlier attempt of the same call may already have reached
+    /// the guest, so this does not mean the call never ran.
     ///
     /// Only [`crate::Pool::call`] reports this: a [`GuestConnection`] or a
     /// [`crate::Session`] is already open when it is called.

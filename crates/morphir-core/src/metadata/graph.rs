@@ -49,7 +49,9 @@ impl GraphIndex {
 
     /// Insert one assertion, coalescing equal facts and repeated same-carrier assertions.
     ///
-    /// Named graphs remain representable in [`Fact`] but are rejected here.
+    /// A duplicate key with mixed explicit and implicit source knowledge is
+    /// rejected because merging it could hide an unknown contributor. Named
+    /// graphs remain representable in [`Fact`] but are rejected here.
     pub fn insert(&mut self, assertion: Assertion) -> Result<(), MetadataError> {
         if !matches!(assertion.key().fact().graph(), GraphName::Default) {
             return Err(MetadataError::NamedGraphUnsupported);
@@ -158,6 +160,9 @@ impl GraphIndex {
             return Err(MetadataError::AssertionNotFound);
         };
         let key = AssertionKey::new(old.owner().clone(), old.carrier().clone(), replacement)?;
+        if key.identity() != old.identity() && self.assertion_ids.contains_key(&key.identity()) {
+            return Err(MetadataError::AssertionCollision(Box::new(key)));
+        }
         let mut assertions = self.assertions.clone();
         assertions[index] = assertions[index].clone().with_key(key);
         *self = Self::from_assertions(assertions)?;

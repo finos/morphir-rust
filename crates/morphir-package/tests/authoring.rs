@@ -38,6 +38,68 @@ fn creates_verified_deterministic_library_from_exact_ir() {
 }
 
 #[test]
+fn creates_signed_library_with_inventoried_context_resources() {
+    use morphir_package::authoring::LocalSigningKey;
+    let mut ir: Value = serde_json::from_slice(&source()).unwrap();
+    ir["formatVersion"] = json!("4.1.0");
+    let ir = serde_json::to_vec(&ir).unwrap();
+    let contexts = vec![(
+        "contexts/names.jsonld".to_owned(),
+        br#"{"@context":{"alias":"morphir://example/alias"}}"#.to_vec(),
+    )];
+    let library = AuthoredLibrary::create_with_contexts(&input(), &ir, contexts.clone()).unwrap();
+    let manifest: Value = serde_json::from_slice(library.manifest_bytes()).unwrap();
+    assert_eq!(manifest["formatVersion"], "0.1.0-draft.2");
+    assert_eq!(
+        manifest["contextResources"]["contexts/names.jsonld"]["digest"],
+        morphir_package::digest::Digest::of_bytes(&contexts[0].1).to_string()
+    );
+    assert_eq!(library.context_files().count(), 1);
+    let signed = library.sign(&LocalSigningKey::from_seed([7; 32])).unwrap();
+    assert!(!signed.record_bytes().is_empty());
+    assert!(
+        AuthoredLibrary::from_bundle_with_contexts(library.manifest_bytes(), &ir, contexts.clone())
+            .is_ok()
+    );
+    for missing_or_changed in [vec![], vec![(contexts[0].0.clone(), b"changed".to_vec())]] {
+        assert!(
+            AuthoredLibrary::from_bundle_with_contexts(
+                library.manifest_bytes(),
+                &ir,
+                missing_or_changed
+            )
+            .is_err()
+        );
+    }
+    assert!(AuthoredLibrary::from_bundle(library.manifest_bytes(), &ir).is_err());
+    let duplicate = vec![contexts[0].clone(), contexts[0].clone()];
+    assert!(AuthoredLibrary::create_with_contexts(&input(), &ir, duplicate).is_err());
+    for unsafe_path in [
+        "../outside.jsonld",
+        "/outside.jsonld",
+        "contexts/../../outside.jsonld",
+    ] {
+        assert!(
+            AuthoredLibrary::create_with_contexts(
+                &input(),
+                &ir,
+                vec![(unsafe_path.into(), contexts[0].1.clone())]
+            )
+            .is_err(),
+            "{unsafe_path}"
+        );
+    }
+    let mut extra = contexts;
+    extra.push((
+        "contexts/extra.jsonld".into(),
+        br#"{"@context":{}}"#.to_vec(),
+    ));
+    assert!(
+        AuthoredLibrary::from_bundle_with_contexts(library.manifest_bytes(), &ir, extra).is_err()
+    );
+}
+
+#[test]
 fn rejects_authoring_dependencies_and_unknown_fields() {
     for (key, value) in [
         ("dependencies", json!({"example/other":{}})),

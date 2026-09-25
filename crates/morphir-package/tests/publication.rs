@@ -34,6 +34,129 @@ fn library(version: &str) -> AuthoredLibrary {
     )
     .unwrap()
 }
+
+#[test]
+fn linked_context_is_published_with_signed_archive_and_tampering_refuses_reopen() {
+    let (_temp, base, policy, key) = setup();
+    let ir = json!({"formatVersion":"4.1.0","distribution":{"Library":{"packageName":"example/greeting","dependencies":{},"def":{"modules":{"greeting":{"Public":{"types":{},"values":{}}}}}}}});
+    let input = json!({"packagePath":"example.com/greeting","version":"1.0.0","dependencies":{},"exports":{"greeting":"greeting"}});
+    let context = br#"{"@context":{"alias":"morphir://example/alias"}}"#;
+    let library = AuthoredLibrary::create_with_contexts(
+        &serde_json::to_vec(&input).unwrap(),
+        &serde_json::to_vec(&ir).unwrap(),
+        vec![("contexts/names.jsonld".into(), context.to_vec())],
+    )
+    .unwrap();
+    let signed = library.sign(&key).unwrap();
+    let registry = Registry::open(&base.join("registry"), &base.join("state"), &policy).unwrap();
+    let draft = registry
+        .prepare(
+            &library,
+            signed.record_bytes(),
+            signed.envelope_bytes(),
+            "2098-01-01T00:00:00Z",
+        )
+        .unwrap();
+    registry
+        .publish(
+            &library,
+            signed.record_bytes(),
+            signed.envelope_bytes(),
+            draft.predecessor(),
+            &draft.sign(&key, &key, &key).unwrap(),
+        )
+        .unwrap();
+    let digest = library.metadata().content_digest().to_string();
+    let stored = base.join(format!(
+        "registry/bundles/{}/contexts/names.jsonld",
+        &digest[7..]
+    ));
+    assert_eq!(std::fs::read(&stored).unwrap(), context);
+    drop(registry);
+    Registry::open(&base.join("registry"), &base.join("state"), &policy).unwrap();
+    std::fs::write(&stored, b"changed").unwrap();
+    assert!(Registry::open(&base.join("registry"), &base.join("state"), &policy).is_err());
+}
+
+#[tokio::test]
+async fn second_project_restores_authenticated_context_without_authoring_source() {
+    use morphir_package::{
+        local_registry::mvp::{self, InitializeRequest, ResolveRequest, RestoreRequest},
+        resolution::{PackagePath, ReleaseId, StableVersion},
+    };
+    let (_temp, base, policy, key) = setup();
+    let ir = json!({"formatVersion":"4.1.0","distribution":{"Library":{"packageName":"example/greeting","dependencies":{},"def":{"modules":{"greeting":{"Public":{"types":{},"values":{}}}}}}}});
+    let input = json!({"packagePath":"example.com/greeting","version":"1.0.0","dependencies":{},"exports":{"greeting":"greeting"}});
+    let context = br#"{"@context":{"alias":"morphir://example/alias"}}"#;
+    let library = AuthoredLibrary::create_with_contexts(
+        &serde_json::to_vec(&input).unwrap(),
+        &serde_json::to_vec(&ir).unwrap(),
+        vec![("contexts/names.jsonld".into(), context.to_vec())],
+    )
+    .unwrap();
+    let signed = library.sign(&key).unwrap();
+    let publisher = Registry::open(&base.join("registry"), &base.join("state"), &policy).unwrap();
+    let draft = publisher
+        .prepare(
+            &library,
+            signed.record_bytes(),
+            signed.envelope_bytes(),
+            "2098-01-01T00:00:00Z",
+        )
+        .unwrap();
+    publisher
+        .publish(
+            &library,
+            signed.record_bytes(),
+            signed.envelope_bytes(),
+            draft.predecessor(),
+            &draft.sign(&key, &key, &key).unwrap(),
+        )
+        .unwrap();
+    drop(publisher);
+    let root = std::fs::read(base.join("registry/metadata/1.root.json")).unwrap();
+    let consumer_state = base.join("other-project-trust");
+    mvp::initialize(InitializeRequest {
+        policy: &policy,
+        root: &root,
+        state: &consumer_state,
+    })
+    .unwrap();
+    let lock_path = base.join("other-project.lock");
+    mvp::resolve(ResolveRequest {
+        policy: &policy,
+        root: ReleaseId::new(
+            PackagePath::parse("example.com/greeting").unwrap(),
+            StableVersion::parse("1.0.0").unwrap(),
+        ),
+        registry: &base.join("registry"),
+        state: &consumer_state,
+        output: &lock_path,
+    })
+    .await
+    .unwrap();
+    let lock = std::fs::read(lock_path).unwrap();
+    let output = base.join("other-project-packages");
+    let report = mvp::restore(RestoreRequest {
+        policy: &policy,
+        lock: &lock,
+        registry: &base.join("registry"),
+        state: &consumer_state,
+        output: &output,
+    })
+    .await
+    .unwrap();
+    assert_eq!(report.packages.len(), 1);
+    assert_eq!(
+        std::fs::read(
+            output
+                .join(&report.packages[0].directory)
+                .join("contexts/names.jsonld")
+        )
+        .unwrap(),
+        context
+    );
+}
 #[test]
 fn first_publication_is_signed_and_retry_requires_exact_predecessor() {
     let (_temp, base, policy, key) = setup();

@@ -183,13 +183,27 @@ impl Registry {
             }
             let envelope = self.target(statement_path, statement_pin)?;
             let bundle = self.root.descend(record.source().path().as_str())?;
-            if bundle.names()? != vec!["ir.json".to_owned(), "manifest.json".to_owned()] {
+            let manifest = bundle.read("manifest.json", 1_048_576)?;
+            let declared: Value =
+                serde_json::from_slice(&manifest).map_err(|_| Error::Invalid("bundle manifest"))?;
+            let content = declared["content"]
+                .as_object()
+                .ok_or(Error::Invalid("bundle content inventory"))?;
+            let mut expected: Vec<_> = content.keys().cloned().collect();
+            expected.push("manifest.json".to_owned());
+            expected.sort();
+            if bundle.inventory()? != expected {
                 return Err(Error::Invalid("bundle entries"));
             }
-            let manifest = bundle.read("manifest.json", 1_048_576)?;
             let ir = bundle.read("ir.json", 64 * 1024 * 1024)?;
             content_total = charge_content(content_total, manifest.len(), ir.len())?;
-            let library = AuthoredLibrary::from_bundle(&manifest, &ir)
+            let mut contexts = Vec::new();
+            for path in content.keys().filter(|path| path.as_str() != "ir.json") {
+                let bytes = bundle.read_relative(path, 1_048_576)?;
+                content_total = charge_content(content_total, bytes.len(), 0)?;
+                contexts.push((path.to_owned(), bytes));
+            }
+            let library = AuthoredLibrary::from_bundle_with_contexts(&manifest, &ir, contexts)
                 .map_err(|_| Error::Invalid("invalid established Library"))?;
             verify::release(&library, &bytes, &envelope, &self.policy)?;
         }

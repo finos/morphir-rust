@@ -42,6 +42,7 @@ struct Input {
 pub struct AuthoredLibrary {
     manifest: Vec<u8>,
     ir: Vec<u8>,
+    contexts: BTreeMap<String, Vec<u8>>,
     metadata: NormalizedMetadata,
 }
 impl AuthoredLibrary {
@@ -52,6 +53,25 @@ impl AuthoredLibrary {
     /// assert!(AuthoredLibrary::create(b"{}", b"{}").is_err());
     /// ```
     pub fn create(input: &[u8], ir: &[u8]) -> Result<Self, Error> {
+        Self::create_inner(input, ir, None)
+    }
+    /// Create a linked-metadata Library with exact external JSON-LD contexts.
+    /// The context paths and bytes become part of its signed package identity.
+    pub fn create_with_contexts(
+        input: &[u8],
+        ir: &[u8],
+        contexts: Vec<(String, Vec<u8>)>,
+    ) -> Result<Self, Error> {
+        if contexts.is_empty() {
+            return Err(Error::InvalidInput);
+        }
+        Self::create_inner(input, ir, Some(contexts))
+    }
+    fn create_inner(
+        input: &[u8],
+        ir: &[u8],
+        contexts: Option<Vec<(String, Vec<u8>)>>,
+    ) -> Result<Self, Error> {
         bounded(input, ir)?;
         let input: Input =
             serde_json::from_value(parse(input)?).map_err(|_| Error::InvalidInput)?;
@@ -65,17 +85,42 @@ impl AuthoredLibrary {
             .pointer("/distribution/Library/packageName")
             .and_then(Value::as_str)
             .ok_or(Error::InvalidInput)?;
-        let manifest = json!({"formatVersion":"0.1.0-draft.1","kind":"Library",
+        let mut manifest = json!({"formatVersion":if contexts.is_some() {"0.1.0-draft.2"} else {"0.1.0-draft.1"},"kind":"Library",
             "packagePath":input.package_path,"version":input.version,
             "ir":{"formatVersion":"4","packageName":package,
                 "payload":{"path":"ir.json","mediaType":"application/json","profile":"classic"}},
             "dependencies":{},"exports":input.exports,
             "content":{"ir.json":Digest::of_bytes(ir).to_string()}});
+        if let Some(resources) = &contexts {
+            let mut inventory = serde_json::Map::new();
+            for (path, bytes) in resources {
+                let digest = Digest::of_bytes(bytes).to_string();
+                if inventory
+                    .insert(
+                        path.clone(),
+                        json!({"mediaType":"application/ld+json","digest":digest}),
+                    )
+                    .is_some()
+                {
+                    return Err(Error::InvalidInput);
+                }
+                manifest["content"][path] = json!(digest);
+            }
+            manifest["contextResources"] = Value::Object(inventory);
+        }
         let bytes = serde_json::to_vec(&manifest).map_err(|_| Error::InvalidInput)?;
-        Self::from_bundle(&bytes, ir)
+        Self::from_bundle_with_contexts(&bytes, ir, contexts.unwrap_or_default())
     }
     /// Revalidate a persisted bundle before signing. Never trust the directory name.
     pub fn from_bundle(manifest: &[u8], ir: &[u8]) -> Result<Self, Error> {
+        Self::from_bundle_with_contexts(manifest, ir, Vec::new())
+    }
+    /// Revalidate a complete persisted archive, including every declared context.
+    pub fn from_bundle_with_contexts(
+        manifest: &[u8],
+        ir: &[u8],
+        contexts: Vec<(String, Vec<u8>)>,
+    ) -> Result<Self, Error> {
         bounded(manifest, ir)?;
         let text = std::str::from_utf8(manifest).map_err(|_| Error::InvalidInput)?;
         let metadata = NormalizedMetadata::parse(text).map_err(|_| Error::InvalidInput)?;
@@ -85,7 +130,7 @@ impl AuthoredLibrary {
             .is_none_or(|v| !v.is_empty())
             || value["ir"]["payload"]["path"] != "ir.json"
             || value["ir"]["payload"]["profile"] != "classic"
-            || value["content"].as_object().is_none_or(|v| v.len() != 1)
+            || value["content"].as_object().is_none()
         {
             return Err(Error::InvalidInput);
         }
@@ -106,18 +151,18 @@ impl AuthoredLibrary {
             .map_err(|_| Error::InvalidInput)?,
         )
         .map_err(|_| Error::InvalidInput)?;
+        let mut files = vec![("ir.json".to_owned(), ir.to_vec())];
+        files.extend(contexts.iter().cloned());
         VerifiedLibrarySet::verify(
             &schemas,
             &lock.to_string(),
-            &[LibraryInput::new(
-                text.to_owned(),
-                vec![("ir.json".to_owned(), ir.to_vec())],
-            )],
+            &[LibraryInput::new(text.to_owned(), files)],
         )
         .map_err(|_| Error::InvalidInput)?;
         Ok(Self {
             manifest: manifest.to_vec(),
             ir: ir.to_vec(),
+            contexts: contexts.into_iter().collect(),
             metadata,
         })
     }
@@ -128,6 +173,12 @@ impl AuthoredLibrary {
     /// Exact compiled IR bytes; authoring never rewrites them.
     pub fn ir_bytes(&self) -> &[u8] {
         &self.ir
+    }
+    /// Verified relative context paths and exact bytes, sorted by path.
+    pub fn context_files(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.contexts
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
     }
     /// Verified normalized manifest and domain-separated content identity.
     pub fn metadata(&self) -> &NormalizedMetadata {

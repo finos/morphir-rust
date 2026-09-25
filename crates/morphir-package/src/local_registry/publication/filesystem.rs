@@ -260,6 +260,87 @@ impl Directory {
         })?;
         self.descend(parent)?.read(last, limit)
     }
+    pub(super) fn read_relative(&self, path: &str, limit: usize) -> io::Result<Vec<u8>> {
+        match path.rsplit_once('/') {
+            Some((parent, last)) => self.descend(parent)?.read(last, limit),
+            None => self.read(path, limit),
+        }
+    }
+    pub(super) fn install_relative(&self, path: &str, bytes: &[u8]) -> io::Result<()> {
+        let mut directory = Self(self.0.try_clone()?);
+        let mut parts = path.split('/').peekable();
+        while let Some(part) = parts.next() {
+            if parts.peek().is_none() {
+                return directory.install(part, bytes);
+            }
+            match directory.mkdir(part) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            directory = directory.child(part)?;
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "empty relative path",
+        ))
+    }
+    pub(super) fn inventory(&self) -> io::Result<Vec<String>> {
+        fn visit(directory: &Directory, prefix: &str, paths: &mut Vec<String>) -> io::Result<()> {
+            for name in directory.names()? {
+                let path = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}/{name}")
+                };
+                crate::local_registry::RegistryPath::parse(&path).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "unsafe bundle path")
+                })?;
+                let file = file_at(
+                    directory.0.as_raw_fd(),
+                    &self::name(&name)?,
+                    libc::O_RDONLY | libc::O_NONBLOCK,
+                    0,
+                )?;
+                let kind = file.metadata()?.file_type();
+                if kind.is_dir() {
+                    let before = paths.len();
+                    visit(&Directory(file), &path, paths)?;
+                    if paths.len() == before {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "empty bundle directory",
+                        ));
+                    }
+                } else if kind.is_file() {
+                    use std::os::unix::fs::MetadataExt;
+                    if file.metadata()?.nlink() != 1 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "linked bundle file",
+                        ));
+                    }
+                    paths.push(path);
+                    if paths.len() > 8192 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "bundle inventory limit",
+                        ));
+                    }
+                } else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "unsafe bundle file type",
+                    ));
+                }
+            }
+            Ok(())
+        }
+        let mut paths = Vec::new();
+        visit(self, "", &mut paths)?;
+        paths.sort();
+        Ok(paths)
+    }
     pub(super) fn descend(&self, path: &str) -> io::Result<Self> {
         let mut directory = Self(self.0.try_clone()?);
         for part in path.split('/') {

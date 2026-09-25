@@ -6,12 +6,22 @@ use std::collections::BTreeMap;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Manifest {
+    pub format_version: String,
     pub package_path: String,
     pub version: String,
     pub ir: Ir,
     pub dependencies: BTreeMap<String, Requirement>,
     pub exports: BTreeMap<String, String>,
     pub content: BTreeMap<String, String>,
+    #[serde(default)]
+    pub context_resources: BTreeMap<String, ContextResource>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ContextResource {
+    pub media_type: String,
+    pub digest: String,
 }
 
 #[derive(Deserialize)]

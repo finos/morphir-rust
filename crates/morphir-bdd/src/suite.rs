@@ -304,7 +304,7 @@ impl Suite {
     /// The components go in first: they seed the context, and then the suite's extensions build
     /// on it from the scenario's tags, fences and prose, and then its processors run (see
     /// [`Extensions::context_for_seeded`]). So a [`Processor`](morphir_gherkin::extension::Processor)
-    /// can read a component and derive more context from it. An extension that inserts a
+    /// can read a component and derive more context from it. An extension or a processor that inserts a
     /// component of the same type replaces the value given here. Multiple calls apply in the
     /// order they were made, each free to overwrite an earlier component of the same type
     /// ([`Context::insert`]'s own last-write-wins rule).

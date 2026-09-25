@@ -226,7 +226,7 @@ impl Extensions {
     ///
     /// A runner puts its own components into `seed` (for example a value its user configured
     /// once for every scenario). The tag, fence and prose extensions apply next, then the
-    /// processors, and each one sees the seeded components. An extension that inserts a
+    /// processors, and each one sees the seeded components. An extension or a processor that inserts a
     /// component of the same type replaces the seeded value, by [`Context::insert`]'s
     /// last-write-wins rule.
     pub fn context_for_seeded(

@@ -58,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A `Suite` runner writes JSON and JUnit reports and fails on undefined
   steps. Text mismatches print git-style diffs. Reusable file, output and CLI
   step libraries run each command with an isolated home (finos/morphir#946).
+- `morphir-bdd` suites gain the hooks the compatibility kit and `morphir itest`
+  need: `Suite::filter`, `Suite::max_concurrent_scenarios` (1 runs scenarios
+  in parse order), `Suite::with_component` for values every scenario's context
+  starts from, `Suite::on_scenario_finished` with `Console::Off`,
+  `Suite::reader` for other file formats, `SuiteResult::error_messages` for
+  errors that stop a file, a pluggable `CliRunner`, and command timeouts.
+  `morphir-gherkin` adds `Extensions::effect_for`, which decides a scenario's
+  skip effect without running processors, and `context_for_seeded`
+  (finos/morphir#946).
 
 ### Changed
 - `ChannelError` and `HostError::Channel` carry a `cause`, a

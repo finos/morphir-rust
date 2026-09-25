@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use ion_rs::Element;
-use morphir_core::ir::v4::{Annotation, AnnotationArgument};
+use morphir_core::ir::v4::{Annotation, AnnotationArgument, Annotations};
 
 use super::values::{read_value, write_value};
 use super::{fq_name, list, local_name, member};
@@ -19,21 +19,37 @@ use crate::ir_transport::ion::{annotation_names, required_field, required_string
 
 pub(super) fn read_annotations(
     fields: &BTreeMap<&str, &Element>,
-) -> Result<Vec<Annotation>, TransportDiagnostic> {
+) -> Result<Annotations, TransportDiagnostic> {
     let Some(element) = fields.get("annotations") else {
-        return Ok(Vec::new());
+        return Ok(Annotations::default());
     };
-    element
-        .as_list()
-        .ok_or_else(|| member("annotations is a list"))?
-        .iter()
-        .map(read_annotation)
-        .collect()
+    if let Some(items) = element.as_list() {
+        return Ok(Annotations::new(
+            items
+                .iter()
+                .map(read_annotation)
+                .collect::<Result<_, _>>()?,
+        ));
+    }
+    let envelope = struct_fields(element, "annotations")?;
+    let mut object = serde_json::Map::new();
+    for (name, value) in envelope {
+        let value = if name == "entries" {
+            let entries = value
+                .as_list()
+                .ok_or_else(|| member("annotation entries are a list"))?;
+            serde_json::Value::Array(entries.iter().map(entry_json).collect::<Result<_, _>>()?)
+        } else {
+            super::json::from_ion(value)?
+        };
+        object.insert(name.to_owned(), value);
+    }
+    Annotations::parse_unresolved(&serde_json::Value::Object(object)).map_err(member)
 }
 
 pub(super) fn with_annotations(
     builder: ion_rs::StructBuilder,
-    annotations: &[Annotation],
+    annotations: &Annotations,
 ) -> Result<ion_rs::StructBuilder, TransportDiagnostic> {
     if annotations.is_empty() {
         return Ok(builder);
@@ -42,7 +58,48 @@ pub(super) fn with_annotations(
         .iter()
         .map(write_annotation)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(builder.with_field("annotations", list(written)))
+    let Some(metadata) = &annotations.metadata else {
+        return Ok(builder.with_field("annotations", list(written)));
+    };
+    let mut envelope = ion_rs::Struct::builder();
+    if let Some(context) = &metadata.context {
+        envelope = envelope.with_field("@context", super::json::to_ion(context.authored())?);
+    }
+    if !annotations.entries.is_empty() {
+        envelope = envelope.with_field("entries", list(written));
+    }
+    if !metadata.facts.is_empty() {
+        let value =
+            serde_json::to_value(&metadata.facts).map_err(|error| member(error.to_string()))?;
+        envelope = envelope.with_field("facts", super::json::to_ion(&value)?);
+    }
+    Ok(builder.with_field("annotations", Element::from(envelope.build())))
+}
+
+fn entry_json(element: &Element) -> Result<serde_json::Value, TransportDiagnostic> {
+    if let Some(text) = element.as_string() {
+        return Ok(serde_json::Value::String(text.to_owned()));
+    }
+    let fields = struct_fields(element, "annotation")?;
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "name".to_owned(),
+        serde_json::Value::String(required_string(&fields, "name")?.to_owned()),
+    );
+    if let Some(arguments) = fields.get("arguments") {
+        let arguments = arguments
+            .as_list()
+            .ok_or_else(|| member("annotation arguments are a list"))?;
+        let values = arguments
+            .iter()
+            .map(|arg| {
+                let parsed = read_argument(arg)?;
+                serde_json::to_value(parsed).map_err(|error| member(error.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        object.insert("arguments".to_owned(), serde_json::Value::Array(values));
+    }
+    Ok(serde_json::Value::Object(object))
 }
 
 /// A definition carries no annotations.
@@ -117,13 +174,26 @@ fn write_annotation(annotation: &Annotation) -> Result<Element, TransportDiagnos
             }
             Element::from(builder.build())
         }
-        Annotation::LinkedCompact { .. }
-        | Annotation::LinkedStructured { .. }
-        | Annotation::PendingCompact { .. }
-        | Annotation::PendingStructured { .. } => {
-            return Err(member(
-                "linked annotation entries are not supported by the Ion v4 profile",
-            ));
+        Annotation::LinkedCompact { authored_name, .. }
+        | Annotation::PendingCompact { authored_name } => Element::string(authored_name.as_str()),
+        Annotation::LinkedStructured {
+            authored_name,
+            args,
+            ..
+        }
+        | Annotation::PendingStructured {
+            authored_name,
+            args,
+        } => {
+            let mut builder = ion_rs::Struct::builder().with_field("name", authored_name.as_str());
+            if !args.is_empty() {
+                let written = args
+                    .iter()
+                    .map(write_argument)
+                    .collect::<Result<Vec<_>, _>>()?;
+                builder = builder.with_field("arguments", list(written));
+            }
+            Element::from(builder.build())
         }
     })
 }

@@ -89,8 +89,18 @@ pub(super) fn read(files: &Tree) -> Result<Sequence, TransportDiagnostic> {
     // A dependency's modules, keyed by its canonical package name, in the order the manifest
     // names the packages and then in path order.
     let mut dependencies: IndexMap<String, Vec<Element>> = IndexMap::new();
+    let mut metadata = None;
     for element in manifest {
         match annotation_names(&element)?.as_slice() {
+            ["morphir", "$meta"] => {
+                if metadata.replace(element).is_some() {
+                    return Err(error(
+                        "morphir::ir::ion::duplicate_name",
+                        MANIFEST,
+                        "document metadata is listed twice",
+                    ));
+                }
+            }
             ["package", role] if *role == dependency_role => {
                 let fields = fields(MANIFEST, &element)?;
                 let name = canonical_package(MANIFEST, required_text(MANIFEST, &fields, "name")?)?;
@@ -174,6 +184,9 @@ pub(super) fn read(files: &Tree) -> Result<Sequence, TransportDiagnostic> {
     }
 
     let mut datagram = Sequence::builder().push(header);
+    if let Some(metadata) = metadata {
+        datagram = datagram.push(metadata);
+    }
     for (name, modules) in dependencies {
         let mut spec = Struct::builder().with_field("name", name.as_str());
         if !modules.is_empty() {
@@ -651,6 +664,7 @@ pub(super) fn write(
         let fields = fields(MANIFEST, &element)?;
         match names.as_slice() {
             ["morphir_footer"] => {}
+            ["morphir", "$meta"] => manifest.push(element),
             ["package", role @ ("spec" | "def")] => {
                 let name = required_text(MANIFEST, &fields, "name")?;
                 let dependency = canonical_package(MANIFEST, name)?;

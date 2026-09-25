@@ -29,6 +29,13 @@ pub struct Annotations {
 }
 
 impl Annotations {
+    /// Retain an authored envelope until the containing document's context is known.
+    /// Callers must validate the completed IR file before exposing it.
+    pub fn parse_unresolved(value: &serde_json::Value) -> Result<Self, String> {
+        super::serde_document::decode_annotations_value(value, "annotations")
+            .map_err(|error| error.message)
+    }
+
     /// Make an ordinary annotation array with no linked facts.
     pub fn new(entries: Vec<Annotation>) -> Self {
         Self {

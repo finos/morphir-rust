@@ -154,7 +154,9 @@ impl MetadataScope {
     }
 
     /// Preserve a local spelling until the enclosing document context is known.
-    pub(super) fn parse_unresolved(
+    /// Retain an authored scope until the containing document's defaults are known.
+    /// Callers must validate the completed IR file before exposing it.
+    pub fn parse_unresolved(
         context: Option<&Value>,
         facts: Option<&Value>,
     ) -> Result<Self, String> {

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opted-in Ion draft.2 reads and writes 4.1.0 linked metadata in datagrams and
+  document trees, and reads the equivalent `$meta` member in a single record.
+  Document context defaults, protected bindings, Type/Value attributes and
+  specification annotations survive roundtrip (finos/morphir#883).
 - `morphir-common` can explicitly load linked-metadata context files from a
   confined document root or a trusted digest resolver, with byte, count and
   depth limits before pure context resolution (finos/morphir#883).

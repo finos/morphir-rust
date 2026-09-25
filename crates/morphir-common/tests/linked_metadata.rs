@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 
 use morphir_common::ir_transport::{
-    CodecOptions, DocumentTreeSink, EventSink, EventSource, FormatId, IonCodec, IrCodec, IrVersion,
-    JsonCodec, Layout, TransportDiagnostic, YamlCodec,
+    CodecOptions, DocumentTreeSink, DocumentTreeSource, EventSink, EventSource, FormatId, IonCodec,
+    IrCodec, IrVersion, JsonCodec, Layout, TransportDiagnostic, YamlCodec,
 };
 use morphir_common::vfs::memory_root;
 use morphir_core::traversal::{DistributionHeader, SemanticEvent, SemanticEventKind};
@@ -76,6 +76,22 @@ fn example() -> Value {
     document
 }
 
+fn inherited_example() -> Value {
+    let mut document = example();
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["types"]["data-tables"]["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"]
+        .as_object_mut().unwrap().remove("@context");
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["values"]["calculate-total"]["ExpressionBody"]["body"]["Literal"]["attributes"]
+        .as_object_mut().unwrap().remove("@context");
+    let public_api = document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]
+        ["basics"]["values"]["add"]["annotations"]["@context"]["publicApi"]
+        .clone();
+    document["$meta"]["@context"]["publicApi"] = public_api;
+    document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]["add"]["annotations"].as_object_mut().unwrap().remove("@context");
+    document
+}
+
 fn options(format: FormatId) -> CodecOptions {
     CodecOptions::new(IrVersion::V4, Layout::SingleFile, format).with_linked_metadata()
 }
@@ -127,6 +143,162 @@ fn metadata_carriers_survive_json_and_yaml_single_file_transport() {
             json!({"deprecated": true})
         );
     }
+}
+
+#[test]
+fn ion_draft_two_preserves_type_value_and_annotation_metadata() {
+    let document = example();
+    let mut events = Events::default();
+    JsonCodec::new()
+        .decode(
+            &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+            &options(FormatId::json()),
+            &mut events,
+        )
+        .unwrap();
+    let mut ion = Vec::new();
+    IonCodec::new()
+        .encode(
+            &mut Source(events.0.into()),
+            &mut ion,
+            &options(FormatId::ion()),
+        )
+        .unwrap();
+    let mut read = Events::default();
+    IonCodec::new()
+        .decode(&mut Cursor::new(&ion), &options(FormatId::ion()), &mut read)
+        .unwrap();
+    let mut json = Vec::new();
+    JsonCodec::new()
+        .encode(
+            &mut Source(read.0.into()),
+            &mut json,
+            &options(FormatId::json()),
+        )
+        .unwrap();
+    let actual: Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(actual["$meta"], document["$meta"]);
+    let module = &actual["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]
+        ["Public"];
+    assert_eq!(
+        module["types"]["data-tables"]["Public"]["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"]
+            ["facts"],
+        json!({"deprecated": true})
+    );
+    assert_eq!(
+        module["values"]["calculate-total"]["Public"]["ExpressionBody"]["body"]["Literal"]["attributes"]
+            ["facts"],
+        json!({"deprecated": true})
+    );
+    assert_eq!(
+        actual["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+            ["add"]["annotations"],
+        document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+            ["add"]["annotations"]
+    );
+}
+
+#[test]
+fn ion_draft_two_tree_preserves_all_three_carriers() {
+    let document = inherited_example();
+    let mut events = Events::default();
+    JsonCodec::new()
+        .decode(
+            &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+            &options(FormatId::json()),
+            &mut events,
+        )
+        .unwrap();
+    let root = memory_root();
+    let tree_options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::ion())
+        .with_linked_metadata();
+    let mut sink = DocumentTreeSink::new(root.clone(), tree_options.clone()).unwrap();
+    for event in events.0 {
+        sink.accept(event).unwrap();
+    }
+    sink.finish().unwrap();
+    let mut source = DocumentTreeSource::open(root, tree_options).unwrap();
+    let mut json = Vec::new();
+    JsonCodec::new()
+        .encode(&mut source, &mut json, &options(FormatId::json()))
+        .unwrap();
+    let actual: Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(actual["$meta"], document["$meta"]);
+    assert_eq!(
+        actual["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+            ["add"]["annotations"],
+        document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+            ["add"]["annotations"]
+    );
+    let module = &actual["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]
+        ["Public"];
+    assert_eq!(
+        module["types"]["data-tables"]["Public"]["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"]
+            ["facts"],
+        json!({"deprecated": true})
+    );
+    assert_eq!(
+        module["values"]["calculate-total"]["Public"]["ExpressionBody"]["body"]["Literal"]["attributes"]
+            ["facts"],
+        json!({"deprecated": true})
+    );
+}
+
+#[test]
+fn ion_resolves_inherited_document_context_for_all_carriers() {
+    let document = inherited_example();
+    let mut events = Events::default();
+    JsonCodec::new()
+        .decode(
+            &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+            &options(FormatId::json()),
+            &mut events,
+        )
+        .unwrap();
+    let mut output = Vec::new();
+    IonCodec::new()
+        .encode(
+            &mut Source(events.0.into()),
+            &mut output,
+            &options(FormatId::ion()),
+        )
+        .unwrap();
+    let mut read = Events::default();
+    IonCodec::new()
+        .decode(
+            &mut Cursor::new(output),
+            &options(FormatId::ion()),
+            &mut read,
+        )
+        .unwrap();
+    let mut json = Vec::new();
+    JsonCodec::new()
+        .encode(
+            &mut Source(read.0.into()),
+            &mut json,
+            &options(FormatId::json()),
+        )
+        .unwrap();
+    let actual: Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(actual["$meta"], document["$meta"]);
+    assert_eq!(
+        actual["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+            ["add"]["annotations"],
+        document["distribution"]["Library"]["dependencies"]["morphir/SDK"]["modules"]["basics"]["values"]
+            ["add"]["annotations"]
+    );
+    let module = &actual["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]
+        ["Public"];
+    assert_eq!(
+        module["types"]["data-tables"]["Public"]["TypeAliasDefinition"]["typeExp"]["Record"]["attributes"]
+            ["facts"],
+        json!({"deprecated": true})
+    );
+    assert_eq!(
+        module["values"]["calculate-total"]["Public"]["ExpressionBody"]["body"]["Literal"]["attributes"]
+            ["facts"],
+        json!({"deprecated": true})
+    );
 }
 
 #[test]

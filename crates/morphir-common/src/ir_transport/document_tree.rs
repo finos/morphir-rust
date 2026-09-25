@@ -292,7 +292,7 @@ fn validate_options(options: &CodecOptions) -> Result<Policy, TransportDiagnosti
             "select the document-tree layout",
         ));
     }
-    if options.linked_metadata() {
+    if options.linked_metadata() && spelling != Spelling::Ion {
         return Err(tree_error(
             "morphir::ir::document_tree::unsupported_metadata",
             Stage::Detection,
@@ -604,6 +604,7 @@ impl DocumentTreeSink {
             None => SinkSpelling::Ion(IonSink {
                 root,
                 version: options.version(),
+                linked_metadata: options.linked_metadata(),
                 path_budget: policy.path_budget,
                 events: VecDeque::new(),
                 ended: false,
@@ -686,6 +687,7 @@ fn prune(tree: &VfsPath) -> Result<(), TransportDiagnostic> {
 struct IonSink {
     root: VfsPath,
     version: IrVersion,
+    linked_metadata: bool,
     path_budget: u32,
     events: VecDeque<SemanticEvent>,
     ended: bool,
@@ -707,7 +709,12 @@ impl EventSink for IonSink {
         }
         self.ended = true;
         let mut source = QueueSource(std::mem::take(&mut self.events));
-        let files = ion::write_tree(&mut source, self.version, self.path_budget)?;
+        let files = ion::write_tree(
+            &mut source,
+            self.version,
+            self.linked_metadata,
+            self.path_budget,
+        )?;
         prune(&self.root)?;
         files
             .into_iter()
@@ -1349,7 +1356,12 @@ impl DocumentTreeSource {
                     }
                 }
             }
-            None => ion::read_tree(&files, options.version(), &mut queue)?,
+            None => ion::read_tree(
+                &files,
+                options.version(),
+                options.linked_metadata(),
+                &mut queue,
+            )?,
         }
         Ok(Self {
             events: queue.events,

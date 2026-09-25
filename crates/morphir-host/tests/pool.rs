@@ -627,7 +627,7 @@ async fn a_result_that_does_not_decode_is_not_retried() {
         .call::<_, u32, _, _>(&key, "fp", open.clone(), "compile", &())
         .await
         .unwrap_err();
-    assert!(matches!(error, CallError::Decode(_)), "{error:?}");
+    assert!(matches!(error, CallError::Invalid(_)), "{error:?}");
     assert_eq!(
         opens.load(Ordering::SeqCst),
         1,
@@ -681,6 +681,30 @@ async fn a_failed_open_is_connect_and_a_failed_handshake_is_handshake() {
         1,
         "a failed handshake is not retried"
     );
+}
+
+// A replacement guest whose handshake fails after a broken session is
+// reported as `CallError::Handshake`, not as the call failure that led to it,
+// and is not retried again.
+#[tokio::test]
+async fn a_replacement_whose_handshake_fails_is_reported_as_a_handshake_failure() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let open = opener("guest", Arc::clone(&opens), |attempt| match attempt {
+        0 => vec![
+            Ok(ok(1, frontend_initialize_result("guest"))),
+            Err(transport_failure()),
+        ],
+        _ => vec![Ok(rejected(1))],
+    });
+    let pool: Pool<String> = Pool::new(config());
+
+    let error = pool
+        .call::<_, Value, _, _>(&"provider".to_owned(), "fp", open, "compile", &())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CallError::Handshake(_)), "{error:?}");
+    assert_eq!(opens.load(Ordering::SeqCst), 2);
 }
 
 // (Minor, item 3b) A fingerprint change does not just forget the old

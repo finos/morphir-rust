@@ -70,10 +70,10 @@ struct Slot {
 /// Because of that retry, a pooled call must be safe to send twice: when a
 /// session breaks mid-call the guest may already have run the first attempt.
 ///
-/// [`CallError::Decode`] means the guest answered but its result did not
-/// decode. The session already closed itself in order, so the slot is left
-/// empty and the next call opens fresh. It is not retried: the same guest
-/// build would give the same bad answer.
+/// [`CallError::Invalid`] means the guest answered, but its result did not
+/// decode or failed the host's checks. The session already closed itself in
+/// order, so the slot is left empty and the next call opens fresh. It is not
+/// retried: the same guest build would give the same bad answer.
 ///
 /// [`CallError::Connect`] means `open` failed, so no guest was reached.
 /// [`CallError::Handshake`] means `open` returned a connection but the MEP
@@ -251,12 +251,12 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                 *guard = Some(state);
                 Err(CallError::Rejected(error))
             }
-            Err(CallError::Decode(error)) => {
+            Err(CallError::Invalid(error)) => {
                 // The session closed itself in order; the slot stays empty.
                 // The same build would give the same answer, so this is not
                 // retried.
                 drop(state);
-                Err(CallError::Decode(error))
+                Err(CallError::Invalid(error))
             }
             Err(CallError::Failed(_)) => {
                 // The connection already tore its own transport down on this

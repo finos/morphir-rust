@@ -5,11 +5,13 @@ use morphir_extension_sdk::{
 };
 use morphir_host::testing::MemoryChannel;
 use morphir_host::{
-    BasicChecks, CallError, ChannelCause, ChannelError, ChannelState, HostConfig, HostError,
-    JsonRpcConnection, Session,
+    BasicChecks, CallError, ChannelCause, ChannelError, ChannelState, GuestConnection, HostConfig,
+    HostError, JsonRpcConnection, Pool, Session,
 };
 use morphir_host_native::CheckedConnection;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn config() -> HostConfig {
     HostConfig::new(PeerInfo {
@@ -71,7 +73,7 @@ async fn a_traversal_artifact_ends_the_session() {
 
     let error = session.generate(generate_request()).await.unwrap_err();
 
-    let CallError::Failed(error) = error else {
+    let CallError::Invalid(error) = error else {
         panic!("a rejected artifact must end the session: {error:?}");
     };
     assert_eq!(
@@ -119,7 +121,7 @@ async fn a_failed_shutdown_after_a_rejected_result_names_both_failures() {
 
     let error = session.generate(generate_request()).await.unwrap_err();
 
-    let CallError::Failed(HostError::Channel { message, state, .. }) = error else {
+    let CallError::Invalid(HostError::Channel { message, state, .. }) = error else {
         panic!("a failed shutdown keeps its channel state: {error:?}");
     };
     assert_eq!(state, ChannelState::Indeterminate);
@@ -163,4 +165,63 @@ async fn a_valid_result_passes_through_and_keeps_the_session_ready() {
         Some(methods::EXIT)
     );
     assert_eq!(log.closes(), 1);
+}
+
+// A result that fails the host's checks is a deterministic bad answer: the
+// same guest build would give it again. The pool reports it once, with the
+// check's own text, and opens no second guest to ask again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pooled_result_that_fails_a_check_is_not_retried() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let open = {
+        let opens = Arc::clone(&opens);
+        move || {
+            opens.fetch_add(1, Ordering::SeqCst);
+            let channel = MemoryChannel::new()
+                .respond(ExtensionResponse::success(1, backend()).unwrap())
+                .respond(
+                    ExtensionResponse::success(
+                        2,
+                        json!({
+                            "success": true,
+                            "artifacts": [{"path": "../../escape.avsc", "content": "{}"}],
+                            "diagnostics": []
+                        }),
+                    )
+                    .unwrap(),
+                )
+                .respond(ExtensionResponse::success(3, json!({})).unwrap());
+            let connection: Box<dyn GuestConnection> = Box::new(CheckedConnection::new(
+                JsonRpcConnection::new(channel, BasicChecks::new("guest")),
+            ));
+            std::future::ready(Ok(connection))
+        }
+    };
+    let pool: Pool<String> = Pool::new(config());
+
+    let error = pool
+        .call::<_, serde_json::Value, _, _>(
+            &"provider".to_owned(),
+            "fp",
+            open,
+            methods::GENERATE,
+            &generate_request(),
+        )
+        .await
+        .unwrap_err();
+
+    let CallError::Invalid(error) = error else {
+        panic!("a result that fails a check is Invalid: {error:?}");
+    };
+    assert_eq!(
+        error.to_string(),
+        "Generated artifact path '../../escape.avsc' is invalid: invalid local artifact path \
+         \"../../escape.avsc\": expected a normalized relative path of at most 4096 UTF-8 bytes \
+         and 1024 UTF-16 units with portable filename components"
+    );
+    assert_eq!(
+        opens.load(Ordering::SeqCst),
+        1,
+        "a failed check opens no second guest"
+    );
 }

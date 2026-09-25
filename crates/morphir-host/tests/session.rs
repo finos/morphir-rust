@@ -1,7 +1,10 @@
 use morphir_extension_sdk::protocol::{ExtensionResponse, PeerInfo, PeerKind, RpcError, methods};
 use morphir_extension_sdk::{CompileRequest, CompileResult};
 use morphir_host::testing::{MemoryChannel, frontend_initialize_result};
-use morphir_host::{BasicChecks, CallError, HostConfig, JsonRpcConnection, Session, compile_once};
+use morphir_host::{
+    BasicChecks, CallError, ChannelCause, ChannelError, ChannelState, HostConfig, HostError,
+    JsonRpcConnection, Session, compile_once,
+};
 use serde_json::json;
 
 fn config() -> HostConfig {
@@ -145,7 +148,7 @@ async fn closing_after_a_decode_failure_closes_the_channel_once() {
     let mut session = Session::open(connection, &config()).await.unwrap();
 
     match session.compile(CompileRequest::default()).await {
-        Err(CallError::Decode(_)) => {}
+        Err(CallError::Invalid(_)) => {}
         other => panic!("expected a decode failure, got {other:?}"),
     }
 
@@ -160,5 +163,36 @@ async fn closing_after_a_decode_failure_closes_the_channel_once() {
             methods::SHUTDOWN,
             methods::EXIT
         ]
+    );
+}
+
+// A result that does not decode still ends the session in order. When that
+// shutdown fails too, the error names both failures and keeps the channel
+// state the shutdown failure proves.
+#[tokio::test]
+async fn a_failed_shutdown_after_a_result_that_does_not_decode_names_both_failures() {
+    let channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .respond(ok(2, json!({"not": "a compile result"})))
+        .fail(ChannelError {
+            message: "pipe closed".into(),
+            state: ChannelState::Indeterminate,
+            cause: ChannelCause::Transport,
+        });
+    let connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+    let mut session = Session::open(connection, &config()).await.unwrap();
+
+    let error = session
+        .compile(CompileRequest::default())
+        .await
+        .unwrap_err();
+
+    let CallError::Invalid(HostError::Channel { message, state, .. }) = error else {
+        panic!("a failed shutdown keeps its channel state: {error:?}");
+    };
+    assert_eq!(state, ChannelState::Indeterminate);
+    assert!(
+        message.ends_with("; orderly shutdown also failed: pipe closed"),
+        "{message}"
     );
 }

@@ -14,13 +14,15 @@ pub enum CallError {
     /// The session broke, and the connection closed its channel.
     #[error(transparent)]
     Failed(HostError),
-    /// The guest answered but its result did not decode. The session was
-    /// closed in order.
+    /// The guest answered, but its result did not decode or failed the
+    /// host's checks. The session was closed in order.
     ///
-    /// Only [`crate::Session::call`] and the pool built on it report this: a
-    /// [`GuestConnection`] returns the result as JSON and does not decode it.
+    /// [`crate::Session::call`] reports this for a result that does not
+    /// decode. A [`GuestConnection`] that checks results, such as
+    /// `morphir_host_native::CheckedConnection`, reports it for a result
+    /// that fails a check.
     #[error(transparent)]
-    Decode(HostError),
+    Invalid(HostError),
     /// Only [`crate::Pool::call`]: the `open` function failed, so no guest
     /// was reached. The error is the one `open` reported.
     ///

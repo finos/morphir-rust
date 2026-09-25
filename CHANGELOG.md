@@ -52,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can open a `Session`.
 - `testing::FakeSource` in `morphir-host` (feature `testing`): a
   `GuestSource` with scripted answers for registry and pool tests.
+- The new `morphir-bdd` crate runs Morphir's Gherkin suites (`.feature` and
+  `.feature.md`) on cucumber-rs. It gives every suite one shared world, a
+  scenario context built by extensions, `@wip` skipping and tag expressions.
+  A `Suite` runner writes JSON and JUnit reports and fails on undefined
+  steps. Text mismatches print git-style diffs. Reusable file, output and CLI
+  step libraries run each command with an isolated home (finos/morphir#946).
 
 ### Changed
 - `ChannelError` and `HostError::Channel` carry a `cause`, a

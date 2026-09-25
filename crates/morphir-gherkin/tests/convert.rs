@@ -513,6 +513,102 @@ fn a_doc_string_with_mid_line_delimiters_stays_triple_quoted_and_escapes_them() 
 }
 
 #[test]
+fn a_nested_list_keeps_its_relative_indent_through_conversion() {
+    // R11 (fix round 3): the writer used to strip every leading space from a description prose
+    // line, so a nested list's relative indent was lost. It now removes only the block's own
+    // common indent, so nested structure survives the round trip.
+    let text = "\
+Feature: F
+  - item one
+    - nested item
+  - item two
+
+  Scenario: S
+    Given a step
+";
+    let (doc, source) = read_str("nested-list.feature", text).unwrap();
+    let (feature_text, _map) = to_feature_text(&doc, &source);
+
+    let lines: Vec<&str> = feature_text.lines().collect();
+    let item_line = lines
+        .iter()
+        .position(|l| l.trim_end() == "  - item one")
+        .unwrap();
+    let nested_line = lines
+        .iter()
+        .position(|l| l.trim_start() == "- nested item")
+        .unwrap();
+    let indent_of = |line: &str| line.len() - line.trim_start().len();
+    assert!(
+        indent_of(lines[nested_line]) > indent_of(lines[item_line]),
+        "{feature_text}"
+    );
+
+    let (back, _) = read_str("nested-list.feature", &feature_text).unwrap();
+    let original: Vec<String> = doc
+        .feature
+        .as_ref()
+        .unwrap()
+        .description
+        .prose()
+        .map(|p| p.markdown.clone())
+        .collect();
+    let round_tripped: Vec<String> = back
+        .feature
+        .unwrap()
+        .description
+        .prose()
+        .map(|p| p.markdown.clone())
+        .collect();
+    assert_eq!(round_tripped, original);
+}
+
+#[test]
+fn a_fence_body_containing_a_triple_backtick_line_round_trips() {
+    // R12 (fix round 3): the writer used to rewrite every description fence with a fixed ``` ```` ```
+    // delimiter, so a body line of 3+ backticks closed the fence early and corrupted the output.
+    // It now picks a delimiter longer than any backtick run that starts a body line.
+    let text = "\
+# Feature: F
+
+````text
+before
+```
+after
+````
+
+## Scenario: S
+
+* Given a step
+";
+    let (md, source) = read_str("fence-backticks.feature.md", text).unwrap();
+    let original_body = md
+        .feature
+        .as_ref()
+        .unwrap()
+        .description
+        .fences()
+        .next()
+        .unwrap()
+        .body
+        .clone();
+    assert_eq!(original_body, "before\n```\nafter\n");
+
+    let (feature_text, _map) = to_feature_text(&md, &source);
+    let (back, _) = read_str("fence-backticks.feature", &feature_text).unwrap();
+    let converted_body = back
+        .feature
+        .unwrap()
+        .description
+        .fences()
+        .next()
+        .unwrap()
+        .body
+        .clone();
+    assert_eq!(converted_body, original_body, "{feature_text}");
+}
+
+#[test]
 fn a_fence_info_string_round_trips_exactly() {
     // Important 4: FenceInfo does not preserve the order of bare words and `key=value` options,
     // so the converter writes `raw`, the fence's original info text, back verbatim.

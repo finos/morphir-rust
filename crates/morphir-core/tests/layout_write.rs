@@ -374,6 +374,7 @@ fn two_module_keys_escaping_to_one_directory_leave_one_entry_per_path() {
 
     let file = IRFile {
         format_version: FormatVersion::Integer(4),
+        metadata: None,
         distribution: morphir_core::ir::Distribution::Library(morphir_core::ir::LibraryContent {
             package_name: package("acme"),
             dependencies: IndexMap::new(),

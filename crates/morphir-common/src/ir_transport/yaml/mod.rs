@@ -258,10 +258,14 @@ fn encode_text<T: Serialize + ?Sized>(value: &T) -> Result<String, TransportDiag
 fn write_semantic_file(
     file: SemanticFile,
     writer: &mut dyn Write,
+    options: &CodecOptions,
 ) -> Result<(), TransportDiagnostic> {
     let rendered = match file {
         SemanticFile::ClassicV3(file) => encode_text(&file)?,
-        SemanticFile::V4(file) => encode_text(&file)?,
+        SemanticFile::V4(file) => {
+            semantic::validate_v4_metadata_release(&file, options)?;
+            encode_text(&file)?
+        }
     };
     writer
         .write_all(rendered.as_bytes())
@@ -287,7 +291,12 @@ impl IrCodec for YamlCodec {
         // the JSON codec drops `probe.observations` here too — so a caller that wants them calls
         // `probe_yaml_header`; what matters is that the YAML path can still answer them.
         let _observations = header_observations(&value);
-        let normalized = format_version_of(&value, &SupportTable::reference())?;
+        let support = if options.linked_metadata() {
+            SupportTable::linked_metadata()
+        } else {
+            SupportTable::reference()
+        };
+        let normalized = format_version_of(&value, &support)?;
         stacker::grow(IR_RECURSION_STACK_BYTES, || match options.version() {
             IrVersion::V3 => {
                 if normalized.release.major() != 3 {
@@ -313,7 +322,7 @@ impl IrCodec for YamlCodec {
         writer: &'writer mut dyn Write,
         options: &CodecOptions,
     ) -> Result<Box<dyn EventSink + 'writer>, TransportDiagnostic> {
-        Ok(Box::new(YamlEventEncoder::new(writer, options.version())))
+        Ok(Box::new(YamlEventEncoder::new(writer, options.clone())))
     }
 
     fn encode(
@@ -322,7 +331,11 @@ impl IrCodec for YamlCodec {
         writer: &mut dyn Write,
         options: &CodecOptions,
     ) -> Result<(), TransportDiagnostic> {
-        write_semantic_file(semantic::collect(source, options.version())?, writer)
+        write_semantic_file(
+            semantic::collect(source, options.version())?,
+            writer,
+            options,
+        )
     }
 }
 
@@ -335,16 +348,16 @@ impl IrCodec for YamlCodec {
 /// (`morphir::ir::codec::missing_begin` and its neighbours), not a second set of rules here.
 struct YamlEventEncoder<'writer> {
     writer: &'writer mut dyn Write,
-    version: IrVersion,
+    options: CodecOptions,
     events: VecDeque<SemanticEvent>,
     finished: bool,
 }
 
 impl<'writer> YamlEventEncoder<'writer> {
-    fn new(writer: &'writer mut dyn Write, version: IrVersion) -> Self {
+    fn new(writer: &'writer mut dyn Write, options: CodecOptions) -> Self {
         Self {
             writer,
-            version,
+            options,
             events: VecDeque::new(),
             finished: false,
         }
@@ -381,7 +394,7 @@ impl EventSink for YamlEventEncoder<'_> {
         }
         self.finished = true;
         let mut source = BufferedSource(std::mem::take(&mut self.events));
-        let file = semantic::collect(&mut source, self.version)?;
-        write_semantic_file(file, self.writer)
+        let file = semantic::collect(&mut source, self.options.version())?;
+        write_semantic_file(file, self.writer, &self.options)
     }
 }

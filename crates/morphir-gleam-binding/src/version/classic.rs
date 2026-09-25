@@ -443,6 +443,7 @@ mod value_tests {
         };
         let file = v::IRFile {
             format_version: Default::default(),
+            metadata: None,
             distribution: v::Distribution::Library(v::LibraryContent {
                 package_name: naming::PackageName::parse("example/arity"),
                 dependencies: Default::default(),

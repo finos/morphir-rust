@@ -371,6 +371,7 @@ fn pinned_resolution_uses_exact_snapshot_while_current_can_be_ambiguous() {
     let distribution = v4_record();
     let file = v4::IRFile {
         format_version: v4::FormatVersion::Integer(4),
+        metadata: None,
         distribution: distribution.clone(),
     };
     let bytes = morphir_core::ir::json::write_ir_file(&file).into_bytes();
@@ -420,6 +421,7 @@ fn pinned_resolution_uses_exact_snapshot_while_current_can_be_ambiguous() {
 fn equivalent_v4_json_and_yaml_yield_identical_semantic_addresses() {
     let file = v4::IRFile {
         format_version: v4::FormatVersion::Integer(4),
+        metadata: None,
         distribution: v4_record(),
     };
     let json = morphir_core::ir::json::write_ir_file(&file);

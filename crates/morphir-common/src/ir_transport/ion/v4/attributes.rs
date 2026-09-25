@@ -23,6 +23,7 @@ pub(super) fn read_type_attributes(
     fields: &BTreeMap<&str, &Element>,
 ) -> Result<TypeAttributes, TransportDiagnostic> {
     Ok(TypeAttributes {
+        metadata: Default::default(),
         source: fields.get("source").map(|e| read_source(e)).transpose()?,
         constraints: object(fields, "constraints")?,
         extensions: object(fields, "extensions")?,
@@ -33,6 +34,11 @@ pub(super) fn with_type_attributes(
     mut builder: ion_rs::StructBuilder,
     attributes: &TypeAttributes,
 ) -> Result<ion_rs::StructBuilder, TransportDiagnostic> {
+    if !attributes.metadata.is_empty() {
+        return Err(member(
+            "linked metadata is not supported by the Ion v4 profile",
+        ));
+    }
     if let Some(source) = &attributes.source {
         builder = builder.with_field("source", write_source(source));
     }
@@ -55,6 +61,7 @@ pub(super) fn read_value_attributes(
         )));
     }
     Ok(ValueAttributes {
+        metadata: Default::default(),
         source: fields.get("source").map(|e| read_source(e)).transpose()?,
         inferred_type: fields
             .get("inferredType")
@@ -68,6 +75,11 @@ pub(super) fn read_value_attributes(
 pub(super) fn value_attributes(
     attributes: &ValueAttributes,
 ) -> Result<Option<Element>, TransportDiagnostic> {
+    if !attributes.metadata.is_empty() {
+        return Err(member(
+            "linked metadata is not supported by the Ion v4 profile",
+        ));
+    }
     if *attributes == ValueAttributes::default() {
         return Ok(None);
     }

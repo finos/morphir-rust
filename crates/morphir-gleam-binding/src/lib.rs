@@ -818,6 +818,7 @@ mod tests {
         };
         let dependency = IRFile {
             format_version: FormatVersion::String(IR_VERSION.into()),
+            metadata: None,
             distribution: Distribution::Library(LibraryContent {
                 package_name: PackageName::parse("example/dependency"),
                 dependencies: IndexMap::new(),
@@ -862,7 +863,7 @@ mod tests {
             Documented::new(
                 None,
                 TypeSpecification::OpaqueTypeSpecification {
-                    annotations: vec![],
+                    annotations: Vec::new().into(),
                     type_params: vec![Name::from("parameter")],
                 }
             )
@@ -872,7 +873,7 @@ mod tests {
             Documented::new(
                 None,
                 ValueSpecification {
-                    annotations: vec![],
+                    annotations: Vec::new().into(),
                     inputs: IndexMap::from([(
                         "argument".into(),
                         Type::unit(TypeAttributes::default())
@@ -918,6 +919,7 @@ mod tests {
             .expect("decode typed dependency distribution");
         dependency.distribution = serde_json::to_value(IRFile {
             format_version: FormatVersion::Integer(3),
+            metadata: None,
             distribution,
         })
         .expect("serialize dependency IR file");

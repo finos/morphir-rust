@@ -195,6 +195,7 @@ fn independent_closure() -> serde_json::Value {
     };
     serde_json::to_value(IRFile {
         format_version: FormatVersion::Integer(4),
+        metadata: None,
         distribution: Distribution::Library(LibraryContent {
             package_name: PackageName::from_canonical_string("acme/functions").unwrap(),
             dependencies: Default::default(),

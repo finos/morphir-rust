@@ -26,7 +26,6 @@ use serde::de::Deserializer;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
-use super::annotation::Annotation;
 use super::attributes::ValueAttributes;
 use super::literal::Literal;
 use super::pattern::Pattern;
@@ -457,7 +456,7 @@ impl NativeInfo {
 pub struct ValueSpecification {
     /// The annotations on the value's public face, written first and only when non-empty
     /// (definitions-0021).
-    pub annotations: Vec<Annotation>,
+    pub annotations: super::annotation::Annotations,
     pub inputs: IndexMap<String, Type>,
     pub output: Type,
 }

@@ -125,6 +125,7 @@ pub(super) fn compile(request: &CompileRequest) -> Outcome<(IRFile, Vec<String>)
     }
     let ir = IRFile {
         format_version: FormatVersion::Integer(4),
+        metadata: None,
         distribution: Distribution::Library(LibraryContent {
             package_name: package,
             dependencies: Default::default(),

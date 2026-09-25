@@ -75,7 +75,12 @@ impl IrCodec for JsonCodec {
         options: &CodecOptions,
         sink: &mut dyn EventSink,
     ) -> Result<(), TransportDiagnostic> {
-        let (probe, input) = probe_json_root(reader, &SupportTable::reference())?;
+        let support = if options.linked_metadata() {
+            SupportTable::linked_metadata()
+        } else {
+            SupportTable::reference()
+        };
+        let (probe, input) = probe_json_root(reader, &support)?;
         match options.version() {
             IrVersion::V3 => {
                 if probe.normalized.release.major() != 3 {
@@ -159,7 +164,10 @@ impl IrCodec for JsonCodec {
     ) -> Result<Box<dyn EventSink + 'writer>, TransportDiagnostic> {
         match options.version() {
             IrVersion::V3 => Ok(Box::new(V3JsonEventEncoder::new(writer))),
-            IrVersion::V4 => Ok(Box::new(V4JsonEventEncoder::new(writer))),
+            IrVersion::V4 => Ok(Box::new(V4JsonEventEncoder::new(
+                writer,
+                options.linked_metadata(),
+            ))),
         }
     }
 
@@ -175,6 +183,7 @@ impl IrCodec for JsonCodec {
                 serde_json::to_writer(&mut *writer, &file).map_err(Self::encode_error)?;
             }
             SemanticFile::V4(file) => {
+                semantic::validate_v4_metadata_release(&file, options)?;
                 serde_json::to_writer(&mut *writer, &file).map_err(Self::encode_error)?;
             }
         }
@@ -351,6 +360,11 @@ impl EventSink for V3JsonEventEncoder<'_> {
                 &cursor,
                 "the v3 JSON encoder received a v4 module",
             )),
+            SemanticEventKind::DocumentMetadata(_) => Err(json_stream_error(
+                "version_mismatch",
+                &cursor,
+                "the v3 JSON encoder received v4 document metadata",
+            )),
             SemanticEventKind::End => {
                 self.start_modules(&cursor)?;
                 self.write(b"]}]}\n")?;
@@ -387,11 +401,14 @@ struct V4JsonEventEncoder<'writer> {
     first_module: bool,
     dependency_names: HashSet<String>,
     module_names: HashSet<String>,
+    metadata: Option<Box<v4::DocumentMeta>>,
+    linked_metadata: bool,
+    release: Option<v4::FormatVersion>,
     ended: bool,
 }
 
 impl<'writer> V4JsonEventEncoder<'writer> {
-    fn new(writer: &'writer mut dyn Write) -> Self {
+    fn new(writer: &'writer mut dyn Write, linked_metadata: bool) -> Self {
         Self {
             writer,
             distribution: None,
@@ -401,6 +418,9 @@ impl<'writer> V4JsonEventEncoder<'writer> {
             first_module: true,
             dependency_names: HashSet::new(),
             module_names: HashSet::new(),
+            metadata: None,
+            linked_metadata,
+            release: None,
             ended: false,
         }
     }
@@ -416,6 +436,25 @@ impl<'writer> V4JsonEventEncoder<'writer> {
             serde_json::to_writer(&mut self.writer, value)
         })
         .map_err(JsonCodec::encode_error)
+    }
+
+    fn check_fragment_metadata(
+        &self,
+        value: &impl serde::Serialize,
+        cursor: &IrCursor,
+    ) -> Result<(), TransportDiagnostic> {
+        if self.release == Some(v4::FormatVersion::String("4.1.0".to_owned())) {
+            return Ok(());
+        }
+        let fragment = serde_json::to_value(value).map_err(JsonCodec::encode_error)?;
+        if v4::contains_linked_metadata(&fragment) {
+            return Err(json_stream_error(
+                "metadata_version_mismatch",
+                cursor,
+                "linked metadata requires formatVersion 4.1.0",
+            ));
+        }
+        Ok(())
     }
 
     fn begin(
@@ -462,6 +501,15 @@ impl<'writer> V4JsonEventEncoder<'writer> {
                 ));
             }
         };
+        if format_version == v4::FormatVersion::String("4.1.0".to_owned()) && !self.linked_metadata
+        {
+            return Err(json_stream_error(
+                "unsupported_format_version_minor",
+                cursor,
+                "formatVersion 4.1.0 requires the linked-metadata codec option",
+            ));
+        }
+        self.release = Some(format_version.clone());
         self.write(b"{\"formatVersion\":")?;
         self.write_json(&format_version)?;
         self.write(format!(",\"distribution\":{{\"{tag}\":{{\"packageName\":"))?;
@@ -494,6 +542,7 @@ impl<'writer> V4JsonEventEncoder<'writer> {
                 package,
                 specification,
             } => {
+                self.check_fragment_metadata(&specification, cursor)?;
                 if matches!(self.distribution, Some(V4JsonDistribution::Application(_))) {
                     return Err(json_stream_error(
                         "dependency_kind_mismatch",
@@ -510,6 +559,7 @@ impl<'writer> V4JsonEventEncoder<'writer> {
                 package,
                 definition,
             } => {
+                self.check_fragment_metadata(&definition, cursor)?;
                 if !matches!(self.distribution, Some(V4JsonDistribution::Application(_))) {
                     return Err(json_stream_error(
                         "dependency_kind_mismatch",
@@ -615,6 +665,12 @@ impl<'writer> V4JsonEventEncoder<'writer> {
                 "the module event does not match the v4 distribution kind",
             ));
         }
+        if let Some(value) = &value {
+            self.check_fragment_metadata(value, cursor)?;
+        }
+        if let Some(specification) = &specification {
+            self.check_fragment_metadata(specification, cursor)?;
+        }
         if !self.module_names.insert(path.clone()) {
             return Err(json_stream_error(
                 "duplicate_module",
@@ -659,7 +715,12 @@ impl<'writer> V4JsonEventEncoder<'writer> {
             self.write(b",\"entryPoints\":")?;
             self.write_json(&entry_points)?;
         }
-        self.write(b"}}}\n")?;
+        self.write(b"}}")?;
+        if let Some(metadata) = self.metadata.take() {
+            self.write(b",\"$meta\":")?;
+            self.write_json(&metadata)?;
+        }
+        self.write(b"}\n")?;
         self.ended = true;
         Ok(())
     }
@@ -677,6 +738,28 @@ impl EventSink for V4JsonEventEncoder<'_> {
         let (cursor, kind) = event.into_parts();
         match kind {
             SemanticEventKind::Begin(header) => self.begin(header, &cursor),
+            SemanticEventKind::DocumentMetadata(metadata) => {
+                if self.release != Some(v4::FormatVersion::String("4.1.0".to_owned())) {
+                    return Err(json_stream_error(
+                        "metadata_version_mismatch",
+                        &cursor,
+                        "document metadata requires formatVersion 4.1.0",
+                    ));
+                }
+                if self.distribution.is_none()
+                    || self.metadata.is_some()
+                    || self.dependencies_started
+                    || self.modules_started
+                {
+                    return Err(json_stream_error(
+                        "metadata_out_of_order",
+                        &cursor,
+                        "document metadata must occur once after the v4 header",
+                    ));
+                }
+                self.metadata = Some(metadata);
+                Ok(())
+            }
             SemanticEventKind::Dependency(dependency) => self.dependency(dependency, &cursor),
             SemanticEventKind::Module(module) => self.module(module, &cursor),
             SemanticEventKind::End => self.end(&cursor),

@@ -742,7 +742,7 @@ pub(super) fn read_value_spec(
         v4::Documented::new(
             optional_doc(&fields)?,
             v4::ValueSpecification {
-                annotations,
+                annotations: annotations.into(),
                 inputs: read_inputs(fields.get("inputs").copied())?,
                 output: read_type(required_field(&fields, "output")?)?,
             },

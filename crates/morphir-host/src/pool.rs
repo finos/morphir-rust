@@ -1,6 +1,7 @@
 //! Warm guest reuse, one session per key.
 //!
-//! See [`Pool`] for the locking, fingerprint, retry and abandon rules.
+//! See [`Pool`] for the locking, fingerprint, retry, abandon and idle
+//! eviction rules.
 
 use crate::connection::{CallError, GuestConnection};
 use crate::send::MaybeSend;
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// One cached guest: the fingerprint it was opened with, and its session.
 struct SlotState {
@@ -23,10 +24,13 @@ struct SlotState {
 
 /// A key's guest, once one exists.
 struct Slot {
-    /// Set by [`Pool::abandon`], under the map lock, when it removes this
-    /// slot from the map. A call that gets the slot's lock after that looks
-    /// the key up again instead of using this slot.
+    /// Set by [`Pool::abandon`] or [`Pool::evict_idle`], under the map lock,
+    /// when it removes this slot from the map. A call that gets the slot's
+    /// lock after that looks the key up again instead of using this slot.
     abandoned: AtomicBool,
+    /// The pool's tick when the slot was made, or when a call last took or
+    /// let go of its lock.
+    last_used: AtomicU64,
     /// `None` before the first call for the key, and while a call holds the
     /// session.
     state: Mutex<Option<SlotState>>,
@@ -99,8 +103,24 @@ struct Slot {
 /// slot's lock does not use the abandoned slot: once it gets the lock it
 /// sees the mark, looks the key up again, and runs against the key's new
 /// slot, like any new call for the key.
+///
+/// # Idle eviction
+///
+/// The pool has no clock, so it stays portable to `wasm32-unknown-unknown`.
+/// It counts ticks instead: the caller calls [`Pool::tick`] on a timer of its
+/// own, and [`Pool::evict_idle`] with `n` forgets every key whose guest was
+/// not used for at least `n` ticks. A call counts as a use when it takes the
+/// slot's lock and again when it lets go of it.
+///
+/// A slot whose lock a call holds is skipped, so eviction never touches a
+/// guest in use. Unlike
+/// [`Pool::abandon`] of a slot in use, every guest that eviction removes is
+/// closed in order. A call that found an evicted slot before eviction removed
+/// it looks the key up again, the same as after `abandon`.
 pub struct Pool<K> {
     config: HostConfig,
+    /// How many times [`Pool::tick`] was called.
+    ticks: AtomicU64,
     slots: Mutex<HashMap<K, Arc<Slot>>>,
 }
 
@@ -109,8 +129,54 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
     pub fn new(config: HostConfig) -> Self {
         Self {
             config,
+            ticks: AtomicU64::new(0),
             slots: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Advance the pool's idle count by one tick.
+    ///
+    /// Call it on a timer. See [Idle eviction](Pool#idle-eviction).
+    pub fn tick(&self) {
+        self.ticks.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Close and forget every guest not used for at least `ticks` ticks.
+    ///
+    /// A guest with a call in flight is skipped. Every guest removed is shut down in order; its close errors are
+    /// ignored, since it is being discarded either way. A key whose slot
+    /// holds no guest is forgotten too. Returns how many guests it closed.
+    pub async fn evict_idle(&self, ticks: u64) -> usize {
+        let now = self.current_tick();
+        let mut evicted = Vec::new();
+        {
+            let mut slots = self.slots.lock().await;
+            slots.retain(|_, slot| {
+                let idle = now.saturating_sub(slot.last_used.load(Ordering::Acquire));
+                if idle < ticks {
+                    return true;
+                }
+                // A held lock means a call is using the slot: keep it.
+                let Some(mut state) = slot.state.try_lock() else {
+                    return true;
+                };
+                slot.abandoned.store(true, Ordering::Release);
+                if let Some(state) = state.take() {
+                    evicted.push(state);
+                }
+                false
+            });
+        }
+        let closed = evicted.len();
+        for state in evicted {
+            let _ = state.session.close().await;
+        }
+        closed
+    }
+
+    /// The pool's current tick.
+    fn current_tick(&self) -> u64 {
+        self.ticks.load(Ordering::Acquire)
     }
 
     /// Call `method` on the guest for `key`.
@@ -136,13 +202,18 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
             let slot = self.slot_for(key).await;
             let mut guard = slot.state.lock().await;
             if slot.abandoned.load(Ordering::Acquire) {
-                // `abandon` removed this slot while this call waited on its
-                // lock: look the key up again.
+                // `abandon` or `evict_idle` removed this slot while this call
+                // waited on its lock: look the key up again.
                 continue;
             }
-            return self
+            slot.last_used.store(self.current_tick(), Ordering::Release);
+            let result = self
                 .call_in(&mut guard, fingerprint, &open, method, params)
                 .await;
+            // Stamped before the lock goes, so a call longer than the idle
+            // limit is not evicted the moment it ends.
+            slot.last_used.store(self.current_tick(), Ordering::Release);
+            return result;
         }
     }
 
@@ -256,6 +327,7 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
         }
         let slot = Arc::new(Slot {
             abandoned: AtomicBool::new(false),
+            last_used: AtomicU64::new(self.current_tick()),
             state: Mutex::new(None),
         });
         slots.insert(key.clone(), Arc::clone(&slot));

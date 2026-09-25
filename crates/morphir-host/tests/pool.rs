@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::{ExtensionResponse, PeerInfo, PeerKind, RpcError, methods};
-use morphir_host::testing::{MemoryChannel, frontend_initialize_result};
+use morphir_host::testing::{MemoryChannel, SentLog, frontend_initialize_result};
 use morphir_host::{
     BasicChecks, CallError, Channel, ChannelCause, ChannelError, ChannelState, GuestConnection,
     HostConfig, HostError, JsonRpcConnection, Outgoing, Pool,
@@ -885,6 +885,257 @@ async fn a_call_waiting_when_the_key_is_abandoned_opens_a_fresh_guest() {
     assert_eq!(opens.load(Ordering::SeqCst), 2);
 }
 
+/// Build an `open` closure that counts every attempt and gives each one a
+/// fresh [`MemoryChannel`] that answers the handshake, one call with
+/// `{"opened": attempt}`, and the MEP shutdown. Each channel's log is kept
+/// in `logs`, in open order.
+fn logged_opener(
+    opens: Arc<AtomicUsize>,
+    logs: Arc<std::sync::Mutex<Vec<SentLog>>>,
+) -> impl Fn() -> Ready<Result<Box<dyn GuestConnection>, HostError>> + Clone {
+    move || {
+        let attempt = opens.fetch_add(1, Ordering::SeqCst);
+        let channel = MemoryChannel::new()
+            .respond(ok(1, frontend_initialize_result("guest")))
+            .respond(ok(2, json!({"opened": attempt})))
+            .respond(ok(3, json!({})));
+        logs.lock().unwrap().push(channel.log());
+        let connection: Box<dyn GuestConnection> =
+            Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")));
+        std::future::ready(Ok(connection))
+    }
+}
+
+/// Assert that `log` shows an orderly MEP shutdown: `morphir.exit` sent last,
+/// then the channel closed once.
+fn assert_closed_in_order(log: &SentLog) {
+    assert_eq!(
+        log.methods().last().map(String::as_str),
+        Some(methods::EXIT),
+        "the guest must be shut down in order, not dropped"
+    );
+    assert_eq!(log.closes(), 1);
+}
+
+// Requirement (Review Focus 2): a guest nobody used for `n` ticks is closed
+// in order, and the next call for its key opens a fresh one.
+#[tokio::test]
+async fn idle_a_guest_unused_for_n_ticks_is_closed_in_order() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let logs = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let open = logged_opener(Arc::clone(&opens), Arc::clone(&logs));
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    let first: Value = pool
+        .call(&key, "fp", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    assert_eq!(first, json!({"opened": 0}));
+
+    pool.tick();
+    assert_eq!(pool.evict_idle(2).await, 0, "one tick is not enough");
+    pool.tick();
+    assert_eq!(pool.evict_idle(2).await, 1);
+    assert_closed_in_order(&logs.lock().unwrap()[0]);
+
+    let second: Value = pool
+        .call(&key, "fp", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    assert_eq!(second, json!({"opened": 1}), "the next call opens fresh");
+    assert_eq!(opens.load(Ordering::SeqCst), 2);
+}
+
+// A call marks its guest as used: the idle count starts again from the
+// call, not from the open.
+#[tokio::test]
+async fn idle_a_call_resets_the_idle_count() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let open = opener("guest", Arc::clone(&opens), |_attempt| {
+        vec![
+            Ok(ok(1, frontend_initialize_result("guest"))),
+            Ok(ok(2, json!({"call": 1}))),
+            Ok(ok(3, json!({"call": 2}))),
+        ]
+    });
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    let _: Value = pool
+        .call(&key, "fp", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    pool.tick();
+    let _: Value = pool
+        .call(&key, "fp", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    pool.tick();
+
+    assert_eq!(pool.evict_idle(2).await, 0);
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+}
+
+// Requirement (Review Focus 2): a guest with a call in flight is never
+// evicted, however many ticks pass. The call also counts as a use when it
+// ends, so a long call is not evicted the moment it finishes either.
+#[tokio::test]
+async fn idle_a_slot_in_use_is_never_evicted() {
+    let (release_tx, release_rx) = oneshot::channel();
+    let probe = Probe::default();
+    let open = {
+        let gate = std::sync::Mutex::new(Some(release_rx));
+        let probe = probe.clone();
+        move || {
+            let gate = gate.lock().unwrap().take().expect("opened once");
+            let channel = GatedChannel::new(
+                ok(1, frontend_initialize_result("guest")),
+                // The gated call's answer, then the MEP shutdown's.
+                [ok(2, json!({"call": "long"})), ok(3, json!({}))],
+                gate,
+            )
+            .with_probe(probe.clone());
+            let connection: Box<dyn GuestConnection> =
+                Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")));
+            std::future::ready(Ok(connection))
+        }
+    };
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    timeout(Duration::from_secs(5), async {
+        let call = pool.call::<_, Value, _, _>(&key, "fp", open, "compile", &());
+        tokio::pin!(call);
+        assert_pending(call.as_mut());
+
+        for _ in 0..5 {
+            pool.tick();
+        }
+        assert_eq!(pool.evict_idle(1).await, 0, "a call is in flight");
+        assert!(!probe.dropped());
+
+        release_tx.send(()).expect("the call awaits the gate");
+        assert_eq!(call.await.unwrap(), json!({"call": "long"}));
+    })
+    .await
+    .expect("must not hang once released");
+
+    assert_eq!(
+        pool.evict_idle(1).await,
+        0,
+        "the call's end counts as a use"
+    );
+    pool.tick();
+    assert_eq!(pool.evict_idle(1).await, 1);
+    assert!(probe.dropped());
+}
+
+// A slot left empty (here by a failed open) has no guest to close. Evicting
+// it closes nothing, and the next call for the key opens as usual.
+#[tokio::test]
+async fn idle_an_empty_slot_closes_nothing() {
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    let error = pool
+        .call::<_, Value, _, _>(
+            &key,
+            "fp",
+            || std::future::ready(Err(HostError::Invalid("no binary".into()))),
+            "compile",
+            &(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CallError::Connect(_)), "{error:?}");
+
+    pool.tick();
+    assert_eq!(pool.evict_idle(1).await, 0);
+
+    let opens = Arc::new(AtomicUsize::new(0));
+    let open = opener("guest", Arc::clone(&opens), |_attempt| {
+        vec![
+            Ok(ok(1, frontend_initialize_result("guest"))),
+            Ok(ok(2, json!({"call": "opened"}))),
+        ]
+    });
+    let result: Value = pool.call(&key, "fp", open, "compile", &()).await.unwrap();
+    assert_eq!(result, json!({"call": "opened"}));
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+}
+
+// A call that found the slot in the map but had not yet taken its lock when
+// eviction removed it must not use the evicted slot: it looks the key up
+// again, like a call waiting when the key is abandoned. Proven by a later
+// call reusing the waiter's guest, which it could not do if the waiter had
+// cached it in the detached slot.
+#[tokio::test]
+async fn idle_a_call_waiting_when_its_slot_is_evicted_opens_a_fresh_guest() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let (release_tx, release_rx) = oneshot::channel();
+    let first_probe = Probe::default();
+    let open = {
+        let opens = Arc::clone(&opens);
+        let gate = Arc::new(std::sync::Mutex::new(Some(release_rx)));
+        let first_probe = first_probe.clone();
+        move || {
+            let attempt = opens.fetch_add(1, Ordering::SeqCst);
+            let connection: Box<dyn GuestConnection> = if attempt == 0 {
+                let gate = gate.lock().unwrap().take().expect("gated once");
+                let channel = GatedChannel::new(
+                    ok(1, frontend_initialize_result("guest")),
+                    // A's answer, then the MEP shutdown's.
+                    [ok(2, json!({"guest": "first"})), ok(3, json!({}))],
+                    gate,
+                )
+                .with_probe(first_probe.clone());
+                Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")))
+            } else {
+                let channel = MemoryChannel::new()
+                    .respond(ok(1, frontend_initialize_result("guest")))
+                    .respond(ok(2, json!({"guest": "second"})))
+                    .respond(ok(3, json!({"guest": "second, reused"})));
+                Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")))
+            };
+            std::future::ready(Ok(connection))
+        }
+    };
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    timeout(Duration::from_secs(5), async {
+        let call_a = pool.call::<_, Value, _, _>(&key, "fp", open.clone(), "compile", &());
+        let call_b = pool.call::<_, Value, _, _>(&key, "fp", open.clone(), "compile", &());
+        tokio::pin!(call_a);
+        tokio::pin!(call_b);
+
+        // A is in flight on the first guest; B holds the slot and waits on
+        // its lock.
+        assert_pending(call_a.as_mut());
+        assert_pending(call_b.as_mut());
+
+        // A finishes and lets go of the lock. B is not polled again yet.
+        release_tx.send(()).expect("call_a awaits the gate");
+        assert_eq!(call_a.await.unwrap(), json!({"guest": "first"}));
+
+        pool.tick();
+        assert_eq!(pool.evict_idle(1).await, 1);
+        assert!(first_probe.dropped());
+
+        assert_eq!(call_b.await.unwrap(), json!({"guest": "second"}));
+    })
+    .await
+    .expect("must not hang once released");
+
+    let reused: Value = pool
+        .call(&key, "fp", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    assert_eq!(reused, json!({"guest": "second, reused"}));
+    assert_eq!(opens.load(Ordering::SeqCst), 2);
+}
+
 // (Item 6) `Pool::call`'s future must stay `Send` on native targets when its
 // generics are, so a caller can `tokio::spawn` it. Compile-time only: the
 // future is built and checked, never polled.
@@ -902,4 +1153,8 @@ fn pool_call_future_is_send_on_native_targets() {
 
     let future = pool.call::<_, Value, _, _>(&key, "fp", open, "compile", &params);
     assert_send(&future);
+
+    // The idle sweep runs on a caller's timer task, so it must be `Send` too.
+    let sweep = pool.evict_idle(1);
+    assert_send(&sweep);
 }

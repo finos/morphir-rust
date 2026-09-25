@@ -3,7 +3,6 @@
 use crate::process::frame::{read_frame, write_frame};
 use crate::process::launch::{ProcessLaunch, ProcessProgram};
 use crate::process::stage::prepare_program;
-use morphir_extension_sdk::protocol::ExtensionRequest;
 use morphir_host::{ChannelCause, ChannelState, HostError};
 use serde::Serialize;
 use std::process::{ExitStatus, Stdio};
@@ -150,25 +149,6 @@ impl ProcessChild {
             Ok(result) => result,
             Err(_) => Err(timed_out(format!(
                 "Extension process read timed out after {request_timeout:?}"
-            ))),
-        }
-    }
-
-    /// Write one request and read one frame body, under a single timeout.
-    ///
-    /// The timeout text names the request's method.
-    #[doc(hidden)]
-    pub async fn exchange(&mut self, request: &ExtensionRequest) -> Result<Vec<u8>, HostError> {
-        let request_timeout = self.request_timeout;
-        let exchange = async {
-            self.write_now(request).await?;
-            read_frame(&mut self.stdout).await
-        };
-        match timeout(request_timeout, exchange).await {
-            Ok(result) => result,
-            Err(_) => Err(timed_out(format!(
-                "Extension request '{}' timed out after {:?}",
-                request.method, request_timeout
             ))),
         }
     }

@@ -98,8 +98,8 @@ async fn context_run() {
 
 /// Runs `tests/features/files_and_output.feature` through [`Suite`], the same runner the CLI
 /// uses: file steps write inside a scenario-owned temporary directory, and output steps read a
-/// `LastOutput` a step sets directly since Task 12's CLI steps do not exist yet. Its reports go to
-/// a fresh temporary directory, never into the source tree.
+/// `LastOutput` a step sets directly, without running a command. Its reports go to a fresh
+/// temporary directory, never into the source tree.
 async fn files_and_output_run() {
     let out_dir = tempfile::tempdir().expect("create a temporary report directory");
     let result = Suite::new("files-and-output")
@@ -113,6 +113,26 @@ async fn files_and_output_run() {
     assert!(result.succeeded(), "{result:?}");
     assert_eq!(result.failed, 0, "{result:?}");
     assert!(result.passed > 0, "{result:?}");
+}
+
+/// Runs `tests/features/cli.feature` through [`Suite`] with `Suite::cli` pointed at
+/// `tests/fixtures/echo.sh`: a stand-in for `morphir` that echoes its arguments and `$HOME`, and
+/// exits 3 for `fail`. Its reports go to a fresh temporary directory, never into the source tree.
+/// `.sh` does not run on Windows, so the caller only runs this under `cfg!(unix)`.
+async fn cli_run() {
+    let echo = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/echo.sh");
+    let out_dir = tempfile::tempdir().expect("create a temporary report directory");
+    let result = Suite::new("cli")
+        .features(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/features/cli.feature"
+        ))
+        .cli(echo)
+        .out_dir(out_dir.path())
+        .run()
+        .await;
+    assert!(result.succeeded(), "{result:?}");
+    assert_eq!(result.failed, 0, "{result:?}");
 }
 
 #[tokio::main]
@@ -138,4 +158,7 @@ async fn main() {
 
     context_run().await;
     files_and_output_run().await;
+    if cfg!(unix) {
+        cli_run().await;
+    }
 }

@@ -9,6 +9,7 @@ use cucumber::{World as _, WriterExt as _};
 use morphir_gherkin::extension::Extensions;
 
 use crate::parser::{MorphirParser, prepare, skip_reason};
+use crate::steps::cli::CliProgram;
 use crate::tags::{TagExpr, WipTag};
 use crate::world::MorphirWorld;
 
@@ -32,6 +33,7 @@ pub struct Suite {
     extensions: Extensions,
     tags: Option<String>,
     out_dir: Option<PathBuf>,
+    cli: Option<CliProgram>,
 }
 
 /// The counts and report paths from one [`Suite::run`].
@@ -71,6 +73,7 @@ impl Suite {
             extensions: standard_extensions(),
             tags: std::env::var("MORPHIR_BDD_TAGS").ok(),
             out_dir: std::env::var_os("MORPHIR_BDD_OUT").map(PathBuf::from),
+            cli: None,
         }
     }
 
@@ -110,6 +113,24 @@ impl Suite {
         self
     }
 
+    /// Sets the program `When I run {string}` runs, named `name`: the command line's first word
+    /// must equal `name`. Use this for a tool other than `morphir` itself; [`Suite::cli`] covers
+    /// `morphir`.
+    #[must_use]
+    pub fn cli_named(mut self, name: impl Into<String>, path: impl AsRef<Path>) -> Self {
+        self.cli = Some(CliProgram {
+            name: name.into(),
+            path: path.as_ref().to_owned(),
+        });
+        self
+    }
+
+    /// Sets the program `When I run {string}` runs, named `"morphir"`.
+    #[must_use]
+    pub fn cli(self, path: impl AsRef<Path>) -> Self {
+        self.cli_named("morphir", path)
+    }
+
     /// Runs the suite: parses its features, filters scenarios by tag expression and skip reason,
     /// runs every remaining step, and writes a console summary, a JSON report and a JUnit report.
     /// An undefined step fails its scenario, so [`SuiteResult::succeeded`] is `false` unless every
@@ -126,7 +147,11 @@ impl Suite {
             .tags
             .as_deref()
             .map(|t| TagExpr::parse(t).expect("a valid tag expression"));
-        let extensions = Arc::new(self.extensions);
+        let mut extensions = self.extensions;
+        if let Some(program) = self.cli {
+            extensions = extensions.with_processor(InsertCli(program));
+        }
+        let extensions = Arc::new(extensions);
 
         let writer = MorphirWorld::cucumber::<PathBuf>()
             .with_parser(MorphirParser::new(extensions.clone()))
@@ -176,6 +201,23 @@ impl Suite {
         if !result.succeeded() {
             std::process::exit(1);
         }
+    }
+}
+
+/// A [`morphir_gherkin::extension::Processor`] that inserts a suite's [`CliProgram`] into every
+/// scenario's context, so `When I run {string}` can find the program to run. [`Suite::cli`] and
+/// [`Suite::cli_named`] register one of these when they are used.
+struct InsertCli(CliProgram);
+
+impl morphir_gherkin::extension::Processor for InsertCli {
+    fn process(
+        &self,
+        _doc: &morphir_gherkin::Document,
+        _at: &morphir_gherkin::NodePath,
+        ctx: &mut morphir_gherkin::extension::Context,
+    ) -> Result<(), String> {
+        ctx.insert(self.0.clone());
+        Ok(())
     }
 }
 

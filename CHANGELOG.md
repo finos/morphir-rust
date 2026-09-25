@@ -11,22 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Registry`, `GuestSource` and `Pool` in `morphir-host`: a portable provider
   registry that resolves frontends and backends from registered sources, and
   a warm-guest pool that opens one session per key and reuses it across
-  calls, evicting and retrying once on a broken session.
-- `NativeSource` and `InstalledSource` in `morphir-host-native`: registry
-  sources for a built-in extension already loaded into the host process, and
-  for an installed extension read from its verified catalog and lock.
-
-### Changed
-- `ChannelError` and `HostError::Channel` carry a `cause`, so a transport
-  failure keeps what it began as (an I/O error, a JSON error, or the
-  transport itself) instead of always reporting `Transport`.
-- `morphir-host` depends on `morphir-core` to normalize the IR release
-  versions a `Registry` resolves against.
+  calls, evicting and retrying once on a broken session. A call that was
+  waiting on a key when `Pool::abandon` removed it opens a fresh guest
+  instead of using the abandoned one. The registry's `ProviderOrigin`,
+  `InvocationMode` and `CapabilityMetadataScope` are `#[non_exhaustive]`.
 - `Registry::register` refuses a source whose origin, scope and mode
   disagree: a `Builtin` source must report `Complete` metadata scope and
   `NativeDirect`/`NativeMep` invocation modes, and an `Installed` source must
   report `PersistedFrontendBackend` scope and the same `ProcessMep` or
-  `WasmMep` mode under every policy.
+  `WasmMep` mode under every policy. The refusal names the mode the source
+  reports under `PreferDirect` and under `ProtocolOnly`.
+- `NativeSource` and `InstalledSource` in `morphir-host-native`: registry
+  sources for a built-in extension already loaded into the host process, and
+  for an installed extension read from its verified catalog and lock.
+- `InstalledSource::activate` and `InstalledSourceError` in
+  `morphir-host-native`: verify and start an installed guest and keep the
+  failure typed (`Verify` with the distribution error, `Activate` with the
+  `HostError` that `activate` returned), so a caller can word its own
+  message. `InstalledSource`'s `GuestSource::connect` reports the same texts
+  as `HostError::Invalid`. Verification reads and hashes the installed bytes
+  on a blocking worker, not on the async executor.
+- `impl GuestConnection for Box<G>` in `morphir-host`, so a boxed connection
+  can open a `Session`.
+- `testing::FakeSource` in `morphir-host` (feature `testing`): a
+  `GuestSource` with scripted answers for registry and pool tests.
+
+### Changed
+- `ChannelError` and `HostError::Channel` carry a `cause`, a
+  `#[non_exhaustive]` `ChannelCause`, so a transport failure keeps what it
+  began as: an I/O error, a JSON error, or the transport itself.
+- `From<HostError> for DaemonError` turns a `HostError::Channel` whose cause
+  is `Io` or `Json` into `DaemonError::Other` with the channel message. Its
+  text is now `IO error: ...` or `JSON error: ...`, without the
+  `Extension error: ` prefix it had before. A channel failure with a
+  `Transport` cause keeps the prefix.
+- `CallError` is `#[non_exhaustive]` and has a new `Open` variant. `Pool::call`
+  reports a failure to open a guest or its session as `CallError::Open`,
+  with the open's own error, not as `CallError::Failed`, and does not retry
+  it.
+- `morphir-host` depends on `morphir-core` to normalize the IR release
+  versions a `Registry` resolves against.
 - The extension bundles are released with version-2 descriptors that carry
   each guest's capability claims: `extension/avro/v0.2.0`,
   `extension/openapi/v0.2.0`, `extension/python/v0.4.0`,

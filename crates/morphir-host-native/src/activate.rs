@@ -16,6 +16,9 @@ pub struct ActivatedGuest {
     pub connection: CheckedConnection<JsonRpcConnection<Box<dyn Channel>, ExpectedChecks>>,
     /// The extension id the installed metadata records.
     pub id: String,
+    /// What the handshake holds the guest to: the installed identity and
+    /// the capabilities the installed metadata locks.
+    pub expectation: ExpectedExtension,
 }
 
 /// Start the guest in `artifact` without running the handshake.
@@ -126,7 +129,7 @@ pub async fn activate(
             let container = ExtensionContainer::from_bytes_async(
                 info.id.clone(),
                 wasm.into_bytes(),
-                MorphirHostFunctions::for_restricted_generation(working_directory.to_path_buf()),
+                wasm_host_functions(working_directory),
             )
             .await?;
             let expected = if !persisted.is_empty() {
@@ -140,9 +143,32 @@ pub async fn activate(
         }
     };
     let id = expectation.id().to_owned();
-    let connection = JsonRpcConnection::new(channel, ExpectedChecks::new(expectation));
+    let connection = JsonRpcConnection::new(channel, ExpectedChecks::new(expectation.clone()));
     Ok(ActivatedGuest {
         connection: CheckedConnection::new(connection),
         id,
+        expectation,
     })
+}
+
+/// The host functions an installed WebAssembly guest gets.
+///
+/// The guest may write generated files only below `working_directory`, and
+/// it has no output directory of its own: the host publishes artifacts.
+fn wasm_host_functions(working_directory: &Path) -> MorphirHostFunctions {
+    MorphirHostFunctions::for_restricted_generation(working_directory.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wasm_host_functions;
+
+    #[test]
+    fn installed_wasm_activation_uses_restricted_generation_host_policy() {
+        let workspace = tempfile::tempdir().unwrap();
+
+        let host = wasm_host_functions(workspace.path());
+
+        assert!(host.workspace_info().output_dir.is_empty());
+    }
 }

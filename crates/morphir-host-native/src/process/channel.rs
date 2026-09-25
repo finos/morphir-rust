@@ -55,6 +55,19 @@ impl ProcessChannel {
         self.child.stderr_output()
     }
 
+    /// Report whether the guest process is still running.
+    pub fn is_running(&mut self) -> Result<bool, HostError> {
+        self.child.is_running()
+    }
+
+    /// Report whether the guest's standard output has no unread bytes left.
+    ///
+    /// A conforming guest writes only the frames the host reads, so bytes
+    /// left after it exits are output that was not framed as a response.
+    pub async fn stdout_is_exhausted(&mut self) -> Result<bool, HostError> {
+        self.child.stdout_is_exhausted().await
+    }
+
     /// Kill the child after `error`, and report what that proves.
     async fn fail(&mut self, error: HostError) -> ChannelError {
         self.deadline = None;

@@ -4,14 +4,13 @@
 
 mod support;
 
-use morphir_daemon::{
-    ExtensionContainer,
-    extensions::{host_functions::MorphirHostFunctions, protocol::methods},
-};
 use morphir_extension_sdk::{
     prelude::*,
-    protocol::{InitializeParams, InitializeResult, PeerInfo},
+    protocol::{InitializeParams, InitializeResult, PeerInfo, methods},
 };
+use morphir_host::Session;
+use morphir_host_native::extism::{ExtensionContainer, MorphirHostFunctions};
+use support::mep::host_config;
 
 struct PythonExtensionDriver {
     container: ExtensionContainer,
@@ -27,7 +26,6 @@ async fn packaged_python_installs_and_roundtrips_offline() {
 
 async fn packaged_roundtrip(version: &str) {
     use morphir_common::home::MorphirHome;
-    use morphir_daemon::extensions::{InvokeOutcome, activate_transport};
     use morphir_distribution::{
         Channel, ExtensionId, ExtensionInstaller, LocalExtensionRepository, LocalIndex, Platform,
         Selection, activate_installed,
@@ -69,21 +67,16 @@ async fn packaged_roundtrip(version: &str) {
     );
     // Removing this fixture's repository proves activation uses the installed copy.
     std::fs::remove_dir_all(repository.root()).unwrap();
-    let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())
+    let guest = morphir_host_native::activate(activate_installed(&home, &id).unwrap(), root.path())
         .await
         .unwrap();
-    let ready = loaded
-        .initialize(InitializeParams {
-            protocol_versions: vec!["0.1".into()],
-            host: PeerInfo {
-                kind: Default::default(),
-                name: "python-release-test".into(),
-                version: "1.0.0".into(),
-            },
-        })
-        .await
-        .unwrap_or_else(|failure| panic!("negotiation failed: {}", failure.error()));
-    let capabilities = ready.negotiated().capabilities();
+    let mut session = Session::open(
+        guest.connection,
+        &host_config("python-release-test", "1.0.0"),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("negotiation failed: {error}"));
+    let capabilities = session.negotiated().capabilities();
     assert_eq!(
         capabilities.frontend.as_ref().unwrap().languages[0].id,
         "python"
@@ -91,13 +84,13 @@ async fn packaged_roundtrip(version: &str) {
     assert_eq!(capabilities.backend.as_ref().unwrap().targets, ["python"]);
 
     macro_rules! invoke {
-        ($ready:expr, $result:ty, $method:expr, $request:expr) => {
-            match $ready.invoke::<$result>($method, $request).await {
-                InvokeOutcome::Success(ready, result) => (ready, result),
-                InvokeOutcome::Rejected(_, error) => panic!("request rejected: {error}"),
-                InvokeOutcome::Failed(failure) => {
-                    panic!("{} (IR {}) failed: {}", $method, version, failure.error())
+        ($session:expr, $result:ty, $method:expr, $request:expr) => {
+            match $session.call::<_, $result>($method, $request).await {
+                Ok(result) => result,
+                Err(morphir_host::CallError::Rejected(error)) => {
+                    panic!("request rejected: {error}")
                 }
+                Err(error) => panic!("{} (IR {}) failed: {}", $method, version, error),
             }
         };
     }
@@ -125,8 +118,8 @@ async fn packaged_roundtrip(version: &str) {
         },
         baseline: None,
     };
-    let (ready, compiled) = invoke!(
-        ready,
+    let compiled = invoke!(
+        session,
         CompileResult,
         methods::COMPILE,
         request(vec![
@@ -154,8 +147,8 @@ async fn packaged_roundtrip(version: &str) {
     );
     assert!(compiled.success, "{:?}", compiled.diagnostics);
     let ir = compiled.ir.unwrap();
-    let (ready, generated) = invoke!(
-        ready,
+    let generated = invoke!(
+        session,
         GenerateResult,
         methods::GENERATE,
         GenerateRequest {
@@ -172,8 +165,8 @@ async fn packaged_roundtrip(version: &str) {
             .iter()
             .any(|artifact| artifact.path == "functions.py" && artifact.content.contains("lambda"))
     );
-    let (_, again) = invoke!(
-        ready,
+    let again = invoke!(
+        session,
         CompileResult,
         methods::COMPILE,
         request(
@@ -191,6 +184,10 @@ async fn packaged_roundtrip(version: &str) {
     );
     assert!(again.success, "{:?}", again.diagnostics);
     assert_eq!(again.ir, Some(ir));
+    session
+        .close()
+        .await
+        .unwrap_or_else(|error| panic!("shutdown failed: {error}"));
 }
 
 impl PythonExtensionDriver {

@@ -2,11 +2,12 @@
 //!
 //! Run with MORPHIR_GLEAM_BUNDLE set to the bundle from
 //! `mise run extension:artifact:gleam`, then select this test with `--ignored`.
-use morphir_daemon::extensions::{InvokeOutcome, activate_transport, protocol::methods};
-use morphir_extension_sdk::{
-    prelude::*,
-    protocol::{InitializeParams, PeerInfo},
-};
+
+mod support;
+
+use morphir_extension_sdk::prelude::*;
+use morphir_host::Session;
+use support::mep::{completed, host_config};
 
 #[tokio::test]
 #[ignore = "requires MORPHIR_GLEAM_BUNDLE from extension:artifact:gleam"]
@@ -61,22 +62,17 @@ async fn installed_compilation(version: &str) {
     );
     // Activation must work entirely from the installed copy.
     std::fs::remove_dir_all(repository.root()).unwrap();
-    let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())
+    let guest = morphir_host_native::activate(activate_installed(&home, &id).unwrap(), root.path())
         .await
         .unwrap();
-    let ready = loaded
-        .initialize(InitializeParams {
-            protocol_versions: vec!["0.1".into()],
-            host: PeerInfo {
-                kind: Default::default(),
-                name: "gleam-release-test".into(),
-                version: "1.0.0".into(),
-            },
-        })
-        .await
-        .unwrap_or_else(|failure| panic!("negotiation failed: {}", failure.error()));
-    assert_eq!(ready.negotiated().extension().id, "morphir-gleam");
-    let capabilities = ready.negotiated().capabilities();
+    let mut session = Session::open(
+        guest.connection,
+        &host_config("gleam-release-test", "1.0.0"),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("negotiation failed: {error}"));
+    assert_eq!(session.negotiated().extension().id, "morphir-gleam");
+    let capabilities = session.negotiated().capabilities();
     let frontend = capabilities.frontend.as_ref().expect("Gleam frontend");
     assert_eq!(frontend.languages[0].id, "gleam");
     assert_eq!(frontend.languages[0].file_extensions, [".gleam"]);
@@ -84,15 +80,6 @@ async fn installed_compilation(version: &str) {
     assert!(frontend.incremental);
     assert_eq!(capabilities.backend.as_ref().unwrap().targets, ["gleam"]);
 
-    macro_rules! invoke {
-        ($ready:expr, $result:ty, $method:expr, $request:expr) => {
-            match $ready.invoke::<$result>($method, $request).await {
-                InvokeOutcome::Success(ready, result) => (ready, result),
-                InvokeOutcome::Rejected(_, error) => panic!("request rejected: {error}"),
-                InvokeOutcome::Failed(failure) => panic!("MEP failed: {}", failure.error()),
-            }
-        };
-    }
     let request = CompileRequest {
         language_id: "gleam".into(),
         sources: SourceSet {
@@ -115,22 +102,22 @@ async fn installed_compilation(version: &str) {
         },
         ..Default::default()
     };
-    let (ready, compiled) = invoke!(ready, CompileResult, methods::COMPILE, request.clone());
+    let compiled = completed("compile", session.compile(request.clone()).await);
     assert!(compiled.success, "{:?}", compiled.diagnostics);
     assert_eq!(
         compiled.ir_version.as_deref(),
         Some(format!("{version}.0.0").as_str())
     );
     assert_eq!(compiled.modules, ["model"]);
-    let (ready, generated) = invoke!(
-        ready,
-        GenerateResult,
-        methods::GENERATE,
-        GenerateRequest {
-            ir: compiled.ir.clone().unwrap(),
-            target: "gleam".into(),
-            options: Default::default(),
-        }
+    let generated = completed(
+        "generate",
+        session
+            .generate(GenerateRequest {
+                ir: compiled.ir.clone().unwrap(),
+                target: "gleam".into(),
+                options: Default::default(),
+            })
+            .await,
     );
     assert!(generated.success, "{:?}", generated.diagnostics);
     assert_eq!(generated.artifacts.len(), 1);
@@ -152,8 +139,12 @@ async fn installed_compilation(version: &str) {
             })
             .collect(),
     });
-    let (_, reused) = invoke!(ready, CompileResult, methods::COMPILE, request);
+    let reused = completed("compile", session.compile(request).await);
     assert!(reused.success, "{:?}", reused.diagnostics);
     assert_eq!(reused.ir, compiled.ir);
     assert_eq!(reused.module_results[0].status, ModuleStatus::Unchanged);
+    session
+        .close()
+        .await
+        .unwrap_or_else(|error| panic!("shutdown failed: {error}"));
 }

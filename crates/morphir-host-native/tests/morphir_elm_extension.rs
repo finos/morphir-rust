@@ -3,14 +3,14 @@
 //! Build the extension in `finos/morphir-elm`, then provide its path before
 //! running this ignored test:
 //!
-//! `MORPHIR_ELM_EXTENSION_BIN=/path/to/morphir-elm-extension cargo test -p morphir-daemon --test morphir_elm_extension -- --ignored`
+//! `MORPHIR_ELM_EXTENSION_BIN=/path/to/morphir-elm-extension cargo test -p morphir-host-native --test morphir_elm_extension -- --ignored`
 
 mod support;
 
-use morphir_daemon::extensions::ProcessLaunch;
 use morphir_extension_sdk::{
     CompileOptions, CompilePackage, CompileRequest, SourceDocument, SourceSet,
 };
+use morphir_host_native::process::ProcessLaunch;
 use std::path::PathBuf;
 
 fn extension_path() -> PathBuf {
@@ -63,6 +63,5 @@ async fn conforms_to_the_mep_frontend_process_contract() {
         include_str!("fixtures/morphir-elm-extension/Invalid.elm"),
     );
 
-    support::mep::assert_frontend_typestate_conformance(launch, valid_request, malformed_request)
-        .await;
+    support::mep::frontend_conformance(launch, valid_request, malformed_request).await;
 }

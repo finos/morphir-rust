@@ -12,9 +12,9 @@ const OTHER: &str = "module My.Other exposing (Thing)\n\ntype Thing = Thing\n";
 const UNDERSCORE_B: &str = "module B exposing (Foo_Bar)\n\ntype alias Foo_Bar = Int\n";
 const UNDERSCORE_A: &str = "module A exposing (T)\n\nimport B\n\ntype alias T = B.Foo_Bar\n";
 const DAEMON_EXAMPLE: &str =
-    include_str!("../../morphir-daemon/tests/fixtures/morphir-elm-extension/Example.elm");
+    include_str!("../../morphir-host-native/tests/fixtures/morphir-elm-extension/Example.elm");
 const DAEMON_INVALID: &str =
-    include_str!("../../morphir-daemon/tests/fixtures/morphir-elm-extension/Invalid.elm");
+    include_str!("../../morphir-host-native/tests/fixtures/morphir-elm-extension/Invalid.elm");
 
 fn document(uri: &str, text: &str) -> SourceDocument {
     SourceDocument {

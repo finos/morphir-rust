@@ -123,10 +123,10 @@ require_snapshot_inputs() {
     require_snapshot_file "crates/morphir-elm-binding/Cargo.toml"
     require_snapshot_file "crates/morphir-elm-binding/build.rs"
     require_snapshot_file "crates/morphir-elm-binding/src/lib.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/elm_native_extension.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/support/mod.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/support/installed_wasm.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/support/mep.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/elm_native_extension.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/mod.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/installed_wasm.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/mep.rs"
     require_snapshot_tree "scripts"
     require_snapshot_tree "crates/morphir-elm-binding/src"
     require_snapshot_tree "crates/morphir-elm-binding/tests"
@@ -134,8 +134,8 @@ require_snapshot_inputs() {
     require_snapshot_tree "crates/morphir-elm-binding/preludes"
     require_snapshot_tree "crates/morphir-extension-sdk/src"
     require_snapshot_tree "crates/morphir-core/src"
-    require_snapshot_tree "crates/morphir-daemon/tests/support"
-    require_snapshot_tree "crates/morphir-daemon/tests/fixtures/morphir-elm-extension"
+    require_snapshot_tree "crates/morphir-host-native/tests/support"
+    require_snapshot_tree "crates/morphir-host-native/tests/fixtures/morphir-elm-extension"
     require_snapshot_tree "crates/morphir-distribution/src"
     if find "$REPO_ROOT" -type l -print -quit | grep -q .; then
         echo "provenance snapshot contains a symbolic link" >&2
@@ -161,7 +161,7 @@ run_pipeline() {
             set -- "$@" --git-commit "$git_commit"
         fi
         python3 "$@"
-        MORPHIR_ELM_NATIVE_BUNDLE="$output" cargo test --locked -p morphir-daemon --test elm_native_extension -- --ignored
+        MORPHIR_ELM_NATIVE_BUNDLE="$output" cargo test --locked -p morphir-host-native --test elm_native_extension -- --ignored
     )
 }
 

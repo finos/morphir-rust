@@ -220,7 +220,7 @@ fi
             )
         installed_guest_test = (
             self.root
-            / "crates/morphir-daemon/tests/installed_wasm_extension.rs"
+            / "crates/morphir-host-native/tests/installed_wasm_extension.rs"
         )
         installed_guest_test.parent.mkdir(parents=True)
         installed_guest_test.write_text(
@@ -235,6 +235,11 @@ fi
         )
         (installed_guest_support_dir / "installed_wasm.rs").write_text(
             "// fixture installed guest support helpers\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (installed_guest_support_dir / "mep.rs").write_text(
+            "// fixture installed guest MEP drivers\n",
             encoding="utf-8",
             newline="\n",
         )

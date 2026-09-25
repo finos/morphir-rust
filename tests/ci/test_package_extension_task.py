@@ -9,7 +9,7 @@ class AvroArtifactTaskTests(unittest.TestCase):
         commands = [
             "cargo test --locked -p morphir-avro-extension",
             "cargo build --locked --release -p morphir-avro-extension --target wasm32-unknown-unknown",
-            "cargo test --locked -p morphir-daemon --test installed_wasm_extension -- --ignored",
+            "cargo test --locked -p morphir-host-native --test installed_wasm_extension -- --ignored",
             "mise run test:avro-idl",
             "wasm-tools validate target/wasm32-unknown-unknown/release/morphir_avro_extension.wasm",
             "set -- scripts/package_extension.py",
@@ -280,8 +280,9 @@ class AvroArtifactTaskTests(unittest.TestCase):
             "tests/ci/package_extension_test_support.py",
             "tests/ci/test_package_extension_packaging.py",
             "tests/ci/test_package_extension_task.py",
-            "crates/morphir-daemon/tests/support/mod.rs",
-            "crates/morphir-daemon/tests/support/installed_wasm.rs",
+            "crates/morphir-host-native/tests/support/mod.rs",
+            "crates/morphir-host-native/tests/support/installed_wasm.rs",
+            "crates/morphir-host-native/tests/support/mep.rs",
         ):
             with (
                 self.subTest(missing=missing),

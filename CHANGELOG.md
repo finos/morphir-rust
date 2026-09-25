@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can open a `Session`.
 - `testing::FakeSource` in `morphir-host` (feature `testing`): a
   `GuestSource` with scripted answers for registry and pool tests.
+- `ActivatedGuest::expectation` in `morphir-host-native`: what the handshake
+  holds an activated guest to, its installed identity and locked
+  capabilities. `ProcessChannel::is_running` and
+  `ProcessChannel::stdout_is_exhausted` report on the child after the
+  session closed it.
+- The daemon's real-extension tests (process, Extism, installed WASM, Elm,
+  Gleam, Python and Rust guests) and their fixtures now live in
+  `morphir-host-native` and run on `activate` and `Session`. Run them with
+  `cargo test -p morphir-host-native --test <name> -- --ignored`.
 - The new `morphir-bdd` crate runs Morphir's Gherkin suites (`.feature` and
   `.feature.md`) on cucumber-rs. It gives every suite one shared world, a
   scenario context built by extensions, `@wip` skipping and tag expressions.

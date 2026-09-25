@@ -4739,6 +4739,7 @@ dependencies = [
  "morphir-distribution",
  "morphir-extension-sdk",
  "morphir-host",
+ "morphir-projection",
  "morphir-workspace",
  "serde",
  "serde_json",

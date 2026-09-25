@@ -225,3 +225,214 @@ async fn a_pooled_result_that_fails_a_check_is_not_retried() {
         "a failed check opens no second guest"
     );
 }
+
+// Compile and workspace result checks, ported from the daemon's session tests.
+
+mod results {
+    use super::config;
+    use morphir_extension_sdk::protocol::{ExtensionResponse, InitializeResult, methods};
+    use morphir_extension_sdk::{
+        CompileResult, ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability,
+        WorkspaceCapability,
+    };
+    use morphir_host::testing::{MemoryChannel, SentLog};
+    use morphir_host::{BasicChecks, CallError, JsonRpcConnection, Session};
+    use morphir_host_native::CheckedConnection;
+    use serde_json::json;
+
+    fn extension(types: Vec<ExtensionType>) -> ExtensionInfo {
+        ExtensionInfo {
+            id: "example".into(),
+            name: "Example".into(),
+            version: "1.0.0".into(),
+            types,
+            ..Default::default()
+        }
+    }
+
+    fn frontend_initialization() -> InitializeResult {
+        InitializeResult {
+            protocol_version: "0.1".into(),
+            extension: extension(vec![ExtensionType::Frontend]),
+            capabilities: ExtensionCapabilities {
+                frontend: Some(FrontendCapability {
+                    compile: true,
+                    ..FrontendCapability::default()
+                }),
+                ..ExtensionCapabilities::default()
+            },
+        }
+    }
+
+    fn workspace_initialization() -> InitializeResult {
+        InitializeResult {
+            protocol_version: "0.1".into(),
+            extension: extension(vec![ExtensionType::Workspace]),
+            capabilities: ExtensionCapabilities {
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![
+                        morphir_workspace::Version::parse("0.1.0-draft.1").unwrap(),
+                    ],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            },
+        }
+    }
+
+    fn compile_params(ir_version: &str) -> serde_json::Value {
+        json!({
+            "languageId": "elm",
+            "sources": {"documents": []},
+            "package": {"name": "example/package", "exposedModules": []},
+            "dependencies": [],
+            "options": {"typesOnly": false, "irVersion": ir_version}
+        })
+    }
+
+    /// A checked session on a guest that answers `initialized`, then
+    /// `result` for the call, then the shutdown.
+    async fn open(initialized: InitializeResult, result: serde_json::Value) -> (Session, SentLog) {
+        let channel = MemoryChannel::new()
+            .respond(ExtensionResponse::success(1, initialized).unwrap())
+            .respond(ExtensionResponse::success(2, result).unwrap())
+            .respond(ExtensionResponse::success(3, json!({})).unwrap());
+        let log = channel.log();
+        let connection =
+            CheckedConnection::new(JsonRpcConnection::new(channel, BasicChecks::new("example")));
+        let session = Session::open(connection, &config())
+            .await
+            .unwrap_or_else(|error| panic!("initialization failed: {error}"));
+        (session, log)
+    }
+
+    /// The error of a call whose result must fail the host's checks. The
+    /// session is closed in order.
+    fn invalid<T: std::fmt::Debug>(result: Result<T, CallError>, log: &SentLog) -> String {
+        match result {
+            Err(CallError::Invalid(error)) => {
+                assert_eq!(log.closes(), 1, "the session is closed in order");
+                assert_eq!(
+                    log.methods().last().map(String::as_str),
+                    Some(methods::EXIT)
+                );
+                error.to_string()
+            }
+            other => panic!("a result that fails a check must end the session: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rejects_successful_compile_result_without_ir_version() {
+        let (mut session, log) = open(
+            frontend_initialization(),
+            json!({"success": true, "ir": {}, "diagnostics": [], "modules": []}),
+        )
+        .await;
+
+        let result = session
+            .call::<_, CompileResult>(methods::COMPILE, compile_params("3"))
+            .await;
+
+        let message = invalid(result, &log);
+        assert!(message.contains("missing irVersion"), "{message}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rejects_successful_compile_result_without_ir_for_raw_callers() {
+        let (mut session, log) = open(
+            frontend_initialization(),
+            json!({"success": true, "irVersion": "3", "diagnostics": [], "modules": []}),
+        )
+        .await;
+
+        let result = session
+            .call::<_, serde_json::Value>(methods::COMPILE, json!({}))
+            .await;
+
+        let message = invalid(result, &log);
+        assert!(message.contains("missing ir"), "{message}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn accepts_successful_compile_result_with_ir_version_and_ir() {
+        let (mut session, _) = open(
+            frontend_initialization(),
+            json!({
+                "success": true,
+                "irVersion": "3",
+                "ir": {
+                    "formatVersion": 3,
+                    "distribution": ["Library", [], [], {"modules": []}]
+                },
+                "diagnostics": [],
+                "modules": ["Example"]
+            }),
+        )
+        .await;
+
+        let result = session
+            .call::<_, CompileResult>(methods::COMPILE, compile_params("3"))
+            .await
+            .unwrap_or_else(|error| panic!("valid success failed the session: {error:?}"));
+
+        assert!(result.success);
+        assert_eq!(result.ir_version.as_deref(), Some("3"));
+        assert!(result.ir.is_some());
+        session.close().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rejects_a_successful_compile_result_for_another_requested_ir_version() {
+        let (mut session, log) = open(
+            frontend_initialization(),
+            json!({
+                "success": true,
+                "irVersion": "4.0.0",
+                "ir": {"Library": {}},
+                "diagnostics": [],
+                "modules": []
+            }),
+        )
+        .await;
+
+        let result = session
+            .call::<_, CompileResult>(methods::COMPILE, compile_params("3"))
+            .await;
+
+        let message = invalid(result, &log);
+        assert!(
+            message.contains("did not match requested irVersion"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn malformed_workspace_discovery_result_fails_the_session() {
+        let (mut session, log) = open(
+            workspace_initialization(),
+            json!({
+                "status": "success",
+                "snapshot": {"protocolVersion": "0.1.0-draft.1"}
+            }),
+        )
+        .await;
+
+        let result = session
+            .call::<_, serde_json::Value>(
+                methods::WORKSPACE_DISCOVER,
+                json!({
+                    "protocolVersion": "0.1.0-draft.1",
+                    "developmentRoot": {"entries": {}},
+                    "morphirHome": null,
+                    "systemConfig": null,
+                    "environment": {},
+                    "cliOverlay": {}
+                }),
+            )
+            .await;
+
+        let message = invalid(result, &log);
+        assert!(message.contains("missing field"), "{message}");
+    }
+}

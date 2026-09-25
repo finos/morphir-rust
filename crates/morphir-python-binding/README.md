@@ -443,7 +443,7 @@ Current evidence is scoped to the checked-in cases:
 | [Version integration tests](tests/ir_versions.rs) | V3/v4 roundtrips, private imports, independently authored v3 input, integer bounds and annotation validation |
 | [Module integration tests](tests/modules.rs) | Absolute and relative imports, nested modules, cyclic record references, import collisions and cross-module tuple checking |
 | [Acceptance scenarios](tests/features/adt.feature) | Supported models pass through the public extension API; unsupported input returns diagnostics |
-| [WASM host test](../morphir-daemon/tests/python_extension.rs) | Capability negotiation and compile/generate/recompile through an actual Extism guest; run by CI |
+| [WASM host test](../morphir-host-native/tests/python_extension.rs) | Capability negotiation and compile/generate/recompile through an actual Extism guest; run by CI |
 | Example verification | Generated example IR checked against the v4 JSON Schema, and selected generated Python branch/tuple results checked in Python 3.14.7 |
 
 The repository's [Kit conformance job](../../.github/workflows/ci.yml) runs the
@@ -511,7 +511,7 @@ cargo test --locked -p morphir-python-binding
 cargo run --locked -p morphir-python-binding --example python_adt
 rustup target add wasm32-unknown-unknown
 cargo build --locked --release -p morphir-python-binding --target wasm32-unknown-unknown
-cargo test --locked -p morphir-daemon --test python_extension -- --ignored --exact python_adt_and_conditional_roundtrip_through_the_real_wasm_extension
+cargo test --locked -p morphir-host-native --test python_extension -- --ignored --exact python_adt_and_conditional_roundtrip_through_the_real_wasm_extension
 ```
 
 The example prints JSON containing compiled IR and generated source for the

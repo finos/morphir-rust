@@ -3,19 +3,18 @@
 //! Build the fixture before running these ignored tests:
 //!
 //! `cargo build --release -p morphir-wasm-binding --target wasm32-unknown-unknown`
-//! `cargo test -p morphir-daemon --test extism_extension -- --ignored`
+//! `cargo test -p morphir-host-native --test extism_extension -- --ignored`
 
 mod support;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use morphir_daemon::ExtensionContainer;
-use morphir_daemon::extensions::{
-    container::ExtensionType, host_functions::MorphirHostFunctions, protocol::methods,
-    session::ExtismSession,
-};
 use morphir_extension_sdk::{
-    ExtensionCapabilities, GenerateRequest, GenerateResult, protocol::error_codes,
+    ExtensionCapabilities, ExtensionType, GenerateRequest, GenerateResult,
+    protocol::{error_codes, methods},
 };
+use morphir_host::ExpectedExtension;
+use morphir_host_native::CheckedConnection;
+use morphir_host_native::extism::{ExtensionContainer, ExtismChannel, MorphirHostFunctions};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -35,7 +34,7 @@ impl ExtismConformanceDriver {
         Self { container }
     }
 
-    /// Load the backend and open its session, as the daemon does before it
+    /// Load the backend and open its session, as a host does before it
     /// sends any work: a guest refuses other requests before `initialize`.
     async fn load_initialized_wasm_backend() -> Self {
         let driver = Self::load_wasm_backend();
@@ -155,8 +154,13 @@ async fn rejects_unknown_methods_at_the_guest_boundary() {
 #[ignore = "requires the independently built morphir-wasm-binding artifact"]
 async fn completes_the_mep_lifecycle_in_order() {
     let driver = ExtismConformanceDriver::load_wasm_backend();
-    support::mep::assert_backend_typestate_conformance(
-        ExtismSession::connect(driver.container),
+    let expected = ExpectedExtension::identified(driver.container.id());
+    let channel = ExtismChannel::new(driver.container, expected.clone());
+    support::mep::backend_conformance(
+        CheckedConnection::new(morphir_host::JsonRpcConnection::new(
+            channel,
+            morphir_host::ExpectedChecks::new(expected),
+        )),
         "wasm",
         a_distribution_with_one_value(),
         json!("not Morphir IR"),

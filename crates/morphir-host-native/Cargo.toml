@@ -30,5 +30,6 @@ unicode-normalization = { workspace = true }
 [dev-dependencies]
 morphir-avro-extension = { path = "../morphir-avro-extension" }
 morphir-host = { path = "../morphir-host", features = ["testing"] }
+morphir-projection = { path = "../morphir-projection", features = ["testing"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 wat = "1"

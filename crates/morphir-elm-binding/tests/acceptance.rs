@@ -18,7 +18,7 @@ const OTHER_URI: &str = "file:///work/My/Other.elm";
 const INVALID_URI: &str = "file:///work/Invalid.elm";
 
 const INVALID: &str =
-    include_str!("../../morphir-daemon/tests/fixtures/morphir-elm-extension/Invalid.elm");
+    include_str!("../../morphir-host-native/tests/fixtures/morphir-elm-extension/Invalid.elm");
 
 // The two-module package the incremental cases run on: `A` imports `B` and
 // aliases one of its types.

@@ -11,4 +11,4 @@ if [ -f "$FIXTURE.exe" ]; then
 fi
 
 MEP_NATIVE_FIXTURE="$FIXTURE" \
-    cargo test -p morphir-daemon --test spawned_process_extension -- --ignored
+    cargo test -p morphir-host-native --test spawned_process_extension -- --ignored

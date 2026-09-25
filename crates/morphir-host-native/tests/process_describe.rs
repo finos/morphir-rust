@@ -1,10 +1,12 @@
 //! Run with the independently built `mep-native-backend` fixture, as in
 //! `spawned_process_extension.rs`.
 
-use morphir_daemon::extensions::process::DescriptionSource;
-use morphir_daemon::extensions::{ProcessLaunch, SpawnedProcessTransport};
-use morphir_extension_sdk::protocol::{InitializeParams, PeerInfo};
+use morphir_extension_sdk::protocol::PeerInfo;
 use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
+use morphir_host::{
+    Description, DescriptionSource, ExpectedChecks, HostConfig, HostError, describe_with,
+};
+use morphir_host_native::process::{ProcessChannel, ProcessLaunch};
 use std::{path::PathBuf, time::Duration};
 
 struct DescribeDriver;
@@ -21,9 +23,7 @@ impl DescribeDriver {
         }
     }
 
-    async fn describe(
-        mode: &str,
-    ) -> morphir_daemon::Result<morphir_daemon::extensions::process::ProcessDescription> {
+    async fn describe(mode: &str) -> Result<Description, HostError> {
         let launch = ProcessLaunch::new(
             "mep-native-backend",
             Self::fixture(),
@@ -32,27 +32,33 @@ impl DescribeDriver {
         Self::describe_launch(launch, mode).await
     }
 
-    async fn describe_launch(
-        launch: ProcessLaunch,
-        mode: &str,
-    ) -> morphir_daemon::Result<morphir_daemon::extensions::process::ProcessDescription> {
+    /// Describe a fresh process. The session fallback keeps the launch's
+    /// discovery lock, as an ordinary session does.
+    async fn describe_launch(launch: ProcessLaunch, mode: &str) -> Result<Description, HostError> {
         let launch = launch.request_timeout(Duration::from_secs(2));
         let launch = if mode == "plain" {
             launch
         } else {
             launch.env("MEP_FIXTURE_DESCRIBE", mode)
         };
-        SpawnedProcessTransport::spawn(launch)
-            .await?
-            .describe(InitializeParams {
-                protocol_versions: vec!["0.1".into(), "future".into()],
-                host: PeerInfo {
-                    kind: Default::default(),
-                    name: "describe-test".into(),
-                    version: "0.2.0".into(),
-                },
-            })
-            .await
+        let config = HostConfig::with_versions(
+            PeerInfo {
+                kind: Default::default(),
+                name: "describe-test".into(),
+                version: "0.2.0".into(),
+            },
+            vec!["0.1".into(), "future".into()],
+        );
+        let channel = ProcessChannel::spawn(launch).await?;
+        let expected = channel.expectation();
+        let expected_id = expected.id().to_owned();
+        describe_with(
+            channel,
+            &config,
+            &expected_id,
+            ExpectedChecks::new(expected),
+        )
+        .await
     }
 }
 
@@ -136,7 +142,7 @@ async fn the_fallback_holds_a_discovered_launch_to_its_discovery_lock() {
     assert_eq!(
         error.to_string(),
         format!(
-            "Extension error: Extension 'mep-native-backend' initialization metadata disagreed with discovery: version '{}' was discovered as '0.0.0-discovered'",
+            "Extension 'mep-native-backend' initialization metadata disagreed with discovery: version '{}' was discovered as '0.0.0-discovered'",
             env!("CARGO_PKG_VERSION")
         )
     );

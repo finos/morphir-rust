@@ -4,11 +4,11 @@
 //! this test with `--ignored`. Set MORPHIR_ELM_NATIVE_BUNDLE to the bundle the
 //! artifact task staged.
 
-use morphir_daemon::extensions::{InvokeOutcome, activate_transport, protocol::methods};
-use morphir_extension_sdk::{
-    prelude::*,
-    protocol::{InitializeParams, PeerInfo},
-};
+mod support;
+
+use morphir_extension_sdk::prelude::*;
+use morphir_host::Session;
+use support::mep::{completed, host_config};
 
 const EXAMPLE: &str = include_str!("fixtures/morphir-elm-extension/Example.elm");
 const INVALID: &str = include_str!("fixtures/morphir-elm-extension/Invalid.elm");
@@ -63,22 +63,17 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
     );
     // Removing this fixture's repository proves activation uses the installed copy.
     std::fs::remove_dir_all(repository.root()).unwrap();
-    let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())
+    let guest = morphir_host_native::activate(activate_installed(&home, &id).unwrap(), root.path())
         .await
         .unwrap();
-    let ready = loaded
-        .initialize(InitializeParams {
-            protocol_versions: vec!["0.1".into()],
-            host: PeerInfo {
-                kind: Default::default(),
-                name: "elm-native-release-test".into(),
-                version: "1.0.0".into(),
-            },
-        })
-        .await
-        .unwrap_or_else(|failure| panic!("negotiation failed: {}", failure.error()));
-    assert_eq!(ready.negotiated().extension().id, "morphir-elm-native");
-    let capabilities = ready.negotiated().capabilities();
+    let mut session = Session::open(
+        guest.connection,
+        &host_config("elm-native-release-test", "1.0.0"),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("negotiation failed: {error}"));
+    assert_eq!(session.negotiated().extension().id, "morphir-elm-native");
+    let capabilities = session.negotiated().capabilities();
     let frontend = capabilities
         .frontend
         .as_ref()
@@ -89,15 +84,6 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
     assert!(frontend.incremental);
     assert_eq!(capabilities.backend.as_ref().unwrap().targets, ["elm"]);
 
-    macro_rules! invoke {
-        ($ready:expr, $result:ty, $method:expr, $request:expr) => {
-            match $ready.invoke::<$result>($method, $request).await {
-                InvokeOutcome::Success(ready, result) => (ready, result),
-                InvokeOutcome::Rejected(_, error) => panic!("request rejected: {error}"),
-                InvokeOutcome::Failed(failure) => panic!("MEP failed: {}", failure.error()),
-            }
-        };
-    }
     let request = |uri: &str, text: &str| CompileRequest {
         language_id: "elm".into(),
         sources: SourceSet {
@@ -122,11 +108,9 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
         baseline: None,
     };
 
-    let (ready, compiled) = invoke!(
-        ready,
-        CompileResult,
-        methods::COMPILE,
-        request("Example.elm", EXAMPLE)
+    let compiled = completed(
+        "compile",
+        session.compile(request("Example.elm", EXAMPLE)).await,
     );
     assert!(compiled.success, "{:?}", compiled.diagnostics);
     assert_eq!(compiled.ir_version.as_deref(), Some("3"));
@@ -137,11 +121,9 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
         compiled.modules
     );
 
-    let (_, rejected) = invoke!(
-        ready,
-        CompileResult,
-        methods::COMPILE,
-        request("Invalid.elm", INVALID)
+    let rejected = completed(
+        "compile",
+        session.compile(request("Invalid.elm", INVALID)).await,
     );
     assert!(!rejected.success, "malformed Elm must not compile");
     assert!(
@@ -157,4 +139,8 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
         "malformed Elm returns an error diagnostic: {:?}",
         rejected.diagnostics
     );
+    session
+        .close()
+        .await
+        .unwrap_or_else(|error| panic!("shutdown failed: {error}"));
 }

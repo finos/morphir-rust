@@ -11,7 +11,7 @@ mod term;
 pub use assertion::{Assertion, AssertionKey, AssertionSource, Carrier, DocumentId, SourceRecord};
 pub use context::{
     Coercion, ContextError, ContextResources, EffectiveContext, ExpandedKey, expand_object,
-    resolve_context,
+    expand_properties, resolve_context,
 };
 pub use graph::GraphIndex;
 pub use term::{Fact, GraphName, ObjectTerm, TypedValue};

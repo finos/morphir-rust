@@ -1,6 +1,6 @@
 //! Pure expansion of the bounded authored metadata context grammar.
 
-use super::ObjectTerm;
+use super::{Fact, GraphName, ObjectTerm};
 use crate::node_address::{NodeRoot, NodeUri};
 use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
@@ -79,6 +79,9 @@ pub enum ContextError {
     /// The schema closure did not supply the `@json` datatype.
     #[error("@json coercion requires a declared datatype")]
     MissingJsonDatatype,
+    /// A non-JSON fact object needs a recognized expanded value or node form.
+    #[error("fact object must be @value or @id; structured data requires @json")]
+    InvalidFactObject,
     /// A supplied context file is malformed or has the wrong envelope.
     #[error("invalid context resource: {0}")]
     InvalidResource(String),
@@ -264,6 +267,75 @@ pub fn expand_object(
         Coercion::Json => json_datatype
             .map(|uri| ObjectTerm::typed_json(value, uri))
             .ok_or(ContextError::MissingJsonDatatype),
+    }
+}
+
+/// Expand authored fact properties into default-graph terms without claiming
+/// declaration or data validation. The caller supplies the `@json` datatype
+/// from its verified predicate closure, then validates each resulting object.
+/// A bare array repeats objects; an `@json` array is one structured object.
+pub fn expand_properties<'a>(
+    subject: &NodeUri,
+    properties: impl IntoIterator<Item = (&'a str, &'a Value)>,
+    context: &EffectiveContext,
+    json_datatype: impl Fn(&NodeUri) -> Option<NodeUri>,
+) -> Result<Vec<Fact>, ContextError> {
+    let mut facts = Vec::new();
+    for (key, authored) in properties {
+        let predicate = context.expand_key(key)?;
+        let datatype = || json_datatype(predicate.uri());
+        let objects = if predicate.coercion() == Coercion::Json {
+            vec![expand_object(Coercion::Json, authored.clone(), datatype())?]
+        } else {
+            let values: Vec<&Value> = match authored {
+                Value::Array(items) => items.iter().collect(),
+                _ => vec![authored],
+            };
+            values
+                .into_iter()
+                .filter(|value| !value.is_null())
+                .map(|value| expand_fact_object(predicate.coercion(), value, datatype()))
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        facts.extend(objects.into_iter().map(|object| {
+            Fact::new(
+                subject.clone(),
+                predicate.uri().clone(),
+                object,
+                GraphName::Default,
+            )
+        }));
+    }
+    Ok(facts)
+}
+
+fn expand_fact_object(
+    coercion: Coercion,
+    authored: &Value,
+    json_datatype: Option<NodeUri>,
+) -> Result<ObjectTerm, ContextError> {
+    match authored {
+        Value::Array(_) => Err(ContextError::InvalidFactObject),
+        Value::Object(members) if members.len() == 1 && members.contains_key("@id") => {
+            expand_object(Coercion::NodeId, members["@id"].clone(), None)
+        }
+        Value::Object(members) if members.len() == 1 && members.contains_key("@value") => {
+            match &members["@value"] {
+                Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+                    Ok(ObjectTerm::value(members["@value"].clone()))
+                }
+                _ => Err(ContextError::InvalidFactObject),
+            }
+        }
+        Value::Object(members)
+            if members.len() == 2
+                && members.get("@type") == Some(&Value::String("@json".to_owned()))
+                && members.contains_key("@value") =>
+        {
+            expand_object(Coercion::Json, members["@value"].clone(), json_datatype)
+        }
+        Value::Object(_) => Err(ContextError::InvalidFactObject),
+        _ => expand_object(coercion, authored.clone(), json_datatype),
     }
 }
 

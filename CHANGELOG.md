@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extension/gleam/v0.3.0`. Publishing them needs Morphir CLI `0.4.0-beta.7` or
   later; older CLIs cannot read the descriptors, so each release takes a new
   minor version (finos/morphir#921).
+- `test:cli-release` runs every bundle through Morphir CLI `0.4.0-beta.8`, and
+  it now covers `elm-native` too. The installed `morphir-elm-native` compiles
+  a project at IR v3 and v4, and then a two-file `--input` selection in one
+  request, where one module refers to a type in the other. A selection of
+  several files needs the installed provider's `frontend.multiDocument`,
+  which reaches the CLI from the bundle's claims from `0.4.0-beta.8`
+  (#266). Through `0.4.0-beta.7` the same selection is refused
+  (finos/morphir#921).
 
 ### Changed
 - WASM extension bundles now carry version-2 (`2.0.0-draft.2`) release

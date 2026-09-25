@@ -1,6 +1,6 @@
 #!/bin/sh
 #MISE description="Publish, install and use an extension bundle through the released morphir CLI"
-#USAGE arg "<id>" help="Extension short id: avro, gleam, openapi, python or rust"
+#USAGE arg "<id>" help="Extension short id: avro, elm-native, gleam, openapi, python or rust"
 
 # The extension bundles built here are hosted by the morphir CLI, which finos/morphir releases.
 # This task is the compatibility check between the two: it takes the bundle that
@@ -16,12 +16,13 @@ set -eu
 ID="${usage_id:-${1:-}}"
 case "$ID" in
     avro) EXTENSION_ID=morphir-avro ;;
+    elm-native) EXTENSION_ID=morphir-elm-native ;;
     gleam) EXTENSION_ID=morphir-gleam ;;
     openapi) EXTENSION_ID=morphir-openapi ;;
     python) EXTENSION_ID=morphir-python ;;
     rust) EXTENSION_ID=morphir-rust ;;
     *)
-        echo "usage: mise run test:cli-release <avro|gleam|openapi|python|rust>" >&2
+        echo "usage: mise run test:cli-release <avro|elm-native|gleam|openapi|python|rust>" >&2
         exit 2
         ;;
 esac
@@ -153,6 +154,51 @@ case "$ID" in
         require_file out/json-schema-v4/domain.Customer.schema.json
         morphir generate --target openapi --input "$CANONICAL_IR" --output out/openapi-v4
         require_file out/openapi-v4/openapi.json
+        ;;
+    elm-native)
+        mkdir -p "$PROJECT/src/Acme"
+        cat >"$PROJECT/morphir.toml" <<'TOML'
+[project]
+name = "acme/example"
+version = "0.1.0"
+source_directory = "src"
+[frontend]
+language = "elm"
+TOML
+        cat >"$PROJECT/src/Acme/Types.elm" <<'ELM'
+module Acme.Types exposing (Decision(..))
+
+type Decision
+    = Accept Int
+    | Reject
+ELM
+        cat >"$PROJECT/src/Acme/Rules.elm" <<'ELM'
+module Acme.Rules exposing (Outcome)
+
+import Acme.Types exposing (Decision)
+
+type alias Outcome =
+    { decision : Decision
+    , note : String
+    }
+ELM
+        for version in 3 4; do
+            morphir compile --ir-version "$version" --output "compiled-v$version"
+            [ "$(format_version "compiled-v$version/morphir-ir.json")" = "$version" ]
+        done
+        # A selection of files is compiled in one request only when the installed provider
+        # declares frontend.multiDocument, which reaches it through the bundle's claims. Rules
+        # refers to a type in Types, so the reference resolves only when both files go together.
+        morphir compile --language elm --input src/Acme/Types.elm --input src/Acme/Rules.elm \
+            --package-name acme/example --ir-version 4 --output selected
+        python3 - "$PROJECT/selected/morphir-ir.json" <<'PY'
+import json, sys
+modules = json.load(open(sys.argv[1], encoding="utf-8"))["distribution"]["Library"]["def"]["modules"]
+outcome = modules["acme/rules"]["Public"]["types"]["outcome"]["Public"]["TypeAliasDefinition"]
+decision = outcome["typeExp"]["Record"]["fields"]["decision"]
+if decision != {"Reference": {"fqname": "acme/example:acme/types#decision"}}:
+    raise SystemExit(f"Outcome.decision does not refer to Acme.Types.Decision: {decision}")
+PY
         ;;
     gleam)
         mkdir -p "$PROJECT/src/domain"

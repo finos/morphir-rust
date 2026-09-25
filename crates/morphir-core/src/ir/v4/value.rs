@@ -484,7 +484,7 @@ impl<'de> Deserialize<'de> for ValueSpecification {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_value_specification,
         )
@@ -605,7 +605,7 @@ impl<'de> Deserialize<'de> for ValueDefinition {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_value_definition,
         )
@@ -720,7 +720,7 @@ impl<'de> Deserialize<'de> for ValueBody {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_value_body,
         )

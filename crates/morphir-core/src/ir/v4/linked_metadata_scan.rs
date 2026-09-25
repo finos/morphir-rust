@@ -1,14 +1,15 @@
 //! Grammar-aware detection of linked metadata in concrete V4 carriers.
 
+use super::tree_files::{ModuleEntries, ModuleManifestFile, NodeFileBody};
 use super::{
     AccessControlled, Annotation, AnnotationArgument, Annotations, Distribution, DocumentMeta,
-    Documented, MetadataScope, ModuleDefinition, ModuleSpecification, PackageDefinition,
-    PackageSpecification, Type, TypeDefinition, TypeSpecification, Value, ValueDefinition,
-    ValueSpecification,
+    Documented, Incompleteness, MetadataScope, ModuleDefinition, ModuleSpecification,
+    PackageDefinition, PackageSpecification, Pattern, Type, TypeDefinition, TypeDefinitionFile,
+    TypeSpecification, Value, ValueBody, ValueDefinition, ValueDefinitionFile, ValueSpecification,
 };
 use crate::metadata::EffectiveContext;
 use crate::traversal::IrCursor;
-use crate::traversal::v4::{V4Visitor, walk_type, walk_value};
+use crate::traversal::v4::{V4Visitor, walk_pattern, walk_type, walk_value};
 
 /// True when a concrete V4 fragment owns a linked-metadata carrier.
 pub trait LinkedMetadataCarrier {
@@ -25,6 +26,10 @@ impl Detector {
 
     fn value(&mut self, value: &Value) {
         self.visit_value(&mut IrCursor::root(), value);
+    }
+
+    fn pattern(&mut self, value: &Pattern) {
+        self.visit_pattern(&mut IrCursor::root(), value);
     }
 
     fn definition(&mut self, value: &ValueDefinition) {
@@ -53,6 +58,17 @@ impl V4Visitor for Detector {
             walk_value(self, cursor, value);
         }
     }
+
+    fn visit_pattern(&mut self, cursor: &mut IrCursor, value: &Pattern) {
+        let attributes = value.attributes();
+        self.0 |= !attributes.metadata.is_empty();
+        if let Some(inferred) = &attributes.inferred_type {
+            self.visit_type(cursor, inferred);
+        }
+        if !self.0 {
+            walk_pattern(self, cursor, value);
+        }
+    }
 }
 
 impl LinkedMetadataCarrier for Type {
@@ -67,6 +83,14 @@ impl LinkedMetadataCarrier for Value {
     fn contains_linked_metadata(&self) -> bool {
         let mut detector = Detector::default();
         detector.value(self);
+        detector.0
+    }
+}
+
+impl LinkedMetadataCarrier for Pattern {
+    fn contains_linked_metadata(&self) -> bool {
+        let mut detector = Detector::default();
+        detector.pattern(self);
         detector.0
     }
 }
@@ -279,6 +303,119 @@ pub(super) fn validate_document_scopes(
     validator.error.map_or(Ok(()), Err)
 }
 
+/// Validate a public fragment without inherited document bindings.
+pub(super) trait StandaloneMetadata {
+    fn validate_standalone(&mut self) -> Result<(), String>;
+}
+
+fn with_empty_context(validate: impl FnOnce(&mut Validator)) -> Result<(), String> {
+    let mut validator = Validator {
+        context: EffectiveContext::default(),
+        error: None,
+    };
+    validate(&mut validator);
+    validator.error.map_or(Ok(()), Err)
+}
+
+macro_rules! standalone {
+    ($model:ty, $method:ident) => {
+        impl StandaloneMetadata for $model {
+            fn validate_standalone(&mut self) -> Result<(), String> {
+                with_empty_context(|validator| validator.$method(self))
+            }
+        }
+    };
+}
+
+standalone!(Annotations, annotations);
+standalone!(Incompleteness, incompleteness);
+standalone!(TypeSpecification, type_specification);
+standalone!(TypeDefinition, type_definition);
+standalone!(ValueSpecification, value_specification);
+standalone!(ModuleSpecification, module_specification);
+standalone!(ModuleDefinition, module_definition);
+standalone!(PackageSpecification, package_specification);
+standalone!(PackageDefinition, package_definition);
+standalone!(Distribution, distribution);
+standalone!(ValueBody, value_body);
+
+impl StandaloneMetadata for Type {
+    fn validate_standalone(&mut self) -> Result<(), String> {
+        with_empty_context(|validator| validator.visit_type(&mut IrCursor::root(), self))
+    }
+}
+
+impl StandaloneMetadata for Pattern {
+    fn validate_standalone(&mut self) -> Result<(), String> {
+        with_empty_context(|validator| validator.visit_pattern(&mut IrCursor::root(), self))
+    }
+}
+
+impl StandaloneMetadata for Value {
+    fn validate_standalone(&mut self) -> Result<(), String> {
+        with_empty_context(|validator| validator.visit_value(&mut IrCursor::root(), self))
+    }
+}
+
+impl StandaloneMetadata for ValueDefinition {
+    fn validate_standalone(&mut self) -> Result<(), String> {
+        with_empty_context(|validator| validator.visit_definition(&mut IrCursor::root(), self))
+    }
+}
+
+impl StandaloneMetadata for TypeDefinitionFile {
+    fn validate_standalone(&mut self) -> Result<(), String> {
+        with_empty_context(|validator| match &mut self.body {
+            NodeFileBody::Def(node) => validator.type_definition(&node.value.value),
+            NodeFileBody::Spec(node) => validator.type_specification(&mut node.value),
+        })
+    }
+}
+
+impl StandaloneMetadata for ValueDefinitionFile {
+    fn validate_standalone(&mut self) -> Result<(), String> {
+        with_empty_context(|validator| match &mut self.body {
+            NodeFileBody::Def(node) => {
+                validator.visit_definition(&mut IrCursor::root(), &node.value.value)
+            }
+            NodeFileBody::Spec(node) => validator.value_specification(&mut node.value),
+        })
+    }
+}
+
+impl StandaloneMetadata for ModuleManifestFile {
+    fn validate_standalone(&mut self) -> Result<(), String> {
+        with_empty_context(|validator| {
+            match &mut self.types {
+                ModuleEntries::Names(_) => {}
+                ModuleEntries::Definitions(entries) => {
+                    for entry in entries.values() {
+                        validator.type_definition(&entry.value.value);
+                    }
+                }
+                ModuleEntries::Specifications(entries) => {
+                    for entry in entries.values_mut() {
+                        validator.type_specification(&mut entry.value);
+                    }
+                }
+            }
+            match &mut self.values {
+                ModuleEntries::Names(_) => {}
+                ModuleEntries::Definitions(entries) => {
+                    for entry in entries.values() {
+                        validator.visit_definition(&mut IrCursor::root(), &entry.value.value);
+                    }
+                }
+                ModuleEntries::Specifications(entries) => {
+                    for entry in entries.values_mut() {
+                        validator.value_specification(&mut entry.value);
+                    }
+                }
+            }
+        })
+    }
+}
+
 struct Validator {
     context: EffectiveContext,
     error: Option<String>,
@@ -433,6 +570,43 @@ impl Validator {
         }
     }
 
+    fn incompleteness(&mut self, incompleteness: &Incompleteness) {
+        if let Incompleteness::Hole {
+            partial_body: Some(value),
+            ..
+        } = incompleteness
+        {
+            self.visit_type(&mut IrCursor::root(), value);
+        }
+    }
+
+    fn value_body(&mut self, body: &ValueBody) {
+        match body {
+            ValueBody::Expression(value) => self.visit_value(&mut IrCursor::root(), value),
+            ValueBody::Native { .. } => {}
+            ValueBody::External { fallback, .. } => {
+                if let Some(value) = fallback {
+                    self.visit_value(&mut IrCursor::root(), value);
+                }
+            }
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => {
+                if let Some(value) = partial_body {
+                    self.visit_value(&mut IrCursor::root(), value);
+                }
+                if let super::Incompleteness::Hole {
+                    partial_body: Some(value),
+                    ..
+                } = incompleteness
+                {
+                    self.visit_type(&mut IrCursor::root(), value);
+                }
+            }
+        }
+    }
+
     fn value_specification(&mut self, specification: &mut ValueSpecification) {
         self.annotations(&mut specification.annotations);
         for value in specification.inputs.values() {
@@ -514,5 +688,15 @@ impl V4Visitor for Validator {
             self.visit_type(cursor, expected);
         }
         walk_value(self, cursor, value);
+    }
+
+    fn visit_pattern(&mut self, cursor: &mut IrCursor, value: &Pattern) {
+        if self.scope(&value.attributes().metadata).is_none() {
+            return;
+        }
+        if let Some(inferred) = &value.attributes().inferred_type {
+            self.visit_type(cursor, inferred);
+        }
+        walk_pattern(self, cursor, value);
     }
 }

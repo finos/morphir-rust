@@ -11,6 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::ops::Deref;
 
 use super::linked_metadata::MetadataScope;
+use super::linked_metadata_scan::StandaloneMetadata;
 use super::value::Value;
 use crate::naming::{FQName, Name};
 use crate::node_address::NodeUri;
@@ -85,8 +86,12 @@ impl Serialize for Annotations {
 impl<'de> Deserialize<'de> for Annotations {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(deserializer)?;
-        super::serde_document::decode_annotations_value(&value, "")
-            .map_err(super::serde_tagged::carry)
+        let mut decoded = super::serde_document::decode_annotations_value(&value, "")
+            .map_err(super::serde_tagged::carry)?;
+        decoded
+            .validate_standalone()
+            .map_err(serde::de::Error::custom)?;
+        Ok(decoded)
     }
 }
 

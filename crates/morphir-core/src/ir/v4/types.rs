@@ -314,7 +314,7 @@ impl<'de> Deserialize<'de> for TypeSpecification {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_type_specification,
         )
@@ -401,7 +401,7 @@ impl<'de> Deserialize<'de> for Incompleteness {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_incompleteness,
         )
@@ -533,7 +533,7 @@ impl<'de> Deserialize<'de> for TypeDefinition {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_type_definition,
         )

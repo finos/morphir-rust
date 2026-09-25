@@ -338,6 +338,40 @@ fn major_alias_and_exact_ir_versions_resolve_in_both_directions_for_real_snapsho
     );
 }
 
+// -- Review item: a reinstall under the same id and version with other
+// args opens a new pooled guest, so its fingerprint differs. --
+
+#[test]
+fn a_same_version_reinstall_with_other_args_has_another_fingerprint() {
+    let spec = || Spec {
+        id: "reinstalled",
+        runtime: Runtime::Process,
+        frontend: Some(("reinstalled-lang", "4", true)),
+        backend: None,
+    };
+    let before = installed(spec());
+    let after = installed_with_record(spec(), |record| {
+        record["artifacts"][0]["args"] = serde_json::json!(["--verbose"]);
+    });
+    assert_eq!(
+        before.snapshot.installed().extension_info().version,
+        after.snapshot.installed().extension_info().version
+    );
+    assert_ne!(before.snapshot.installed(), after.snapshot.installed());
+
+    let fingerprint_of = |fixture: &Fixture| {
+        let mut registry = Registry::new();
+        registry.register(source_of(fixture)).unwrap();
+        registry
+            .resolve_frontend("reinstalled-lang", "4", InvocationPolicy::PreferDirect)
+            .unwrap()
+            .fingerprint()
+    };
+
+    assert_ne!(fingerprint_of(&before), fingerprint_of(&after));
+    assert_eq!(fingerprint_of(&before), fingerprint_of(&before));
+}
+
 // -- Pickup item: `info.types` from the record so
 // `supports_workspace_discovery()` answers correctly for a real installed
 // provider. --

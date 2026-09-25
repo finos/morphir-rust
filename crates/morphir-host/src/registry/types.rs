@@ -84,6 +84,16 @@ pub trait GuestSource: MaybeSend + Sync {
         None
     }
 
+    /// A value that tells apart two builds registered under the same id and
+    /// version, such as a digest of an installed extension's catalog record.
+    ///
+    /// `None`, the default, when the id and version already name one build.
+    /// [`Resolved::fingerprint`] includes it, so a pool keyed by the
+    /// fingerprint opens a new guest when the build changes.
+    fn incarnation(&self) -> Option<&str> {
+        None
+    }
+
     /// Start the guest and return a checked, unopened connection.
     async fn connect(&self, workspace: &Path) -> Result<Box<dyn GuestConnection>, HostError>;
 }
@@ -267,17 +277,25 @@ impl Resolved {
         }
     }
 
-    /// A key that changes when the provider's identity, origin, or mode
-    /// changes: `"{id}@{version}:{origin:?}:{mode:?}"`.
+    /// A key that changes when the provider's identity, origin, mode, or
+    /// build changes: `"{id}@{version}:{origin:?}:{mode:?}"`, followed by
+    /// `":{incarnation}"` when [`GuestSource::incarnation`] is `Some`.
+    ///
+    /// The incarnation makes a reinstall under the same id and version, with
+    /// another artifact, args, or claims, a new key.
     pub fn fingerprint(&self) -> String {
         let info = self.info();
-        format!(
+        let identity = format!(
             "{}@{}:{:?}:{:?}",
             info.id,
             info.version,
             self.origin(),
             self.invocation_mode
-        )
+        );
+        match self.source.incarnation() {
+            Some(incarnation) => format!("{identity}:{incarnation}"),
+            None => identity,
+        }
     }
 
     /// Start the guest and return a checked, unopened connection.

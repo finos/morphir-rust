@@ -11,7 +11,8 @@ use crate::{ActivatedGuest, activate};
 use async_trait::async_trait;
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    ArtifactRuntime, DistributionError, InstalledExtensionSnapshot, activate_installed_snapshot,
+    ArtifactRuntime, DistributionError, InstalledExtensionSnapshot, Sha256Digest,
+    activate_installed_snapshot,
 };
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
 use morphir_host::{
@@ -64,13 +65,16 @@ pub enum InstalledSourceError {
 /// frontend and backend members the installed snapshot recorded. Its
 /// invocation mode follows the installed artifact's runtime -- `ProcessMep`
 /// for a process artifact, `WasmMep` for a WebAssembly artifact -- under
-/// every [`InvocationPolicy`].
+/// every [`InvocationPolicy`]. Its [`GuestSource::incarnation`] is a SHA-256
+/// of the installed catalog record, so a reinstall under the same id and
+/// version with another artifact, args, or claims is a new build.
 pub struct InstalledSource {
     home: MorphirHome,
     snapshot: InstalledExtensionSnapshot,
     info: ExtensionInfo,
     capabilities: ExtensionCapabilities,
     mode: InvocationMode,
+    incarnation: String,
 }
 
 impl InstalledSource {
@@ -82,12 +86,14 @@ impl InstalledSource {
             ArtifactRuntime::Process => InvocationMode::ProcessMep,
             ArtifactRuntime::Wasm => InvocationMode::WasmMep,
         };
+        let incarnation = incarnation_of(&snapshot);
         Self {
             home,
             snapshot,
             info,
             capabilities,
             mode,
+            incarnation,
         }
     }
 
@@ -149,6 +155,10 @@ impl GuestSource for InstalledSource {
         self.mode
     }
 
+    fn incarnation(&self) -> Option<&str> {
+        Some(&self.incarnation)
+    }
+
     /// [`InstalledSource::activate`], with its failure flattened into
     /// [`HostError::Invalid`] carrying the same text.
     async fn connect(&self, workspace: &Path) -> Result<Box<dyn GuestConnection>, HostError> {
@@ -158,4 +168,14 @@ impl GuestSource for InstalledSource {
             .map_err(|error| HostError::Invalid(error.to_string()))?;
         Ok(Box::new(guest.connection))
     }
+}
+
+/// A SHA-256 of the installed catalog record, which holds the artifact
+/// digest, args, and claims. If the record does not serialize, the artifact
+/// digest alone stands in.
+fn incarnation_of(snapshot: &InstalledExtensionSnapshot) -> String {
+    serde_json::to_vec(snapshot.installed()).map_or_else(
+        |_| snapshot.installed().digest().to_string(),
+        |record| Sha256Digest::of_bytes(&record).to_string(),
+    )
 }

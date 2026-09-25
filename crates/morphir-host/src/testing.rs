@@ -172,6 +172,7 @@ pub struct FakeSource {
     origin: ProviderOrigin,
     scope: CapabilityMetadataScope,
     modes: FakeModes,
+    incarnation: Option<String>,
     answers: Vec<ExtensionResponse>,
 }
 
@@ -186,6 +187,7 @@ impl FakeSource {
             origin: ProviderOrigin::Builtin,
             scope: CapabilityMetadataScope::Complete,
             modes: FakeModes::Native,
+            incarnation: None,
             answers: Vec::new(),
         }
     }
@@ -203,6 +205,7 @@ impl FakeSource {
             origin: ProviderOrigin::Installed,
             scope: CapabilityMetadataScope::PersistedFrontendBackend,
             modes: FakeModes::Fixed(mode),
+            incarnation: None,
             answers: Vec::new(),
         }
     }
@@ -236,6 +239,13 @@ impl FakeSource {
             prefer_direct,
             protocol_only,
         };
+        self
+    }
+
+    /// Report `incarnation` from [`GuestSource::incarnation`], like two
+    /// builds registered under one id and version.
+    pub fn with_incarnation(mut self, incarnation: impl Into<String>) -> Self {
+        self.incarnation = Some(incarnation.into());
         self
     }
 
@@ -277,6 +287,10 @@ impl GuestSource for FakeSource {
                 protocol_only
             }
         }
+    }
+
+    fn incarnation(&self) -> Option<&str> {
+        self.incarnation.as_deref()
     }
 
     async fn connect(&self, _workspace: &Path) -> Result<Box<dyn GuestConnection>, HostError> {

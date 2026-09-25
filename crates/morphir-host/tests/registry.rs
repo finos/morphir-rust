@@ -682,6 +682,32 @@ fn a_resolved_provider_has_a_fingerprint_of_its_identity_origin_and_mode() {
     );
 }
 
+#[test]
+fn a_fingerprint_tells_apart_two_incarnations_of_one_id_and_version() {
+    let fingerprint_of = |source: FakeSource| {
+        let mut registry = Registry::new();
+        registry.register(Arc::new(source)).unwrap();
+        registry
+            .resolve_backend("json", "4", InvocationPolicy::PreferDirect)
+            .unwrap()
+            .fingerprint()
+    };
+    let build = || Arc::unwrap_or_clone(process_provider("installed-choice", "gleam", "json"));
+
+    let first = fingerprint_of(build().with_incarnation("first-build"));
+    let second = fingerprint_of(build().with_incarnation("second-build"));
+
+    assert_ne!(first, second);
+    assert_eq!(
+        first,
+        "installed-choice@2.0.0:Installed:ProcessMep:first-build"
+    );
+    assert_eq!(
+        fingerprint_of(build()),
+        "installed-choice@2.0.0:Installed:ProcessMep"
+    );
+}
+
 #[tokio::test]
 async fn a_resolved_provider_connects_through_its_source() {
     let source = FakeSource::installed(

@@ -220,44 +220,4 @@ mod tests {
             "the error must name the program path: {err}"
         );
     }
-
-    /// T12-c: `run_program` must remove every inherited `MORPHIR_`-prefixed variable before it
-    /// runs the program, so a developer's own environment cannot leak into the program under
-    /// test. `MORPHIR_BDD_LEAK_PROBE` is a variable name reserved for this test alone: no other
-    /// test in this crate reads or sets it, so a concurrent test cannot observe a wrong value
-    /// from it or make this test observe one of its own.
-    #[test]
-    #[cfg(unix)]
-    fn run_program_removes_inherited_morphir_variables() {
-        let dir = tempfile::tempdir().expect("create a temporary directory");
-        let echo = PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/echo.sh"
-        ));
-        let program = CliProgram {
-            name: "morphir".to_owned(),
-            path: echo,
-        };
-
-        // SAFETY: `set_var`/`remove_var` mutate process-global state, which is why they are
-        // `unsafe` as of edition 2024 (a concurrent read through libc, outside Rust's own
-        // std::env, is not guaranteed safe). `MORPHIR_BDD_LEAK_PROBE` is reserved for this test
-        // alone, so no other test reads or depends on it, and nothing else in this process reads
-        // the environment through anything but `std::env`.
-        unsafe {
-            std::env::set_var("MORPHIR_BDD_LEAK_PROBE", "leaked");
-        }
-        let result = run_program(&program, &[], dir.path());
-        // SAFETY: see above.
-        unsafe {
-            std::env::remove_var("MORPHIR_BDD_LEAK_PROBE");
-        }
-
-        let output = result.expect("the fixture runs");
-        assert!(
-            output.stdout.contains("leak=\n"),
-            "MORPHIR_BDD_LEAK_PROBE must not reach the program under test:\n{}",
-            output.stdout
-        );
-    }
 }

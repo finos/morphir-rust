@@ -4,6 +4,7 @@
 //! node has a source span. Descriptions keep their prose and fenced blocks as parsed Markdown.
 //! Extensions read tags, fences and prose into a typed context. This crate does not run scenarios.
 
+pub mod convert;
 pub mod cursor;
 pub mod error;
 pub mod extension;

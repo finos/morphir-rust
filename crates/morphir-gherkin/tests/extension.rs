@@ -229,3 +229,71 @@ fn a_step_path_is_not_a_scenario() {
     assert_eq!(errors[0].path, step);
     assert!(errors[0].to_string().contains("not a scenario"));
 }
+
+const OUTLINE_TEXT: &str = "@syntax:elm\nFeature: F\n  Scenario Outline: o\n    Given <x>\n\n    @wip\n    Examples: first\n      | x |\n      | 1 |\n\n    @syntax:gleam\n    Examples: second\n      | x |\n      | 2 |\n";
+
+fn examples(i: usize) -> NodePath {
+    scenario(0).push(morphir_gherkin::Segment::Examples(i))
+}
+
+#[test]
+fn an_examples_path_applies_only_its_own_blocks_tags() {
+    let (doc, _) = read_str("f.feature", OUTLINE_TEXT).unwrap();
+
+    let (ctx, effect) = extensions().context_for(&doc, &examples(1)).unwrap();
+    assert_eq!(
+        effect,
+        Effect::Continue,
+        "block 0's @wip must not reach block 1"
+    );
+    assert_eq!(ctx.get::<Syntax>(), Some(&Syntax("gleam".to_owned())));
+
+    let (ctx, effect) = extensions().context_for(&doc, &examples(0)).unwrap();
+    assert_eq!(effect, Effect::Skip("work in progress".to_owned()));
+    assert_eq!(
+        ctx.get::<Syntax>(),
+        Some(&Syntax("elm".to_owned())),
+        "block 1's @syntax:gleam must not reach block 0"
+    );
+}
+
+#[test]
+fn a_scenario_path_still_applies_every_examples_block() {
+    let (doc, _) = read_str("f.feature", OUTLINE_TEXT).unwrap();
+    let (ctx, effect) = extensions().context_for(&doc, &scenario(0)).unwrap();
+    assert_eq!(effect, Effect::Skip("work in progress".to_owned()));
+    assert_eq!(ctx.get::<Syntax>(), Some(&Syntax("gleam".to_owned())));
+}
+
+struct RecordPath;
+#[derive(Debug, PartialEq)]
+struct Seen(NodePath);
+impl Processor for RecordPath {
+    fn process(
+        &self,
+        _doc: &morphir_gherkin::Document,
+        at: &NodePath,
+        ctx: &mut Context,
+    ) -> Result<(), String> {
+        ctx.insert(Seen(at.clone()));
+        Ok(())
+    }
+}
+
+#[test]
+fn a_processor_gets_the_examples_path_that_was_passed_in() {
+    let (doc, _) = read_str("f.feature", OUTLINE_TEXT).unwrap();
+    let (ctx, _) = Extensions::new()
+        .with_processor(RecordPath)
+        .context_for(&doc, &examples(1))
+        .unwrap();
+    assert_eq!(ctx.get::<Seen>(), Some(&Seen(examples(1))));
+}
+
+#[test]
+fn an_examples_path_that_does_not_exist_is_not_a_scenario() {
+    let (doc, _) = read_str("f.feature", OUTLINE_TEXT).unwrap();
+    let errors = extensions().context_for(&doc, &examples(5)).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].to_string().contains("not a scenario"));
+}

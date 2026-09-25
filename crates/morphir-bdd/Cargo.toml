@@ -1,0 +1,32 @@
+[package]
+name = "morphir-bdd"
+description = "Runs Morphir's Gherkin suites on cucumber-rs: one world, reusable step libraries, one runner"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+morphir-gherkin = { path = "../morphir-gherkin" }
+cucumber = { version = "0.23", features = ["output-json", "output-junit"] }
+futures = "0.3"
+similar = "2"
+tempfile = { workspace = true }
+serde_json = "1.0"
+# `process` only: `When I run {string}` waits on `tokio::process`. The runtime itself comes from
+# the test binary (`#[tokio::main]`), so this crate does not pick one.
+tokio = { version = "1", features = ["process"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "bdd"
+harness = false

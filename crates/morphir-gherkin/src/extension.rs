@@ -132,8 +132,9 @@ pub trait ProseExtension: Send + Sync {
 
 /// Runs after every scope has been applied, to derive further context from the whole document.
 pub trait Processor: Send + Sync {
-    /// Derives further context for the scenario at `at`. Returns an error message naming what
-    /// went wrong.
+    /// Derives further context for the scenario, or the examples block of a scenario outline, at
+    /// `at`: the same path [`Extensions::context_for`] was given. Returns an error message naming
+    /// what went wrong.
     fn process(&self, doc: &Document, at: &NodePath, ctx: &mut Context) -> Result<(), String>;
 }
 
@@ -185,35 +186,55 @@ impl Extensions {
         self
     }
 
-    /// Builds the context of one scenario. It applies the feature scope, then the rule scope
-    /// (when the scenario is under a rule), then the scenario scope, then each of the scenario's
-    /// examples, then the processors. A skip from any scope wins over a continue from another.
+    /// Builds the context of one scenario, or of one examples block of a scenario outline.
+    ///
+    /// `at` names a scenario (`feature/scenario[i]`, or under a rule) or one examples block of a
+    /// scenario (`…/scenario[i]/examples[j]`):
+    ///
+    /// - For a scenario path, it applies the feature scope, then the rule scope (when the scenario
+    ///   is under a rule), then the scenario scope, then every one of the scenario's examples
+    ///   blocks in source order. An outline that is not run row by row sees all its blocks.
+    /// - For an examples path, it applies the feature, rule and scenario scopes the same way, then
+    ///   only block `j`'s tags and description, as [`Scope::Examples`]. A runner that expands an
+    ///   outline into one scenario per data row passes the row's examples path, so a tag on one
+    ///   block (for example `@wip`) never reaches the rows of another block.
+    ///
+    /// The processors run last, and each gets `at` exactly as it was passed in. A skip from any
+    /// scope wins over a continue from another.
     ///
     /// Only the description of the feature, the rule, the scenario and the examples is read. The
     /// document's preamble, a step's notes and an examples block's notes are not read here.
     ///
-    /// `scenario` must name a scenario. A path that names a rule, a feature or anything else
-    /// fails with `"not a scenario"`.
+    /// A path that names neither a scenario nor an examples block of a scenario (a rule, a
+    /// feature, a step, or a node that does not exist) fails with `"not a scenario"`.
     pub fn context_for(
         &self,
         doc: &Document,
-        scenario: &NodePath,
+        at: &NodePath,
     ) -> Result<(Context, Effect), Vec<ExtensionError>> {
-        match doc.node(scenario) {
-            Some(Node::Scenario(_)) => {}
+        let is_examples = match doc.node(at) {
+            Some(Node::Scenario(_)) => false,
+            Some(Node::Examples(_))
+                if at
+                    .parent()
+                    .and_then(|parent| doc.node(&parent))
+                    .is_some_and(|parent| matches!(parent, Node::Scenario(_))) =>
+            {
+                true
+            }
             other => {
                 let span = other.map(|node| node.span()).unwrap_or_default();
                 return Err(vec![ExtensionError {
-                    path: scenario.clone(),
+                    path: at.clone(),
                     span,
                     message: "not a scenario".to_owned(),
                 }]);
             }
-        }
+        };
         let mut ctx = Context::default();
         let mut effect = Effect::Continue;
         let mut errors = Vec::new();
-        let segments = scenario.segments();
+        let segments = at.segments();
         for depth in 1..=segments.len() {
             let path = NodePath::from_segments(&segments[..depth]);
             let Some(node) = doc.node(&path) else {
@@ -228,6 +249,7 @@ impl Extensions {
                 Node::Feature(f) => (Scope::Feature, &f.tags, &f.description),
                 Node::Rule(r) => (Scope::Rule, &r.tags, &r.description),
                 Node::Scenario(s) => (Scope::Scenario, &s.tags, &s.description),
+                Node::Examples(e) => (Scope::Examples, &e.tags, &e.description),
                 _ => continue,
             };
             self.apply_scope(
@@ -239,7 +261,11 @@ impl Extensions {
                 &mut effect,
                 &mut errors,
             );
-            if let Node::Scenario(s) = node {
+            // A scenario path stands for the whole outline: every examples block applies. An
+            // examples path reaches its own block at the next depth, and only that one.
+            if let Node::Scenario(s) = node
+                && !is_examples
+            {
                 for (i, examples) in s.examples.iter().enumerate() {
                     let path = path.push(Segment::Examples(i));
                     self.apply_scope(
@@ -255,9 +281,9 @@ impl Extensions {
             }
         }
         for processor in &self.processors {
-            if let Err(message) = processor.process(doc, scenario, &mut ctx) {
+            if let Err(message) = processor.process(doc, at, &mut ctx) {
                 errors.push(ExtensionError {
-                    path: scenario.clone(),
+                    path: at.clone(),
                     span: Span::default(),
                     message,
                 });

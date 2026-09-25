@@ -20,6 +20,7 @@ This table lists the crates in the Cargo workspace.
 | Crate | Description |
 | --- | --- |
 | `morphir-avro-extension` | Apache Avro backend that projects Morphir v3/v4 specifications to Avro JSON schemas, protocols, and IDL. |
+| `morphir-bdd` | Cucumber execution for Gherkin suites: a shared world, reusable step libraries and a suite runner with JSON and JUnit output. |
 | `morphir-builtins` | Bundled native and WebAssembly extensions, currently including Morphir IR migration. |
 | `morphir-common` | Shared IR transport, loading, virtual filesystem, remote, home, cache, and pipeline utilities. |
 | `morphir-config` | Portable configuration parsing, merging, and environment rules. |

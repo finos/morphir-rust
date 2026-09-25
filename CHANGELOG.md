@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `morphir-common` can explicitly load linked-metadata context files from a
+  confined document root or a trusted digest resolver, with byte, count and
+  depth limits before pure context resolution (finos/morphir#883).
 - `morphir-core` linked metadata assertions can apply optional detailed source
   records by expanded owner, carrier and fact, preserving sources across fact
   rewrites and rejecting unsafe source-dependent edits (finos/morphir#883).

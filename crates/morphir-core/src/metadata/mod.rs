@@ -4,10 +4,15 @@
 //! interpret authored keys, resolve declarations, or load documents.
 
 mod assertion;
+mod context;
 mod graph;
 mod term;
 
 pub use assertion::{Assertion, AssertionKey, AssertionSource, Carrier, DocumentId};
+pub use context::{
+    Coercion, ContextError, ContextResources, EffectiveContext, ExpandedKey, expand_object,
+    resolve_context,
+};
 pub use graph::GraphIndex;
 pub use term::{Fact, GraphName, ObjectTerm, TypedValue};
 

@@ -13,7 +13,7 @@ pub mod suite;
 pub mod tags;
 pub mod world;
 
-pub use suite::{Suite, SuiteResult, standard_extensions};
+pub use suite::{Console, ScenarioOutcome, Suite, SuiteResult, standard_extensions};
 pub use world::MorphirWorld;
 
 /// Keeps this crate's base step libraries (files, output, CLI and probe steps) in a test binary.

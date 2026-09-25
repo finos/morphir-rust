@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use cucumber::writer::{self, Stats as _};
+use cucumber::event;
+use cucumber::writer::{self, Coloring, Stats as _, Verbosity};
 use cucumber::{World as _, WriterExt as _, gherkin};
 use morphir_gherkin::extension::{Component, Context, Extensions};
 
@@ -18,6 +19,86 @@ use crate::world::MorphirWorld;
 #[must_use]
 pub fn standard_extensions() -> Extensions {
     Extensions::new().with_tags(WipTag)
+}
+
+/// Whether [`Suite::run`] prints a console summary as it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Console {
+    /// Prints cucumber's usual summarized console output, the way a `Suite` always has:
+    /// [`writer::Basic::stdout`] over [`writer::Summarize`].
+    Full,
+    /// Prints nothing to the console. The JSON and JUnit reports are still written; only the
+    /// console output is silenced.
+    Off,
+}
+
+/// One finished scenario, reported by [`Suite::on_scenario_finished`] once per scenario that ran,
+/// in completion order.
+#[derive(Debug, Clone)]
+pub struct ScenarioOutcome {
+    /// The source file the scenario was read from ([`gherkin::Feature::path`]). For a
+    /// `.feature.md` document this is the Markdown file, not a file lowering ever produced.
+    pub feature: PathBuf,
+    /// The scenario's name as cucumber ran it. For an expanded outline row this is the row's own
+    /// substituted name, not the outline's `<placeholder>` template.
+    pub name: String,
+    /// The feature's, rule's (if any) and scenario's tags, without a leading `@`. For an outline
+    /// row this includes the row's own `Examples` tags: cucumber already merges those into the
+    /// row's [`gherkin::Scenario::tags`] before this hook sees it.
+    pub tags: Vec<String>,
+    /// How many steps the scenario ran: its background steps (the feature's, plus the rule's if
+    /// the scenario is under one) plus its own steps.
+    pub steps: usize,
+    /// Why the scenario did not pass: the failing step's error message, or a hook error message.
+    /// `None` if the scenario passed.
+    pub failure: Option<String>,
+}
+
+/// Builds a [`ScenarioOutcome`] from an `after` hook call: the [`gherkin::Feature`],
+/// [`gherkin::Rule`] and [`gherkin::Scenario`] cucumber ran, and the
+/// [`event::ScenarioFinished`] explaining how it finished.
+fn scenario_outcome(
+    feature: &gherkin::Feature,
+    rule: Option<&gherkin::Rule>,
+    scenario: &gherkin::Scenario,
+    ev: &event::ScenarioFinished,
+) -> ScenarioOutcome {
+    let mut tags: Vec<String> = feature.tags.clone();
+    if let Some(rule) = rule {
+        tags.extend(rule.tags.clone());
+    }
+    tags.extend(scenario.tags.clone());
+
+    let background_steps = feature.background.as_ref().map_or(0, |b| b.steps.len())
+        + rule
+            .and_then(|r| r.background.as_ref())
+            .map_or(0, |b| b.steps.len());
+
+    let failure = match ev {
+        event::ScenarioFinished::StepFailed(_, _, err) => Some(err.to_string()),
+        event::ScenarioFinished::BeforeHookFailed(info) => {
+            Some(format!("before hook failed: {}", panic_payload_text(info)))
+        }
+        event::ScenarioFinished::StepPassed | event::ScenarioFinished::StepSkipped => None,
+    };
+
+    ScenarioOutcome {
+        feature: feature.path.clone().unwrap_or_default(),
+        name: scenario.name.clone(),
+        tags,
+        steps: background_steps + scenario.steps.len(),
+        failure,
+    }
+}
+
+/// Reads a panic payload as text, the same way cucumber's own console writer does internally (that
+/// helper is private to the `cucumber` crate, so hook-error messages need their own copy of it).
+fn panic_payload_text(info: &event::Info) -> String {
+    (**info)
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| (**info).downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "(could not resolve panic payload)".to_owned())
 }
 
 /// Builds and runs one Morphir Gherkin suite: a feature directory, an extension context, an
@@ -61,6 +142,9 @@ pub struct Suite {
     max_concurrent: Option<usize>,
     #[allow(clippy::type_complexity)]
     components: Vec<Arc<dyn Fn(&mut Context) + Send + Sync>>,
+    console: Console,
+    #[allow(clippy::type_complexity)]
+    on_scenario_finished: Option<Arc<dyn Fn(&ScenarioOutcome) + Send + Sync>>,
 }
 
 /// The counts and report paths from one [`Suite::run`].
@@ -115,6 +199,8 @@ impl Suite {
             filter: None,
             max_concurrent: None,
             components: Vec::new(),
+            console: Console::Full,
+            on_scenario_finished: None,
         }
     }
 
@@ -197,6 +283,26 @@ impl Suite {
         self
     }
 
+    /// Sets whether `run` prints a console summary as it runs. `Console::Off` still writes the
+    /// JSON and JUnit reports; only the console output is silenced.
+    #[must_use]
+    pub fn console(mut self, console: Console) -> Self {
+        self.console = console;
+        self
+    }
+
+    /// Registers a callback that runs once per finished scenario, in completion order, with a
+    /// [`ScenarioOutcome`] describing it. cucumber allows only one `after` hook; a later call to
+    /// this method replaces an earlier one rather than adding to it.
+    #[must_use]
+    pub fn on_scenario_finished(
+        mut self,
+        f: impl Fn(&ScenarioOutcome) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_scenario_finished = Some(Arc::new(f));
+        self
+    }
+
     /// Sets the program `When I run {string}` runs, named `name`: the command line's first word
     /// must equal `name`. Use this for a tool other than `morphir` itself; [`Suite::cli`] covers
     /// `morphir`.
@@ -265,11 +371,20 @@ impl Suite {
         let extensions = Arc::new(extensions);
         let filter = self.filter;
         let max_concurrent = self.max_concurrent;
+        let on_scenario_finished = self.on_scenario_finished.clone();
 
-        let writer = MorphirWorld::cucumber::<PathBuf>()
+        // `Console::Off` keeps the same writer chain as `Console::Full`; only the `Basic` writer's
+        // output target changes, from real stdout to a sink that discards every byte. `Stats`
+        // (via `summarized()`) still counts steps either way, since it wraps the same chain.
+        let console_target: Box<dyn std::io::Write + Send> = match self.console {
+            Console::Full => Box::new(std::io::stdout()),
+            Console::Off => Box::new(std::io::sink()),
+        };
+
+        let cucumber = MorphirWorld::cucumber::<PathBuf>()
             .with_parser(MorphirParser::new(extensions.clone()))
             .with_writer(
-                writer::Basic::stdout()
+                writer::Basic::new(console_target, Coloring::Auto, Verbosity::Default)
                     .summarized()
                     .tee::<MorphirWorld, _>(writer::Json::for_tee(json))
                     .tee::<MorphirWorld, _>(writer::JUnit::for_tee(junit, 0))
@@ -288,25 +403,44 @@ impl Suite {
                         }
                     })
                 }
-            })
-            .filter_run(self.features.clone(), {
-                let selected = selected.clone();
-                move |feature, rule, scenario| {
-                    let mut all_tags: Vec<String> = feature.tags.clone();
-                    if let Some(rule) = rule {
-                        all_tags.extend(rule.tags.clone());
-                    }
-                    all_tags.extend(scenario.tags.clone());
-                    let keep = expr.as_ref().is_none_or(|e| e.matches(&all_tags))
-                        && filter.as_ref().is_none_or(|f| f(feature, rule, scenario))
-                        && skip_reason(feature, rule, scenario, &extensions).is_none();
-                    if keep {
-                        selected.fetch_add(1, Ordering::SeqCst);
-                    }
-                    keep
+            });
+
+        let filter_scenarios = {
+            let selected = selected.clone();
+            move |feature: &gherkin::Feature,
+                  rule: Option<&gherkin::Rule>,
+                  scenario: &gherkin::Scenario| {
+                let mut all_tags: Vec<String> = feature.tags.clone();
+                if let Some(rule) = rule {
+                    all_tags.extend(rule.tags.clone());
                 }
-            })
-            .await;
+                all_tags.extend(scenario.tags.clone());
+                let keep = expr.as_ref().is_none_or(|e| e.matches(&all_tags))
+                    && filter.as_ref().is_none_or(|f| f(feature, rule, scenario))
+                    && skip_reason(feature, rule, scenario, &extensions).is_none();
+                if keep {
+                    selected.fetch_add(1, Ordering::SeqCst);
+                }
+                keep
+            }
+        };
+
+        // cucumber allows only one `after` hook, so it is registered only when
+        // `Suite::on_scenario_finished` actually set a callback.
+        let writer = if let Some(on_finished) = on_scenario_finished {
+            cucumber
+                .after(move |feature, rule, scenario, ev, _world| {
+                    let outcome = scenario_outcome(feature, rule, scenario, ev);
+                    on_finished(&outcome);
+                    Box::pin(async {})
+                })
+                .filter_run(self.features.clone(), filter_scenarios)
+                .await
+        } else {
+            cucumber
+                .filter_run(self.features.clone(), filter_scenarios)
+                .await
+        };
         // The features path itself is known readable at this point: an unreadable path returned
         // early above, before cucumber ran at all.
         if writer.parsing_errors() == 0 && !has_tags && selected.load(Ordering::SeqCst) == 0 {

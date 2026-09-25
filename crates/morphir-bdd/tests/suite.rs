@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 
 use cucumber::then;
 use drivers::suite_driver::SuiteDriver;
-use morphir_bdd::Suite;
 use morphir_bdd::world::MorphirWorld;
+use morphir_bdd::{Console, ScenarioOutcome, Suite};
 use morphir_gherkin::Tag;
 use morphir_gherkin::extension::{Context, Effect, Extensions, Scope, TagExtension};
 use morphir_gherkin::visit::Node;
@@ -515,4 +515,87 @@ async fn a_sequential_run_keeps_parse_order_across_files_and_outline_blocks() {
     .map(str::to_owned)
     .collect();
     assert_eq!(seen, expected);
+}
+
+/// A2: `Suite::on_scenario_finished` calls back once per scenario that ran, in completion order,
+/// with a [`ScenarioOutcome`] carrying its name, step count, tags and failure. `good` passes with
+/// one step and only the feature's own tag; `bad`'s `Then` step fails, and its failure message
+/// carries the unmatched text.
+#[tokio::test]
+async fn every_finished_scenario_is_reported_once_with_its_failure() {
+    let seen = Arc::new(Mutex::new(Vec::<ScenarioOutcome>::new()));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "r.feature",
+        "@area:x\nFeature: R\n  Scenario: good\n    Given the step library is linked\n  Scenario: bad\n    Given the output:\n      \"\"\"\n      a\n      \"\"\"\n    Then stdout should contain \"zzz\"\n",
+    );
+    let sink = seen.clone();
+    let result = driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .on_scenario_finished(move |o| sink.lock().unwrap().push(o.clone()))
+        })
+        .await;
+    assert!(!result.succeeded());
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    let good = seen.iter().find(|o| o.name == "good").unwrap();
+    assert_eq!(
+        (good.steps, good.failure.is_none(), good.tags.clone()),
+        (1, true, vec!["area:x".to_owned()])
+    );
+    let bad = seen.iter().find(|o| o.name == "bad").unwrap();
+    assert!(
+        bad.failure.as_deref().unwrap().contains("zzz"),
+        "{:?}",
+        bad.failure
+    );
+}
+
+/// A quiet console for a run that would otherwise print something recognizable: a feature named
+/// distinctively, run with `Console::Off`. This test is not run directly by `cargo test`'s normal
+/// selection in isolation from its own assertions; [`a_quiet_console_prints_nothing_the_basic_writer_would`]
+/// runs it as a subprocess and inspects that process's real stdout, the same way
+/// [`a_suite_ignores_the_process_arguments_a_test_filter_adds`] does for its own target.
+#[tokio::test]
+async fn a_console_off_run_prints_nothing_recognizable() {
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "r.feature",
+        "Feature: R\n  Scenario: quiet\n    Given the step library is linked\n",
+    );
+    driver
+        .when_the_suite_runs_with(|s| s.clear_tags().console(Console::Off))
+        .await;
+    driver.then_it_succeeds();
+}
+
+/// A2: `Console::Off` writes no console output. Cucumber's `Basic` writer writes straight to
+/// `io::Stdout`, which bypasses libtest's own output capture (that capture only intercepts the
+/// `print!`/`println!` macros), so a run with `Console::Full` would put `Feature: R` in this test
+/// binary's real stdout even though `cargo test` runs it. This spawns the same compiled test
+/// binary as a subprocess with an exact libtest filter targeting
+/// [`a_console_off_run_prints_nothing_recognizable`], the same shape
+/// [`a_suite_ignores_the_process_arguments_a_test_filter_adds`] uses, and asserts that subprocess's
+/// stdout has none of it.
+#[test]
+fn a_quiet_console_prints_nothing_the_basic_writer_would() {
+    let exe = std::env::current_exe().expect("this test binary's own path");
+    let output = std::process::Command::new(exe)
+        .args(["a_console_off_run_prints_nothing_recognizable", "--exact"])
+        .output()
+        .expect("run this test binary as a subprocess with a libtest filter");
+    assert!(
+        output.status.success(),
+        "status: {}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Feature: R"),
+        "Console::Off must print nothing cucumber's Basic writer would, got:\n{stdout}"
+    );
 }

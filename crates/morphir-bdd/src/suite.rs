@@ -1,7 +1,7 @@
 //! One way to run every Morphir suite: morphir-gherkin parsing, extension context, tag filtering,
 //! and console, JSON and JUnit output.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -86,9 +86,18 @@ impl Suite {
     /// [`standard_extensions`], its tag expression to the `MORPHIR_BDD_TAGS` environment variable
     /// (unset means every scenario is a candidate), and its output directory to `MORPHIR_BDD_OUT`
     /// (unset means the workspace's `.dev/out/bdd`).
+    ///
+    /// `name` is joined onto the output directory to build the JSON and JUnit report paths (see
+    /// [`Suite::run`]), so it must be a valid single path component: not empty, not `.` or `..`,
+    /// and free of `/`, `\` and NUL. Panics otherwise, naming the invalid `name`. A `Result`-
+    /// returning builder would be a larger API change than this check warrants; `Suite::new`
+    /// already panics on other misuses of the builder, such as an invalid tag expression given to
+    /// [`Suite::run`].
     pub fn new(name: impl Into<String>) -> Self {
+        let name = name.into();
+        assert_valid_name(&name);
         Self {
-            name: name.into(),
+            name,
             features: PathBuf::from("tests/features"),
             extensions: standard_extensions(),
             tags: std::env::var("MORPHIR_BDD_TAGS").ok(),
@@ -160,20 +169,35 @@ impl Suite {
     /// path that does not exist or cannot be read, and a run with no tag expression that selects
     /// no scenario at all (every scenario was skipped, or none was found) and has no parsing
     /// error to explain it. A run that a tag expression narrows to no scenario is not an error.
+    ///
+    /// The first of those is checked up front, against `self.features` itself, before cucumber
+    /// ever discovers anything: if it fires, the run stops there with an empty, all-zero result
+    /// (the JSON and JUnit reports are still created, empty, so [`SuiteResult::json`] and
+    /// [`SuiteResult::junit`] always name real files). Running the parser's own discovery over a
+    /// path already known to be unreadable would report the very same failure a second time, once
+    /// here and once as one of [`MorphirParser`]'s own per-directory parsing errors.
     pub async fn run(self) -> SuiteResult {
         crate::link();
-        let mut suite_errors = 0;
-        let features_error = unreadable_features(&self.features);
-        if let Some(message) = &features_error {
-            eprintln!("morphir-bdd: suite `{}`: {message}", self.name);
-            suite_errors += 1;
-        }
-        let has_tags = self.tags.is_some();
-        let selected = Arc::new(AtomicUsize::new(0));
         let out = self.out_dir.clone().unwrap_or_else(default_out_dir);
         std::fs::create_dir_all(&out).expect("create the output directory");
         let json_path = out.join(format!("{}.json", self.name));
         let junit_path = out.join(format!("{}.xml", self.name));
+        if let Some(message) = unreadable_features(&self.features) {
+            eprintln!("morphir-bdd: suite `{}`: {message}", self.name);
+            std::fs::File::create(&json_path).expect("create the JSON report");
+            std::fs::File::create(&junit_path).expect("create the JUnit report");
+            return SuiteResult {
+                passed: 0,
+                failed: 0,
+                skipped: 0,
+                errors: 1,
+                json: json_path,
+                junit: junit_path,
+            };
+        }
+        let mut suite_errors = 0;
+        let has_tags = self.tags.is_some();
+        let selected = Arc::new(AtomicUsize::new(0));
         let json = std::fs::File::create(&json_path).expect("create the JSON report");
         let junit = std::fs::File::create(&junit_path).expect("create the JUnit report");
         let expr = self
@@ -225,11 +249,9 @@ impl Suite {
                 }
             })
             .await;
-        if features_error.is_none()
-            && writer.parsing_errors() == 0
-            && !has_tags
-            && selected.load(Ordering::SeqCst) == 0
-        {
+        // The features path itself is known readable at this point: an unreadable path returned
+        // early above, before cucumber ran at all.
+        if writer.parsing_errors() == 0 && !has_tags && selected.load(Ordering::SeqCst) == 0 {
             eprintln!(
                 "morphir-bdd: suite `{}`: no scenario was selected from {} and no tag expression \
                  is set: every scenario was skipped, or none was found",
@@ -255,6 +277,31 @@ impl Suite {
             std::process::exit(1);
         }
     }
+}
+
+/// Panics unless `name` is safe to join onto an output directory as a bare file name: not empty,
+/// not `.` or `..`, free of `/`, `\` and NUL, and a single [`Component::Normal`]. A name that
+/// fails the first checks but somehow still parsed as one `Normal` component would be redundant
+/// with them; a name that passes the character checks but is not a single `Normal` component (for
+/// example a Windows drive prefix such as `C:`) would not be caught by them. Checking both keeps
+/// the guarantee independent of how `Path::components` treats any one platform's separators.
+fn assert_valid_name(name: &str) {
+    let single_normal_component = matches!(
+        Path::new(name).components().collect::<Vec<_>>().as_slice(),
+        [Component::Normal(_)]
+    );
+    let valid = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+        && single_normal_component;
+    assert!(
+        valid,
+        "invalid suite name {name:?}: a suite name is joined into report file paths, so it must \
+         be a single path component: not empty, not `.` or `..`, and free of `/`, `\\` and NUL"
+    );
 }
 
 /// Why the features path cannot give a suite anything to run: it does not exist, or it (or, for a
@@ -315,7 +362,54 @@ fn workspace_out_dir(start: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::workspace_out_dir;
+    use super::{Suite, workspace_out_dir};
+
+    #[test]
+    #[should_panic(expected = "invalid suite name")]
+    fn new_refuses_an_empty_name() {
+        Suite::new("");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid suite name")]
+    fn new_refuses_a_single_dot() {
+        Suite::new(".");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid suite name")]
+    fn new_refuses_a_double_dot() {
+        Suite::new("..");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid suite name")]
+    fn new_refuses_a_name_with_a_parent_component() {
+        Suite::new("../x");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid suite name")]
+    fn new_refuses_a_name_with_a_forward_slash() {
+        Suite::new("a/b");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid suite name")]
+    fn new_refuses_a_name_with_a_backslash() {
+        Suite::new(r"a\b");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid suite name")]
+    fn new_refuses_a_name_with_a_nul_byte() {
+        Suite::new("a\0b");
+    }
+
+    #[test]
+    fn new_accepts_an_ordinary_name() {
+        Suite::new("a-normal-suite-name");
+    }
 
     #[test]
     fn workspace_out_dir_finds_the_nearest_ancestor_with_a_cargo_lock() {

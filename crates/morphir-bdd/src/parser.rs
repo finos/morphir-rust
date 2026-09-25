@@ -26,6 +26,57 @@ static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Defaul
 /// own parser does. Each expanded scenario is registered with its model node, so [`prepare`] and
 /// [`skip_reason`] can build its context later. A document that cannot be read gives a parsing
 /// error that names the file, line and column.
+///
+/// Discovery itself can also fail, short of any document read: a nested directory that cannot be
+/// listed (for example one with its read permission removed), or a directory entry whose metadata
+/// cannot be read. Neither one is skipped in silence; each becomes a parsing error of its own, so
+/// a dropped subtree is a failed, not a passed, run. [`Suite`](crate::suite::Suite) is the checked
+/// path: it sums every parsing error, this crate's own included, into
+/// [`SuiteResult::errors`](crate::suite::SuiteResult::errors) and its writer prints each one. A
+/// raw cucumber chain that uses this parser directly sees the same one-error-per-directory
+/// behavior, since it comes from the parser, not from `Suite`.
+///
+/// [`Suite`](crate::suite::Suite) is the usual entry point: it builds a `MorphirParser`, wires its
+/// `before` hook and scenario filter, and writes the console, JSON and JUnit reports for you. Use
+/// `MorphirParser` directly only when a suite needs its own cucumber chain, for example to add
+/// writers or hooks `Suite` does not expose. The chain still needs [`prepare`] in a `before` hook,
+/// so the world's context is built from the scenario's tags before its first step runs, and
+/// [`skip_reason`] in the scenario filter, so a `@wip`-style skip decided before the run starts
+/// stays a skip instead of running the scenario and then discarding it:
+///
+/// ```no_run
+/// use std::sync::Arc;
+///
+/// use cucumber::World as _;
+/// use morphir_bdd::parser::{MorphirParser, prepare, skip_reason};
+/// use morphir_bdd::world::MorphirWorld;
+/// use morphir_gherkin::extension::Extensions;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let extensions = Arc::new(Extensions::new());
+///     MorphirWorld::cucumber::<&str>()
+///         .with_parser(MorphirParser::new(extensions.clone()))
+///         .before({
+///             let extensions = extensions.clone();
+///             move |feature, _rule, scenario, world| {
+///                 let extensions = extensions.clone();
+///                 Box::pin(async move {
+///                     if let Err(message) = prepare(world, feature, scenario, &extensions) {
+///                         panic!("{message}");
+///                     }
+///                 })
+///             }
+///         })
+///         .filter_run("tests/features", {
+///             let extensions = extensions.clone();
+///             move |feature, rule, scenario| {
+///                 skip_reason(feature, rule, scenario, &extensions).is_none()
+///             }
+///         })
+///         .await;
+/// }
+/// ```
 pub struct MorphirParser {
     #[allow(dead_code)]
     extensions: Arc<Extensions>,
@@ -43,31 +94,57 @@ impl<I: AsRef<Path>> cucumber::Parser<I> for MorphirParser {
     type Output = stream::Iter<std::vec::IntoIter<parser::Result<gherkin::Feature>>>;
 
     fn parse(self, input: I, _cli: Self::Cli) -> Self::Output {
-        let features: Vec<_> = discover(input.as_ref())
-            .into_iter()
-            .map(|path| load(&path))
-            .collect();
+        let (paths, errors) = discover(input.as_ref());
+        let mut features: Vec<_> = paths.into_iter().map(|path| load(&path)).collect();
+        features.extend(errors.into_iter().map(|message| Err(parse_error(message))));
         stream::iter(features)
     }
 }
 
-fn discover(root: &Path) -> Vec<PathBuf> {
+/// Walks `root` (a file, or a directory searched recursively) for `.feature` and `.feature.md`
+/// documents, in sorted path order. A directory that cannot be listed, or an entry whose metadata
+/// cannot be read, is not skipped in silence: it is collected as an error message instead, naming
+/// the path and the underlying I/O error, so the caller can turn it into a parsing error rather
+/// than let the subtree it would have held drop unnoticed.
+fn discover(root: &Path) -> (Vec<PathBuf>, Vec<String>) {
     if root.is_file() {
-        return vec![root.to_owned()];
+        return (vec![root.to_owned()], Vec::new());
     }
     let mut found = Vec::new();
+    let mut errors = Vec::new();
     let mut stack = vec![root.to_owned()];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                errors.push(format!(
+                    "the directory {} cannot be read: {e}",
+                    dir.display()
+                ));
+                continue;
+            }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    errors.push(format!("an entry in {} cannot be read: {e}", dir.display()));
+                    continue;
+                }
+            };
             let path = entry.path();
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    errors.push(format!("{} cannot be read: {e}", path.display()));
+                    continue;
+                }
+            };
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or_default();
-            if path.is_dir() {
+            if metadata.is_dir() {
                 stack.push(path);
             } else if name.ends_with(".feature") || name.ends_with(".feature.md") {
                 found.push(path);
@@ -75,7 +152,7 @@ fn discover(root: &Path) -> Vec<PathBuf> {
         }
     }
     found.sort();
-    found
+    (found, errors)
 }
 
 /// Wraps `message` as a cucumber parsing error whose `Display` carries that message.

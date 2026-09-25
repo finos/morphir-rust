@@ -317,7 +317,7 @@ impl<'de> Deserialize<'de> for ModuleManifestFile {
     /// A module manifest read as a bare node expects definitions, the way the reference's own
     /// node reader does: there is no tree around it to say which root it sits under.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        serde_document::deserialize_with(deserializer, |value, cursor| {
+        serde_document::deserialize_standalone_with(deserializer, |value, cursor| {
             serde_document::decode_module_manifest_file(value, cursor, ExpectedEntries::Definitions)
         })
     }
@@ -354,7 +354,10 @@ impl Serialize for TypeDefinitionFile {
 
 impl<'de> Deserialize<'de> for TypeDefinitionFile {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        serde_document::deserialize_with(deserializer, serde_document::decode_type_definition_file)
+        serde_document::deserialize_standalone_with(
+            deserializer,
+            serde_document::decode_type_definition_file,
+        )
     }
 }
 
@@ -375,7 +378,10 @@ impl Serialize for ValueDefinitionFile {
 
 impl<'de> Deserialize<'de> for ValueDefinitionFile {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        serde_document::deserialize_with(deserializer, serde_document::decode_value_definition_file)
+        serde_document::deserialize_standalone_with(
+            deserializer,
+            serde_document::decode_value_definition_file,
+        )
     }
 }
 

@@ -22,6 +22,7 @@ use std::fmt;
 use super::attributes::{SourceLocation, TypeAttributes, ValueAttributes};
 use super::legacy::{accept_member, record_legacy_form_warning};
 use super::linked_metadata::MetadataScope;
+use super::linked_metadata_scan::StandaloneMetadata;
 use super::literal::{FloatLiteral, Literal};
 use super::pattern::Pattern;
 use super::serde_v4;
@@ -95,7 +96,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
     where
         E: de::Error,
     {
-        decode_type(&JsonValue::String(v.to_owned()), &self.cursor).map_err(carry)
+        decode_standalone_type(&JsonValue::String(v.to_owned()), &self.cursor).map_err(carry)
     }
 
     fn visit_map<M>(self, map: M) -> Result<Type, M::Error>
@@ -103,7 +104,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
         M: MapAccess<'de>,
     {
         let value = JsonValue::deserialize(de::value::MapAccessDeserializer::new(map))?;
-        decode_type(&value, &self.cursor).map_err(carry)
+        decode_standalone_type(&value, &self.cursor).map_err(carry)
     }
 
     fn visit_seq<V>(self, seq: V) -> Result<Type, V::Error>
@@ -111,7 +112,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
         V: SeqAccess<'de>,
     {
         let value = JsonValue::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
-        decode_type(&value, &self.cursor).map_err(carry)
+        decode_standalone_type(&value, &self.cursor).map_err(carry)
     }
 
     // A scalar is refused here rather than through the default visitor methods, which build a
@@ -172,6 +173,14 @@ impl TypeVisitor {
     fn refuse_scalar<E: de::Error>(&self) -> E {
         carry(invalid_type(&self.cursor, "expected a type expression"))
     }
+}
+
+fn decode_standalone_type(value: &JsonValue, cursor: &str) -> Result<Type, Diagnostic> {
+    let mut decoded = decode_type(value, cursor)?;
+    decoded
+        .validate_standalone()
+        .map_err(|error| invalid_type(cursor, error))?;
+    Ok(decoded)
 }
 
 pub(super) fn invalid_type(cursor: &str, message: impl Into<String>) -> Diagnostic {
@@ -931,7 +940,11 @@ impl<'de> Deserialize<'de> for Pattern {
         D: Deserializer<'de>,
     {
         let value = JsonValue::deserialize(deserializer)?;
-        decode_pattern(&value, "").map_err(carry)
+        let mut decoded = decode_pattern(&value, "").map_err(carry)?;
+        decoded
+            .validate_standalone()
+            .map_err(|error| carry(invalid_type("", error)))?;
+        Ok(decoded)
     }
 }
 
@@ -1346,7 +1359,11 @@ impl<'de> Deserialize<'de> for Value {
         // `Value` is what implements the arbitrary-precision protocol, so a number keeps the
         // lexeme it was written with.
         let value = JsonValue::deserialize(deserializer)?;
-        decode_value(&value, "").map_err(carry)
+        let mut decoded = decode_value(&value, "").map_err(carry)?;
+        decoded
+            .validate_standalone()
+            .map_err(|error| carry(invalid_type("", error)))?;
+        Ok(decoded)
     }
 }
 

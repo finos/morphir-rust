@@ -24,7 +24,7 @@ impl<'de> Deserialize<'de> for PackageSpecification {
     where
         D: serde::Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_package_specification,
         )
@@ -155,7 +155,7 @@ impl<'de> Deserialize<'de> for PackageDefinition {
     where
         D: serde::Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_package_definition,
         )

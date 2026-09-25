@@ -28,8 +28,8 @@ use super::distribution::{
 };
 use super::legacy::accept_legacy_form;
 use super::linked_metadata::{DocumentMeta, MetadataScope};
-use super::linked_metadata_scan::LinkedMetadataCarrier;
 use super::linked_metadata_scan::validate_document_scopes;
+use super::linked_metadata_scan::{LinkedMetadataCarrier, StandaloneMetadata};
 use super::module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
 use super::package::{PackageDefinition, PackageSpecification};
 use super::serde_tagged::{
@@ -67,6 +67,24 @@ where
 {
     let value = JsonValue::deserialize(deserializer)?;
     decode(&value, "").map_err(carry)
+}
+
+/// Decode a public fragment, then close its metadata over an empty document context.
+/// Whole-file decoding calls the internal decoders directly and closes over `$meta` instead.
+pub(super) fn deserialize_standalone_with<'de, D, T>(
+    deserializer: D,
+    decode: fn(&JsonValue, &str) -> Result<T, Diagnostic>,
+) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: StandaloneMetadata,
+{
+    let value = JsonValue::deserialize(deserializer)?;
+    let mut decoded = decode(&value, "").map_err(carry)?;
+    decoded
+        .validate_standalone()
+        .map_err(|error| carry(invalid_type("", error)))?;
+    Ok(decoded)
 }
 
 fn members_of<'a>(

@@ -145,7 +145,7 @@ impl<'de> Deserialize<'de> for ModuleSpecification {
     where
         D: serde::Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_module_specification,
         )
@@ -167,7 +167,7 @@ impl<'de> Deserialize<'de> for ModuleDefinition {
     where
         D: serde::Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_module_definition,
         )

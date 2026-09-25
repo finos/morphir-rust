@@ -548,3 +548,103 @@ fn malformed_local_context_is_a_decode_error() {
             .is_err()
     );
 }
+
+#[test]
+fn pattern_attributes_obey_release_and_document_context() {
+    let mut document: Value = serde_json::from_str(include_str!(
+        "../../morphir-core/tests/fixtures/ir/v4/complete-example.json"
+    ))
+    .unwrap();
+    let body = &mut document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]
+        ["value"]["values"]["calculate-total"]["ExpressionBody"]["body"];
+    *body = json!({
+        "Lambda": {
+            "pattern": {"WildcardPattern": {"attributes": {
+                "@context": {"deprecated": "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated"},
+                "facts": {"deprecated": true}
+            }}},
+            "body": {"Literal": {"FloatLiteral": 0.0}}
+        }
+    });
+    assert!(
+        JsonCodec::new()
+            .decode(
+                &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+                &options(FormatId::json()),
+                &mut Events::default(),
+            )
+            .is_err()
+    );
+
+    document["formatVersion"] = json!("4.1.0");
+    document["distribution"]["Library"]["def"]["modules"]
+        ["u-s/f-r-2052-a/data-tables"]["value"]["values"]["calculate-total"]
+        ["ExpressionBody"]["body"]["Lambda"]["pattern"]["WildcardPattern"]["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("@context");
+    assert!(
+        JsonCodec::new()
+            .decode(
+                &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+                &options(FormatId::json()),
+                &mut Events::default(),
+            )
+            .is_err()
+    );
+    document["$meta"] = json!({"@context": {
+        "deprecated": "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated"
+    }});
+    let text = serde_json::to_string(&document).unwrap();
+    let actual = roundtrip(&JsonCodec::new(), &text, FormatId::json());
+    assert_eq!(
+        actual["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["Public"]
+            ["values"]["calculate-total"]["Public"]["ExpressionBody"]["body"]["Lambda"]["pattern"]
+            ["WildcardPattern"]["attributes"]["facts"],
+        json!({"deprecated": true})
+    );
+}
+
+#[test]
+fn inferred_type_inside_a_pattern_obeys_release_and_context() {
+    let mut document: Value = serde_json::from_str(include_str!(
+        "../../morphir-core/tests/fixtures/ir/v4/complete-example.json"
+    ))
+    .unwrap();
+    let predicate =
+        "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated";
+    document["distribution"]["Library"]["def"]["modules"]["u-s/f-r-2052-a/data-tables"]["value"]
+        ["values"]["calculate-total"]["ExpressionBody"]["body"] = json!({
+        "Lambda": {
+            "pattern": {"WildcardPattern": {"attributes": {
+                "inferredType": {"Unit": {"attributes": {"facts": {"deprecated": true}}}}
+            }}},
+            "body": {"Literal": {"FloatLiteral": 0.0}}
+        }
+    });
+    assert!(
+        JsonCodec::new()
+            .decode(
+                &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+                &options(FormatId::json()),
+                &mut Events::default(),
+            )
+            .is_err()
+    );
+    document["formatVersion"] = json!("4.1.0");
+    assert!(
+        JsonCodec::new()
+            .decode(
+                &mut Cursor::new(serde_json::to_vec(&document).unwrap()),
+                &options(FormatId::json()),
+                &mut Events::default(),
+            )
+            .is_err()
+    );
+    document["$meta"] = json!({"@context": {"deprecated": predicate}});
+    roundtrip(
+        &JsonCodec::new(),
+        &serde_json::to_string(&document).unwrap(),
+        FormatId::json(),
+    );
+}

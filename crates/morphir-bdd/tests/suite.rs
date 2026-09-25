@@ -10,12 +10,17 @@
 
 mod drivers;
 
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use cucumber::then;
 use drivers::suite_driver::SuiteDriver;
 use morphir_bdd::parser::Reader;
+use morphir_bdd::steps::cli::{CliRequest, CliRunner, CustomCliRunner};
+use morphir_bdd::steps::files::Workspace;
+use morphir_bdd::steps::output::LastOutput;
 use morphir_bdd::world::MorphirWorld;
 use morphir_bdd::{Console, ScenarioOutcome, Suite};
 use morphir_gherkin::Tag;
@@ -821,4 +826,58 @@ async fn a_reader_wins_over_the_built_in_feature_md_grammar_for_its_exact_name()
     driver.then_it_succeeds();
     assert_eq!(result.passed, 1, "{result:?}");
     driver.then_the_json_report_contains("from the reader");
+}
+
+/// A4 test-only [`CliRunner`]: instead of running a real process, it records the request's own
+/// arguments as [`LastOutput::stdout`]. Used by
+/// [`a_custom_cli_runner_is_used_and_no_workspace_is_created`] to prove `CustomCliRunner` is
+/// called in place of the default `run_program`, and that its own directories (here, none) are
+/// used instead of a scenario [`Workspace`].
+#[derive(Debug)]
+struct EchoArgsRunner;
+
+impl CliRunner for EchoArgsRunner {
+    fn run<'a>(
+        &'a self,
+        request: CliRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<LastOutput, String>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(LastOutput {
+                stdout: format!("ran {:?}", request.args),
+                status: Some(0),
+                ..LastOutput::default()
+            })
+        })
+    }
+}
+
+/// `Then no workspace was created` (test-only): asserts that `When I run {string}` did not
+/// create a [`Workspace`] for this scenario, because a [`CustomCliRunner`] handled the command
+/// instead.
+#[then("no workspace was created")]
+fn no_workspace_was_created(world: &mut MorphirWorld) {
+    assert!(
+        world.context.get::<Workspace>().is_none(),
+        "a Workspace must not be created when a CustomCliRunner is present"
+    );
+}
+
+/// A4: `Suite::with_component` installs a [`CustomCliRunner`], and `When I run {string}` calls
+/// it in place of the default `run_program`, without ever creating a [`Workspace`].
+#[tokio::test]
+async fn a_custom_cli_runner_is_used_and_no_workspace_is_created() {
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "c.feature",
+        "Feature: C\n  Scenario: custom runner\n    When I run \"morphir a b\"\n    Then stdout should contain 'ran [\"a\", \"b\"]'\n    Then no workspace was created\n",
+    );
+    let result = driver
+        .when_the_suite_runs_with(|s| {
+            s.clear_tags()
+                .cli("unused")
+                .with_component(CustomCliRunner(Arc::new(EchoArgsRunner)))
+        })
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 3, "{result:?}");
 }

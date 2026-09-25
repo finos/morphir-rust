@@ -6,6 +6,7 @@
 
 pub mod cursor;
 pub mod error;
+pub mod extension;
 pub mod feature_reader;
 pub mod markdown;
 pub mod mdg_reader;

@@ -13,7 +13,9 @@ mod drivers;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cucumber::then;
 use drivers::suite_driver::SuiteDriver;
@@ -22,10 +24,10 @@ use morphir_bdd::steps::cli::{CliRequest, CliRunner, CustomCliRunner};
 use morphir_bdd::steps::files::Workspace;
 use morphir_bdd::steps::output::LastOutput;
 use morphir_bdd::world::MorphirWorld;
-use morphir_bdd::{Console, ScenarioOutcome, Suite};
-use morphir_gherkin::Tag;
-use morphir_gherkin::extension::{Context, Effect, Extensions, Scope, TagExtension};
+use morphir_bdd::{Console, ScenarioOutcome, Suite, standard_extensions};
+use morphir_gherkin::extension::{Context, Effect, Extensions, Processor, Scope, TagExtension};
 use morphir_gherkin::visit::Node;
+use morphir_gherkin::{Document, NodePath, Tag};
 
 const FEATURE: &str = "Feature: S\n  @keep\n  Scenario: kept\n    Given the step library is linked\n  Scenario: dropped\n    Given a step that no library defines\n";
 
@@ -245,6 +247,10 @@ async fn a_missing_features_path_fails_the_run() {
         .await;
     assert_eq!(driver.result().errors, 1, "{:?}", driver.result());
     assert!(!driver.result().succeeded(), "{:?}", driver.result());
+    let messages = &driver.result().error_messages;
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(messages[0].contains("no-such-features"), "{messages:?}");
+    assert!(messages[0].contains("does not exist"), "{messages:?}");
 }
 
 /// F3: with no tag expression, a run that selects no scenario is an error. With a tag expression
@@ -259,6 +265,12 @@ async fn an_empty_run_fails_only_without_a_tag_expression() {
     driver.when_the_suite_runs("w-feature", &features).await;
     assert_eq!(driver.result().errors, 1, "{:?}", driver.result());
     assert!(!driver.result().succeeded(), "{:?}", driver.result());
+    let messages = &driver.result().error_messages;
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        messages[0].contains("no scenario was selected"),
+        "{messages:?}"
+    );
 
     let mut driver = SuiteDriver::new();
     driver.given_a_feature("w.feature", text);
@@ -396,6 +408,14 @@ async fn discovery_reports_a_directory_it_cannot_read() {
         "the readable sibling still ran: {:?}",
         driver.result()
     );
+    let messages = &driver.result().error_messages;
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("locked") && m.contains("cannot be read")),
+        "{messages:?}"
+    );
+    assert_eq!(messages.len(), driver.result().errors, "{messages:?}");
 }
 
 /// `Suite::new` refuses a name that cannot safely be joined into a report file path.
@@ -880,4 +900,200 @@ async fn a_custom_cli_runner_is_used_and_no_workspace_is_created() {
         .await;
     driver.then_it_succeeds();
     assert_eq!(result.passed, 3, "{result:?}");
+}
+
+/// A test-only component: how many scenarios are in `Then I hold a slot for a moment` right now,
+/// and the most there ever were at once. Used by the concurrency tests to measure how many
+/// scenarios cucumber runs at the same time.
+#[derive(Debug, Clone, Default)]
+struct InFlight {
+    now: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+}
+
+/// `Then I hold a slot for a moment` counts this scenario as in flight, sleeps briefly so other
+/// scenarios can start meanwhile, and then counts it out again. It records the high-water mark in
+/// the scenario's [`InFlight`] component.
+#[then("I hold a slot for a moment")]
+async fn hold_a_slot(world: &mut MorphirWorld) {
+    let in_flight = world
+        .context
+        .get::<InFlight>()
+        .expect("no InFlight component: the suite must call `.with_component(InFlight…)`")
+        .clone();
+    let now = in_flight.now.fetch_add(1, Ordering::SeqCst) + 1;
+    in_flight.peak.fetch_max(now, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    in_flight.now.fetch_sub(1, Ordering::SeqCst);
+}
+
+/// A feature of `count` scenarios, each of which holds a slot for a moment.
+fn slot_feature(count: usize) -> String {
+    let body: String = (0..count)
+        .map(|i| format!("  Scenario: slot {i:03}\n    Then I hold a slot for a moment\n"))
+        .collect();
+    format!("Feature: Slots\n{body}")
+}
+
+/// Part A fix I1: a suite that never calls `max_concurrent_scenarios` keeps cucumber's own
+/// default limit, 64 scenarios at once in cucumber 0.23. Before the fix, `Suite::run` passed
+/// `None` through to cucumber, which removed the limit, so all 100 scenarios here ran at once.
+#[tokio::test]
+async fn a_suite_with_no_concurrency_set_keeps_cucumbers_default_limit() {
+    let in_flight = InFlight::default();
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature("slots.feature", &slot_feature(100));
+    let component = in_flight.clone();
+    let result = driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .with_component(component)
+        })
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 100, "{result:?}");
+    let peak = in_flight.peak.load(Ordering::SeqCst);
+    assert!(
+        (2..=64).contains(&peak),
+        "expected concurrent scenarios, but never more than 64 at once; the peak was {peak}"
+    );
+}
+
+/// Part A fix I1: `max_concurrent_scenarios(1)` still reaches cucumber, so no two scenarios are
+/// ever in flight at once.
+#[tokio::test]
+async fn a_suite_limited_to_one_scenario_runs_one_at_a_time() {
+    let in_flight = InFlight::default();
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature("slots.feature", &slot_feature(10));
+    let component = in_flight.clone();
+    let result = driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .max_concurrent_scenarios(1)
+                .with_component(component)
+        })
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 10, "{result:?}");
+    assert_eq!(in_flight.peak.load(Ordering::SeqCst), 1);
+}
+
+/// Part A fix I2: with `Console::Off`, a caller still sees why a file did not run. A reader's
+/// `Err`, a reader's panic, a `.feature` file with a syntax error and an outline whose `Examples`
+/// do not expand each put one message in `SuiteResult::error_messages`, and each message names
+/// its file. With no hook error in the run, the list holds exactly the errors `errors` counts.
+#[tokio::test]
+async fn parse_errors_reach_the_caller_with_a_quiet_console() {
+    let err_reader: Reader = Arc::new(|_path: &Path| Err("bad toy".to_owned()));
+    let panic_reader: Reader = Arc::new(|_path: &Path| panic!("boom"));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature("toy.txt", "irrelevant content\n");
+    driver.given_a_feature("panicky.txt", "irrelevant content\n");
+    driver.given_a_feature(
+        "broken.feature",
+        "Feature: B\n  Scenario: s\n    Given the step library is linked\n  this line is not Gherkin\n",
+    );
+    driver.given_a_feature(
+        "unexpanded.feature",
+        "Feature: U\n  Scenario Outline: row <missing>\n    Given the step library is linked\n\n    Examples:\n      | x |\n      | 1 |\n",
+    );
+    driver.given_a_feature(
+        "ok.feature",
+        "Feature: K\n  Scenario: k\n    Given the step library is linked\n",
+    );
+    let result = driver
+        .when_the_suite_runs_with(move |s| {
+            s.clear_tags()
+                .console(Console::Off)
+                .reader("toy.txt", err_reader)
+                .reader("panicky.txt", panic_reader)
+        })
+        .await;
+    assert!(!result.succeeded(), "{result:?}");
+    assert_eq!(result.passed, 1, "{result:?}");
+    let messages = &result.error_messages;
+    let find = |file: &str| {
+        messages
+            .iter()
+            .find(|m| m.contains(file))
+            .unwrap_or_else(|| panic!("no message names {file}: {messages:?}"))
+    };
+    assert!(find("toy.txt").contains("bad toy"), "{messages:?}");
+    assert!(find("panicky.txt").contains("boom"), "{messages:?}");
+    find("broken.feature");
+    assert!(
+        find("unexpanded.feature").contains("<missing>"),
+        "{messages:?}"
+    );
+    assert_eq!(messages.len(), 4, "{messages:?}");
+    assert_eq!(messages.len(), result.errors, "{result:?}");
+    for message in messages {
+        // The JUnit report is XML, so it carries the same text with `&`, `<`, `>` and `"`
+        // escaped.
+        let escaped = message
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;");
+        assert!(
+            driver.junit().contains(&escaped),
+            "the JUnit report must carry the same text {message:?}:\n{}",
+            driver.junit()
+        );
+    }
+}
+
+/// A test-only component a suite sets with `with_component`, for [`DeriveTenfold`] to read.
+#[derive(Debug, Clone)]
+struct Base(u32);
+
+/// A test-only component [`DeriveTenfold`] derives from [`Base`].
+#[derive(Debug, PartialEq)]
+struct Derived(u32);
+
+/// A test-only processor: it reads the suite's [`Base`] component and puts `Derived(base × 10)`
+/// into the context, and counts every call.
+struct DeriveTenfold(Arc<AtomicUsize>);
+
+impl Processor for DeriveTenfold {
+    fn process(&self, _doc: &Document, _at: &NodePath, ctx: &mut Context) -> Result<(), String> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        let Base(base) = ctx
+            .get::<Base>()
+            .cloned()
+            .ok_or("no Base component: the suite's components must go in before processors run")?;
+        ctx.insert(Derived(base * 10));
+        Ok(())
+    }
+}
+
+/// `Then the derived value is {int}` asserts the [`Derived`] component [`DeriveTenfold`] put into
+/// this scenario's context.
+#[then(expr = "the derived value is {int}")]
+fn derived_value_is(world: &mut MorphirWorld, expected: u32) {
+    assert_eq!(world.context.get::<Derived>(), Some(&Derived(expected)));
+}
+
+/// Part A fix I3: a suite's components go in before its processors run, so a processor
+/// registered through `Suite::extensions` can read a `with_component` value and derive more
+/// context from it. The processor runs exactly once for each scenario that runs: never at filter
+/// time, and never for the `@wip` scenario the filter skips.
+#[tokio::test]
+async fn a_processor_reads_a_suite_component_once_per_scenario() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature(
+        "p.feature",
+        "Feature: P\n  Scenario: a\n    Then the derived value is 70\n  Scenario: b\n    Then the derived value is 70\n\n  @wip\n  Scenario: not ready\n    Then the derived value is 70\n",
+    );
+    driver.given_extensions(standard_extensions().with_processor(DeriveTenfold(calls.clone())));
+    let result = driver
+        .when_the_suite_runs_with(|s| s.clear_tags().console(Console::Off).with_component(Base(7)))
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 2, "{result:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

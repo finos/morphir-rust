@@ -9,7 +9,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use cucumber::feature::Ext as _;
 use cucumber::{gherkin, parser};
 use futures::stream;
-use morphir_gherkin::extension::{Effect, Extensions};
+use morphir_gherkin::extension::{Context, Effect, Extensions};
 use morphir_gherkin::{Document, Format, NodePath, Segment, StepArgument, StepKind};
 
 use crate::world::{MorphirWorld, ScenarioRef};
@@ -25,8 +25,16 @@ static REGISTRY: LazyLock<Mutex<HashMap<Key, ModelNode>>> = LazyLock::new(Defaul
 /// A reader is given the file's path and reads it however it likes (its own text format, its own
 /// I/O errors and all); on success it returns the [`Document`] the file lowers to. `Err(message)`
 /// becomes a parsing error the same way a built-in [`morphir_gherkin::ReadError`] does: `message`
-/// is folded into a parsing error that names the file, so it reaches the console, JSON and JUnit
-/// reports and counts in [`SuiteResult::errors`](crate::suite::SuiteResult::errors).
+/// is folded into a parsing error that names the file. That error reaches the JSON and JUnit
+/// reports and [`SuiteResult::error_messages`](crate::suite::SuiteResult::error_messages), and
+/// counts in [`SuiteResult::errors`](crate::suite::SuiteResult::errors). It reaches the console
+/// too, but only when the suite runs with [`Console::Full`](crate::suite::Console::Full).
+///
+/// A reader that panics instead of returning `Err` fails only its own file, the same way: the
+/// panic is caught and its message becomes that file's parsing error. The process's panic hook
+/// still runs first, though, so the default hook prints the panic to stderr (`thread '…' panicked
+/// at …`) even under [`Console::Off`](crate::suite::Console::Off). This crate does not replace the
+/// global panic hook to hide that line; return `Err` to fail a file quietly.
 pub type Reader = Arc<dyn Fn(&Path) -> Result<Document, String> + Send + Sync>;
 
 /// A cucumber-rs [`cucumber::Parser`] that reads `.feature` and `.feature.md` documents through
@@ -44,7 +52,9 @@ pub type Reader = Arc<dyn Fn(&Path) -> Result<Document, String> + Send + Sync>;
 /// cannot be read. Neither one is skipped in silence; each becomes a parsing error of its own, so
 /// a dropped subtree is a failed, not a passed, run. [`Suite`](crate::suite::Suite) is the checked
 /// path: it sums every parsing error, this crate's own included, into
-/// [`SuiteResult::errors`](crate::suite::SuiteResult::errors) and its writer prints each one. A
+/// [`SuiteResult::errors`](crate::suite::SuiteResult::errors), gives each one's text in
+/// [`SuiteResult::error_messages`](crate::suite::SuiteResult::error_messages), and its writers put
+/// each one in the reports (and on the console, under [`Console::Full`](crate::suite::Console)). A
 /// raw cucumber chain that uses this parser directly sees the same one-error-per-directory
 /// behavior, since it comes from the parser, not from `Suite`.
 ///
@@ -93,6 +103,9 @@ pub struct MorphirParser {
     #[allow(dead_code)]
     extensions: Arc<Extensions>,
     readers: HashMap<String, Reader>,
+    /// Where [`Suite::run`](crate::suite::Suite::run) collects the text of every parsing error,
+    /// for [`SuiteResult::error_messages`](crate::suite::SuiteResult::error_messages).
+    error_sink: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl MorphirParser {
@@ -102,6 +115,7 @@ impl MorphirParser {
         Self {
             extensions,
             readers: HashMap::new(),
+            error_sink: None,
         }
     }
 
@@ -114,6 +128,14 @@ impl MorphirParser {
     #[must_use]
     pub fn with_reader(mut self, file_name: &str, reader: Reader) -> Self {
         self.readers.insert(file_name.to_owned(), reader);
+        self
+    }
+
+    /// Appends the text of every parsing error this parser gives to `sink`, in the order it gives
+    /// them to cucumber (see [`error_text`]).
+    #[must_use]
+    pub(crate) fn with_error_sink(mut self, sink: Arc<Mutex<Vec<String>>>) -> Self {
+        self.error_sink = Some(sink);
         self
     }
 }
@@ -129,7 +151,33 @@ impl<I: AsRef<Path>> cucumber::Parser<I> for MorphirParser {
             .map(|path| load(&path, &self.readers))
             .collect();
         features.extend(errors.into_iter().map(|message| Err(parse_error(message))));
+        if let Some(sink) = &self.error_sink {
+            let mut sink = sink.lock().expect("error sink");
+            sink.extend(
+                features
+                    .iter()
+                    .filter_map(|feature| feature.as_ref().err().map(error_text)),
+            );
+        }
         stream::iter(features)
+    }
+}
+
+/// The text of a parsing error this parser gives: the message the JSON and JUnit reports carry
+/// for it, without cucumber's own prefixes (`Failed to parse feature: Could not read path: ` or
+/// `Failed to expand examples: `).
+///
+/// Every [`parser::Error::Parsing`] this parser builds carries its whole message in the `path`
+/// field (see [`parse_error`]), so the text is that path read back as a string. An
+/// [`parser::Error::ExampleExpansion`] error names the unresolved `<placeholder>` and its file,
+/// line and column in its own `Display`.
+fn error_text(error: &parser::Error) -> String {
+    match error {
+        parser::Error::Parsing(e) => match e.as_ref() {
+            gherkin::ParseFileError::Reading { path, .. } => path.to_string_lossy().into_owned(),
+            other @ gherkin::ParseFileError::Parsing { .. } => other.to_string(),
+        },
+        parser::Error::ExampleExpansion(e) => e.to_string(),
     }
 }
 
@@ -514,21 +562,41 @@ fn lookup(
 ///
 /// For one row of a scenario outline, the context comes from the row's own `Examples` block, not
 /// from the outline's other blocks, and [`ScenarioRef::path`] is that block's path.
+///
+/// This is [`prepare_seeded`] with an empty seed.
 pub fn prepare(
     world: &mut MorphirWorld,
     feature: &gherkin::Feature,
     scenario: &gherkin::Scenario,
     extensions: &Extensions,
 ) -> Result<(), String> {
+    prepare_seeded(world, feature, scenario, extensions, Context::default())
+}
+
+/// Fills the world before the first step, as [`prepare`] does, but builds the scenario's context
+/// from `seed` instead of from an empty context (see [`Extensions::context_for_seeded`]).
+///
+/// The tag, fence and prose extensions and then the processors all see the components in `seed`,
+/// and an extension may replace one of them. [`Suite`](crate::suite::Suite) seeds each scenario
+/// with its [`Suite::with_component`](crate::suite::Suite::with_component) values this way.
+pub fn prepare_seeded(
+    world: &mut MorphirWorld,
+    feature: &gherkin::Feature,
+    scenario: &gherkin::Scenario,
+    extensions: &Extensions,
+    seed: Context,
+) -> Result<(), String> {
     let (document, path, row) = lookup(feature, scenario)
         .ok_or_else(|| format!("no model node for scenario `{}`", scenario.name))?;
-    let (context, _) = extensions.context_for(&document, &path).map_err(|errors| {
-        errors
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ")
-    })?;
+    let (context, _) = extensions
+        .context_for_seeded(&document, &path, seed)
+        .map_err(|errors| {
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
     world.context = context;
     world.scenario = Some(ScenarioRef {
         document,
@@ -541,6 +609,10 @@ pub fn prepare(
 /// Why a scenario is skipped, decided from its static tags before it starts. For one row of a
 /// scenario outline, only the tags of the row's own `Examples` block count, so `@wip` on one block
 /// skips only that block's rows.
+///
+/// It decides through [`Extensions::effect_for`], so it runs no processor: a processor runs only
+/// once per scenario, in [`prepare`]. A scenario whose tags, fences or prose give an extension
+/// error is not skipped here; it runs, and [`prepare`] fails it with that error.
 pub fn skip_reason(
     feature: &gherkin::Feature,
     _rule: Option<&gherkin::Rule>,
@@ -548,8 +620,8 @@ pub fn skip_reason(
     extensions: &Extensions,
 ) -> Option<String> {
     let (document, path, _row) = lookup(feature, scenario)?;
-    match extensions.context_for(&document, &path) {
-        Ok((_, Effect::Skip(reason))) => Some(reason),
+    match extensions.effect_for(&document, &path) {
+        Ok(Effect::Skip(reason)) => Some(reason),
         _ => None,
     }
 }

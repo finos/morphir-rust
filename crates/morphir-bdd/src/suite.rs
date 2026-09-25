@@ -3,15 +3,15 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use cucumber::event;
 use cucumber::writer::{self, Coloring, Stats as _, Verbosity};
 use cucumber::{World as _, WriterExt as _, gherkin};
 use morphir_gherkin::extension::{Component, Context, Extensions};
 
-use crate::parser::{MorphirParser, Reader, panic_payload_text, prepare, skip_reason};
+use crate::parser::{MorphirParser, Reader, panic_payload_text, prepare_seeded, skip_reason};
 use crate::steps::cli::CliProgram;
 use crate::tags::{TagExpr, WipTag};
 use crate::world::MorphirWorld;
@@ -164,6 +164,20 @@ pub struct SuiteResult {
     /// scenario's context), plus suite errors: a features path that does not exist or cannot be
     /// read, and a run that selects no scenario at all while no tag expression is set.
     pub errors: usize,
+    /// The text of every error in [`SuiteResult::errors`] that no [`ScenarioOutcome`] reports: the
+    /// parsing errors, in the order the parser gives them (each file's in sorted path order, then
+    /// each directory discovery could not list), and then the suite errors. A parsing error is a
+    /// reader's `Err` or panic, a document that does not read (a syntax error), an outline whose
+    /// `Examples` do not expand, or a directory or entry that cannot be read.
+    ///
+    /// Each parsing error's text is the message the JSON and JUnit reports carry for it, and it
+    /// names the file or directory. This list is how a caller that runs with [`Console::Off`] sees
+    /// why a file did not run, without reading the reports.
+    ///
+    /// Hook errors are not in this list: [`Suite::on_scenario_finished`] already reports each one
+    /// as its scenario's [`ScenarioOutcome::failure`]. So `errors` is this list's length plus the
+    /// number of hook errors.
+    pub error_messages: Vec<String>,
     /// Where the JSON report was written.
     pub json: PathBuf,
     /// Where the JUnit report was written.
@@ -271,18 +285,32 @@ impl Suite {
     /// Sets how many scenarios cucumber runs at the same time. `1` runs scenarios one at a time,
     /// in parse order: the order [`MorphirParser`] discovers `.feature` and `.feature.md` files
     /// (sorted path order) and, within a file, the order its scenarios and outline rows appear.
-    /// Leaving this unset lets cucumber run scenarios concurrently, with no ordering guarantee
-    /// between them.
+    ///
+    /// Leaving this unset keeps cucumber's own default, which is at most 64 scenarios at the same
+    /// time in cucumber 0.23, with no ordering guarantee between them.
+    ///
+    /// Parse order holds only for a suite that has no `@serial` tag. cucumber puts a scenario
+    /// tagged `@serial` (on itself, its rule or its feature) in a queue of its own, and runs that
+    /// queue first, one scenario at a time, whenever it holds a scenario that is ready. So with
+    /// `1`, a `@serial` scenario can run before a scenario that comes earlier in parse order.
     #[must_use]
     pub fn max_concurrent_scenarios(mut self, n: usize) -> Self {
         self.max_concurrent = Some(n);
         self
     }
 
-    /// Inserts a clone of `value` into every scenario's [`Context`] before its first step, after
-    /// the suite's own extensions have built that context from the scenario's tags, fences and
-    /// prose. Multiple calls apply in the order they were made, each free to overwrite an earlier
-    /// component of the same type ([`Context::insert`]'s own last-write-wins rule).
+    /// Inserts a clone of `value` into every scenario's [`Context`] before its first step.
+    ///
+    /// The components go in first: they seed the context, and then the suite's extensions build
+    /// on it from the scenario's tags, fences and prose, and then its processors run (see
+    /// [`Extensions::context_for_seeded`]). So a [`Processor`](morphir_gherkin::extension::Processor)
+    /// can read a component and derive more context from it. An extension that inserts a
+    /// component of the same type replaces the value given here. Multiple calls apply in the
+    /// order they were made, each free to overwrite an earlier component of the same type
+    /// ([`Context::insert`]'s own last-write-wins rule).
+    ///
+    /// The components are not in the context the scenario filter uses to decide a skip (see
+    /// [`skip_reason`]), so an extension cannot skip a scenario because of a component.
     #[must_use]
     pub fn with_component<T: Component + Clone>(mut self, value: T) -> Self {
         self.components
@@ -344,15 +372,16 @@ impl Suite {
     /// An undefined step fails its scenario, so [`SuiteResult::succeeded`] is `false` unless every
     /// selected scenario's steps were defined and passed.
     ///
-    /// Two more cases count in [`SuiteResult::errors`] and print a message to stderr: a features
-    /// path that does not exist or cannot be read, and a run with no tag expression that selects
-    /// no scenario at all (every scenario was skipped, or none was found) and has no parsing
-    /// error to explain it. A run that a tag expression narrows to no scenario is not an error.
+    /// Two more cases count in [`SuiteResult::errors`], print a message to stderr and put the same
+    /// message in [`SuiteResult::error_messages`]: a features path that does not exist or cannot
+    /// be read, and a run with no tag expression that selects no scenario at all (every scenario
+    /// was skipped, or none was found) and has no parsing error to explain it. A run that a tag
+    /// expression narrows to no scenario is not an error.
     ///
     /// The first of those is checked up front, against `self.features` itself, before cucumber
-    /// ever discovers anything: if it fires, the run stops there with an empty, all-zero result
-    /// (the JSON and JUnit reports are still created, empty, so [`SuiteResult::json`] and
-    /// [`SuiteResult::junit`] always name real files). Running the parser's own discovery over a
+    /// ever discovers anything: if it fires, the run stops there with a result whose counts are
+    /// all zero except `errors` (the JSON and JUnit reports are still created, empty, so
+    /// [`SuiteResult::json`] and [`SuiteResult::junit`] always name real files). Running the parser's own discovery over a
     /// path already known to be unreadable would report the very same failure a second time, once
     /// here and once as one of [`MorphirParser`]'s own per-directory parsing errors.
     pub async fn run(self) -> SuiteResult {
@@ -370,6 +399,7 @@ impl Suite {
                 failed: 0,
                 skipped: 0,
                 errors: 1,
+                error_messages: vec![message],
                 json: json_path,
                 junit: junit_path,
             };
@@ -383,15 +413,13 @@ impl Suite {
             .tags
             .as_deref()
             .map(|t| TagExpr::parse(t).expect("a valid tag expression"));
-        let mut extensions = self.extensions;
-        if !self.components.is_empty() {
-            extensions = extensions.with_processor(InsertComponents(self.components));
-        }
-        let extensions = Arc::new(extensions);
+        let extensions = Arc::new(self.extensions);
+        let components = Arc::new(self.components);
         let filter = self.filter;
-        let max_concurrent = self.max_concurrent;
         let on_scenario_finished = self.on_scenario_finished.clone();
-        let mut parser = MorphirParser::new(extensions.clone());
+        let error_messages = Arc::new(Mutex::new(Vec::new()));
+        let mut parser =
+            MorphirParser::new(extensions.clone()).with_error_sink(error_messages.clone());
         for (file_name, reader) in self.readers {
             parser = parser.with_reader(&file_name, reader);
         }
@@ -413,20 +441,30 @@ impl Suite {
                     .tee::<MorphirWorld, _>(writer::JUnit::for_tee(junit, 0))
                     .normalized(),
             )
-            .fail_on_skipped()
-            .max_concurrent_scenarios(max_concurrent)
-            .with_default_cli()
-            .before({
+            .fail_on_skipped();
+        // Only a set value reaches cucumber: `max_concurrent_scenarios(None)` would not keep
+        // cucumber's default limit (64 in 0.23), it would remove the limit.
+        let cucumber = match self.max_concurrent {
+            Some(n) => cucumber.max_concurrent_scenarios(n),
+            None => cucumber,
+        };
+        let cucumber = cucumber.with_default_cli().before({
+            let extensions = extensions.clone();
+            move |feature, _rule, scenario, world| {
                 let extensions = extensions.clone();
-                move |feature, _rule, scenario, world| {
-                    let extensions = extensions.clone();
-                    Box::pin(async move {
-                        if let Err(message) = prepare(world, feature, scenario, &extensions) {
-                            panic!("{message}");
-                        }
-                    })
+                let mut seed = Context::default();
+                for insert in components.iter() {
+                    insert(&mut seed);
                 }
-            });
+                Box::pin(async move {
+                    if let Err(message) =
+                        prepare_seeded(world, feature, scenario, &extensions, seed)
+                    {
+                        panic!("{message}");
+                    }
+                })
+            }
+        });
 
         let filter_scenarios = {
             let selected = selected.clone();
@@ -466,13 +504,15 @@ impl Suite {
         };
         // The features path itself is known readable at this point: an unreadable path returned
         // early above, before cucumber ran at all.
+        let mut error_messages = std::mem::take(&mut *error_messages.lock().expect("error sink"));
         if writer.parsing_errors() == 0 && !has_tags && selected.load(Ordering::SeqCst) == 0 {
-            eprintln!(
-                "morphir-bdd: suite `{}`: no scenario was selected from {} and no tag expression \
-                 is set: every scenario was skipped, or none was found",
-                self.name,
+            let message = format!(
+                "no scenario was selected from {} and no tag expression is set: every scenario \
+                 was skipped, or none was found",
                 self.features.display()
             );
+            eprintln!("morphir-bdd: suite `{}`: {message}", self.name);
+            error_messages.push(message);
             suite_errors += 1;
         }
         SuiteResult {
@@ -480,6 +520,7 @@ impl Suite {
             failed: writer.failed_steps(),
             skipped: writer.skipped_steps(),
             errors: writer.parsing_errors() + writer.hook_errors() + suite_errors,
+            error_messages,
             json: json_path,
             junit: junit_path,
         }
@@ -539,27 +580,6 @@ fn unreadable_features(path: &Path) -> Option<String> {
             )
         }),
         Ok(_) => None,
-    }
-}
-
-/// A [`morphir_gherkin::extension::Processor`] that applies every closure a [`Suite::with_component`]
-/// call registered, in the order they were registered, into every scenario's context. It is the
-/// last processor a suite registers, so its components can see (and overwrite) whatever earlier
-/// extensions already put there.
-#[allow(clippy::type_complexity)]
-struct InsertComponents(Vec<Arc<dyn Fn(&mut Context) + Send + Sync>>);
-
-impl morphir_gherkin::extension::Processor for InsertComponents {
-    fn process(
-        &self,
-        _doc: &morphir_gherkin::Document,
-        _at: &morphir_gherkin::NodePath,
-        ctx: &mut morphir_gherkin::extension::Context,
-    ) -> Result<(), String> {
-        for insert in &self.0 {
-            insert(ctx);
-        }
-        Ok(())
     }
 }
 

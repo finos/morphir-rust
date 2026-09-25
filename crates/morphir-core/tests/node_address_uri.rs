@@ -186,6 +186,277 @@ fn document_literal_payload_is_not_treated_as_ir_attributes() {
 }
 
 #[test]
+fn linked_facts_do_not_change_value_or_pattern_shorthand_guards() {
+    use morphir_core::ir::v4::{Literal, MetadataScope, Pattern, Value, ValueAttributes};
+
+    let facts = MetadataScope::parse(
+        None,
+        Some(&serde_json::json!({
+            "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated": true
+        })),
+    )
+    .unwrap();
+    fn fingerprint<T: serde::Serialize>(step: &NodeStep, child: &T) -> Sha256Digest {
+        let mut builder = NodeFingerprintBuilder::for_v4_1();
+        builder.push(step, child).unwrap();
+        builder.finish()
+    }
+    let plain = ValueAttributes::default();
+    let with_facts = ValueAttributes {
+        metadata: facts,
+        ..ValueAttributes::default()
+    };
+
+    assert_eq!(
+        fingerprint(
+            &NodeStep::ListElement(0),
+            &Value::variable(plain.clone(), Name::from("x"))
+        ),
+        fingerprint(
+            &NodeStep::ListElement(0),
+            &Value::variable(with_facts.clone(), Name::from("x"))
+        ),
+    );
+    assert_eq!(
+        fingerprint(
+            &NodeStep::ListElement(0),
+            &Value::list(
+                plain.clone(),
+                vec![Value::variable(plain.clone(), Name::from("x"))]
+            )
+        ),
+        fingerprint(
+            &NodeStep::ListElement(0),
+            &Value::list(
+                plain.clone(),
+                vec![Value::variable(with_facts.clone(), Name::from("x"))]
+            )
+        ),
+    );
+    assert_eq!(
+        fingerprint(
+            &NodeStep::ListElement(0),
+            &Value::Literal(plain.clone(), Literal::string("x"))
+        ),
+        fingerprint(
+            &NodeStep::ListElement(0),
+            &Value::Literal(with_facts.clone(), Literal::string("x"))
+        ),
+    );
+    assert_eq!(
+        fingerprint(
+            &NodeStep::ListElement(0),
+            &Value::Tuple(plain.clone(), vec![])
+        ),
+        fingerprint(
+            &NodeStep::ListElement(0),
+            &Value::Tuple(with_facts.clone(), vec![])
+        ),
+    );
+    assert_eq!(
+        fingerprint(
+            &NodeStep::PatternTupleElement(0),
+            &Pattern::tuple(plain.clone(), vec![Pattern::unit(plain.clone())])
+        ),
+        fingerprint(
+            &NodeStep::PatternTupleElement(0),
+            &Pattern::tuple(with_facts.clone(), vec![Pattern::unit(with_facts.clone())])
+        ),
+    );
+    assert_eq!(
+        fingerprint(
+            &NodeStep::PatternTupleElement(0),
+            &Pattern::literal(plain, Literal::string("x"))
+        ),
+        fingerprint(
+            &NodeStep::PatternTupleElement(0),
+            &Pattern::literal(with_facts, Literal::string("x"))
+        ),
+    );
+}
+
+#[test]
+fn linked_facts_do_not_change_type_variable_guards() {
+    use morphir_core::ir::v4::MetadataScope;
+    let with_facts = TypeAttributes {
+        metadata: MetadataScope::parse(
+            None,
+            Some(&serde_json::json!({
+                "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated": true
+            })),
+        )
+        .unwrap(),
+        ..TypeAttributes::default()
+    };
+    let fingerprint = |attrs| {
+        let mut builder = NodeFingerprintBuilder::for_v4_1();
+        builder
+            .push(
+                &NodeStep::TupleElement(0),
+                &Type::variable(attrs, Name::from("x")),
+            )
+            .unwrap();
+        builder.finish()
+    };
+    assert_eq!(
+        fingerprint(TypeAttributes::default()),
+        fingerprint(with_facts)
+    );
+}
+
+#[test]
+fn linked_facts_in_pattern_match_cases_do_not_change_guard() {
+    use morphir_core::ir::v4::{MetadataScope, Pattern, PatternCase, Value, ValueAttributes};
+    let with_facts = ValueAttributes {
+        metadata: MetadataScope::parse(
+            None,
+            Some(&serde_json::json!({
+                "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated": true
+            })),
+        )
+        .unwrap(),
+        ..ValueAttributes::default()
+    };
+    let value = |attributes: ValueAttributes| {
+        Value::PatternMatch(
+            ValueAttributes::default(),
+            Box::new(Value::variable(ValueAttributes::default(), Name::from("x"))),
+            vec![PatternCase(
+                Pattern::tuple(attributes.clone(), vec![]),
+                Value::variable(attributes, Name::from("x")),
+            )],
+        )
+    };
+    let fingerprint = |child| {
+        let mut builder = NodeFingerprintBuilder::for_v4_1();
+        builder.push(&NodeStep::ListElement(0), &child).unwrap();
+        builder.finish()
+    };
+    assert_eq!(
+        fingerprint(value(ValueAttributes::default())),
+        fingerprint(value(with_facts))
+    );
+}
+
+#[test]
+fn constraints_with_nested_attributes_remain_semantic() {
+    let fingerprint = |fact| {
+        let mut attrs = TypeAttributes::default();
+        attrs.constraints.insert(
+            "custom".to_owned(),
+            serde_json::json!({"attributes":{"facts":fact}}),
+        );
+        let mut builder = NodeFingerprintBuilder::for_v4_1();
+        builder
+            .push(&NodeStep::TupleElement(0), &Type::unit(attrs))
+            .unwrap();
+        builder.finish()
+    };
+    assert_ne!(fingerprint(1), fingerprint(2));
+}
+
+#[test]
+fn a_record_field_named_attributes_has_its_metadata_filtered() {
+    use morphir_core::ir::v4::{MetadataScope, RecordFieldEntry, Value, ValueAttributes};
+    let fingerprint = |metadata| {
+        let child = Value::Record(
+            ValueAttributes::default(),
+            vec![RecordFieldEntry::new(
+                Name::from("attributes"),
+                Value::variable(
+                    ValueAttributes {
+                        metadata,
+                        ..ValueAttributes::default()
+                    },
+                    Name::from("x"),
+                ),
+            )],
+        );
+        let mut builder = NodeFingerprintBuilder::for_v4_1();
+        builder.push(&NodeStep::ListElement(0), &child).unwrap();
+        builder.finish()
+    };
+    let facts = MetadataScope::parse(
+        None,
+        Some(&serde_json::json!({
+            "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated": true
+        })),
+    )
+    .unwrap();
+    assert_eq!(fingerprint(MetadataScope::default()), fingerprint(facts));
+}
+
+#[test]
+fn boxed_value_has_the_same_fingerprint_as_its_unboxed_value() {
+    use morphir_core::ir::v4::{MetadataScope, Value, ValueAttributes};
+    let child = Value::variable(ValueAttributes {
+        metadata: MetadataScope::parse(None, Some(&serde_json::json!({
+            "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated": true
+        }))).unwrap(),
+        ..ValueAttributes::default()
+    }, Name::from("x"));
+    let mut direct = NodeFingerprintBuilder::for_v4_1();
+    direct.push(&NodeStep::ListElement(0), &child).unwrap();
+    let mut boxed = NodeFingerprintBuilder::for_v4_1();
+    boxed
+        .push(&NodeStep::ListElement(0), &Box::new(child))
+        .unwrap();
+    assert_eq!(direct.finish(), boxed.finish());
+}
+
+#[test]
+fn legacy_let_definition_guard_keeps_expanded_nested_type_variable() {
+    use morphir_core::ir::v4::{Value, ValueAttributes, ValueDefinition};
+    let child = Value::LetDefinition(
+        ValueAttributes::default(),
+        Name::from("bound"),
+        Box::new(ValueDefinition::new(
+            vec![],
+            Type::variable(TypeAttributes::default(), Name::from("a")),
+            Value::unit(ValueAttributes::default()),
+        )),
+        Box::new(Value::variable(
+            ValueAttributes::default(),
+            Name::from("bound"),
+        )),
+    );
+    let mut builder = NodeFingerprintBuilder::new();
+    builder.push(&NodeStep::ListElement(0), &child).unwrap();
+    assert_eq!(
+        builder.finish().to_string(),
+        "sha256:fa836ae00372d3b91e5249c4193db79e4f790631c465c1f8f27bf8eb3f47899d"
+    );
+}
+
+#[test]
+fn source_only_legacy_guard_keeps_its_expanded_value_shape() {
+    use morphir_core::ir::v4::{SourceLocation, Value, ValueAttributes};
+    let plain = Value::variable(ValueAttributes::default(), Name::from("x"));
+    let sourced = Value::variable(
+        ValueAttributes {
+            source: Some(SourceLocation::new(1, 1, 1, 2)),
+            ..ValueAttributes::default()
+        },
+        Name::from("x"),
+    );
+    let fingerprint = |child: &Value, linked| {
+        let mut builder = if linked {
+            NodeFingerprintBuilder::for_v4_1()
+        } else {
+            NodeFingerprintBuilder::new()
+        };
+        builder.push(&NodeStep::ListElement(0), child).unwrap();
+        builder.finish()
+    };
+    assert_ne!(fingerprint(&plain, false), fingerprint(&sourced, false));
+    assert_eq!(
+        fingerprint(&sourced, false).to_string(),
+        "sha256:dba0b5032720c0071bdbe85f20a09ac1b9cff47b3e0c7503eb4d7e0f878c1efa"
+    );
+    assert_eq!(fingerprint(&plain, true), fingerprint(&sourced, true));
+}
+
+#[test]
 fn fingerprint_ignores_ambient_v4_type_serialization_mode() {
     use morphir_core::ir::v4::{TypeEncoding, with_type_encoding};
     let child = Type::variable(TypeAttributes::default(), Name::from("item"));

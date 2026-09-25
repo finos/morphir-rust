@@ -302,6 +302,71 @@ fn selected_tuple_child_stales_when_shifted_but_not_when_later_sibling_added() {
 }
 
 #[test]
+fn v4_4_1_index_keeps_positional_guard_across_fact_edits() {
+    let mut file = v4::IRFile {
+        format_version: v4::FormatVersion::String("4.1.0".to_owned()),
+        metadata: None,
+        distribution: v4_record(),
+    };
+    *order_type(&mut file.distribution) = v4::Type::tuple(
+        v4::TypeAttributes::default(),
+        vec![v4::Type::unit(v4::TypeAttributes::default())],
+    );
+    let before = NodeIndex::v4_file(&file).unwrap();
+    let selected = before
+        .addresses()
+        .find(|uri| {
+            uri.steps().last() == Some(&morphir_core::node_address::NodeStep::TupleElement(0))
+        })
+        .unwrap()
+        .clone();
+    assert_eq!(selected.format().to_exact_string(), "4.1.0");
+
+    let mut fact_edit = file.clone();
+    let v4::Type::Tuple(_, elements) = order_type(&mut fact_edit.distribution) else {
+        unreachable!()
+    };
+    let v4::Type::Unit(attributes) = &mut elements[0] else {
+        unreachable!()
+    };
+    attributes.metadata = v4::MetadataScope::parse(
+        None,
+        Some(&serde_json::json!({
+            "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated": true
+        })),
+    )
+    .unwrap();
+    let after = NodeIndex::v4_file(&fact_edit).unwrap();
+    assert!(after.resolve(&selected).is_ok());
+    assert_eq!(
+        after
+            .address_for(selected.root(), selected.steps())
+            .unwrap(),
+        selected
+    );
+    let original_bytes = morphir_core::ir::json::write_ir_file(&file).into_bytes();
+    let fact_bytes = morphir_core::ir::json::write_ir_file(&fact_edit).into_bytes();
+    let mut snapshots = NodeCatalog::new();
+    let original_revision = snapshots
+        .add_v4_json_snapshot(&original_bytes, None)
+        .unwrap();
+    let fact_revision = snapshots.add_v4_json_snapshot(&fact_bytes, None).unwrap();
+    assert_ne!(original_revision, fact_revision);
+
+    let mut structure_edit = fact_edit;
+    let v4::Type::Tuple(_, elements) = order_type(&mut structure_edit.distribution) else {
+        unreachable!()
+    };
+    elements[0] = v4::Type::variable(v4::TypeAttributes::default(), Name::from("changed"));
+    assert_eq!(
+        NodeIndex::v4_file(&structure_edit)
+            .unwrap()
+            .resolve(&selected),
+        Err(NodeResolutionError::StaleTarget)
+    );
+}
+
+#[test]
 fn a_case_body_guard_stales_when_its_pattern_moves() {
     let mut distribution = v4_record();
     {

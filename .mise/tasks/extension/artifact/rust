@@ -88,9 +88,10 @@ require_snapshot_inputs() {
     require_snapshot_file "crates/morphir-rust-binding/Cargo.toml"
     require_snapshot_file "crates/morphir-rust-binding/src/lib.rs"
     require_snapshot_file "crates/morphir-rust-binding/tests/pipeline.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/rust_extension.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/support/mod.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/support/installed_wasm.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/rust_extension.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/mod.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/installed_wasm.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/mep.rs"
     require_snapshot_tree "crates/morphir-rust-binding/src"
     require_snapshot_tree "crates/morphir-rust-binding/tests"
     require_snapshot_tree "crates/morphir-distribution/src"
@@ -118,7 +119,7 @@ run_pipeline() {
             set -- "$@" --git-commit "$git_commit"
         fi
         python3 "$@"
-        MORPHIR_RUST_BUNDLE="$output" cargo test --locked -p morphir-daemon --test rust_extension -- --ignored
+        MORPHIR_RUST_BUNDLE="$output" cargo test --locked -p morphir-host-native --test rust_extension -- --ignored
     )
 }
 

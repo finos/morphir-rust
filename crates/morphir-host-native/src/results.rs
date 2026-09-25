@@ -22,7 +22,7 @@ use unicode_normalization::UnicodeNormalization as _;
 ///
 /// `open` and `close` pass straight through. A result that breaks a rule
 /// ends the session: the connection shuts the guest down in order and
-/// returns [`CallError::Failed`]. If that shutdown also fails, the error
+/// returns [`CallError::Invalid`]. If that shutdown also fails, the error
 /// names both failures.
 pub struct CheckedConnection<G> {
     inner: G,
@@ -50,8 +50,8 @@ impl<G: GuestConnection> GuestConnection for CheckedConnection<G> {
         match validate_result(method, params, value).await {
             Ok(value) => Ok(value),
             Err(error) => match self.inner.close().await {
-                Ok(()) => Err(CallError::Failed(error)),
-                Err(close) => Err(CallError::Failed(also_failed_to_shut_down(error, close))),
+                Ok(()) => Err(CallError::Invalid(error)),
+                Err(close) => Err(CallError::Invalid(also_failed_to_shut_down(error, close))),
             },
         }
     }

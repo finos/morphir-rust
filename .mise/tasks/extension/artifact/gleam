@@ -86,7 +86,10 @@ require_snapshot_inputs() {
     require_snapshot_file "tests/ci/test_extension_release_routing.py"
     require_snapshot_file "crates/morphir-gleam-binding/Cargo.toml"
     require_snapshot_file "crates/morphir-gleam-binding/src/lib.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/gleam_extension.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/gleam_extension.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/mod.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/installed_wasm.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/mep.rs"
     require_snapshot_tree "scripts"
     require_snapshot_tree "crates/morphir-gleam-binding/src"
     require_snapshot_tree "crates/morphir-gleam-binding/tests"
@@ -118,7 +121,7 @@ run_pipeline() {
             set -- "$@" --git-commit "$git_commit"
         fi
         python3 "$@"
-        MORPHIR_GLEAM_BUNDLE="$output" cargo test --locked -p morphir-daemon --test gleam_extension -- --ignored
+        MORPHIR_GLEAM_BUNDLE="$output" cargo test --locked -p morphir-host-native --test gleam_extension -- --ignored
     )
 }
 

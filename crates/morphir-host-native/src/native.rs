@@ -23,8 +23,8 @@ use tokio::task::JoinHandle;
 /// requests, so a notification such as `morphir.exit` has nothing to
 /// deliver to. `close` and `abort` mark the channel stopped without
 /// touching the guest; reusing a stopped channel fails with
-/// `"Native extension transport is stopped"` and `Stopped`, matching the
-/// daemon's `NativeMepTransport`.
+/// `"Native extension transport is stopped"` and `Stopped`, the text the
+/// CLI has always reported for a stopped built-in.
 pub struct NativeChannel {
     expectation: ExpectedExtension,
     protocol: Arc<dyn NativeProtocol>,

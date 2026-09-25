@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 const EXAMPLE: &str =
-    include_str!("../../morphir-daemon/tests/fixtures/morphir-elm-extension/Example.elm");
+    include_str!("../../morphir-host-native/tests/fixtures/morphir-elm-extension/Example.elm");
 const TYPES: &str = include_str!("fixtures/Types.elm");
 const OTHER: &str = "module My.Other exposing (Thing)\n\ntype Thing = Thing\n";
 

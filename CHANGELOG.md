@@ -52,6 +52,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can open a `Session`.
 - `testing::FakeSource` in `morphir-host` (feature `testing`): a
   `GuestSource` with scripted answers for registry and pool tests.
+- `ActivatedGuest::expectation` in `morphir-host-native`: what the handshake
+  holds an activated guest to, its installed identity and locked
+  capabilities. `ProcessChannel::is_running` and
+  `ProcessChannel::stdout_is_exhausted` report on the child after the
+  session closed it.
+- `Pool::tick` and `Pool::evict_idle` in `morphir-host` evict idle guests
+  without a clock, so `morphir-host` stays portable to
+  `wasm32-unknown-unknown`. The caller calls `tick` on its own timer, and
+  `evict_idle(n)` closes in order, and forgets, every guest not used for at
+  least `n` ticks. A guest with a call in flight is skipped.
+- `morphir_host_native::http::HttpChannel` and `HttpEndpoint` (feature
+  `http`, off by default) reach an extension that runs as its own JSON-RPC
+  HTTP server. A refused connection or a timeout is a channel failure in the
+  `Indeterminate` state with a `Transport` cause. A JSON-RPC error reply is
+  an error response, and the session stays ready. It replaces the daemon's
+  `ConnectedDaemonSession`. Two texts changed with the move: "Extension
+  daemon identity cannot be empty" is now "HTTP extension identity cannot be
+  empty", and "Invalid extension daemon endpoint" is now "Invalid HTTP
+  extension endpoint".
 - The new `morphir-bdd` crate runs Morphir's Gherkin suites (`.feature` and
   `.feature.md`) on cucumber-rs. It gives every suite one shared world, a
   scenario context built by extensions, `@wip` skipping and tag expressions.
@@ -77,10 +96,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text is now `IO error: ...` or `JSON error: ...`, without the
   `Extension error: ` prefix it had before. A channel failure with a
   `Transport` cause keeps the prefix.
-- `CallError` is `#[non_exhaustive]` and has a new `Open` variant. `Pool::call`
-  reports a failure to open a guest or its session as `CallError::Open`,
-  with the open's own error, not as `CallError::Failed`, and does not retry
-  it.
+- `CallError` is `#[non_exhaustive]` and tells apart how a call failed.
+  `Rejected` and `Failed` are unchanged. `Invalid` means the guest answered,
+  but its result did not decode or failed the host's checks; the session is
+  closed in order. `Session::call` reports it for a result that does not
+  decode, and `CheckedConnection` for a result that fails a check. `Connect`
+  (`open` failed, no guest was reached) and `Handshake` (the guest started
+  but the MEP handshake failed) come only from `Pool::call`, with the
+  failure's own error, not as `CallError::Failed`. `Pool::call` retries only
+  `Failed`: it does not retry `Invalid`, since the same guest build gives the
+  same bad answer, and it does not retry `Connect` or `Handshake`.
+- The daemon's real-extension tests (process, Extism, installed WASM, Elm,
+  Gleam, Python and Rust guests) and their fixtures now live in
+  `morphir-host-native` and run on `activate` and `Session`. Run them with
+  `cargo test -p morphir-host-native --test <name> -- --ignored`. The
+  `mep-native-backend` fixture guest is now an example of
+  `morphir-host-native`, and `test:process` also runs `process_describe`.
+- The mise task `test:daemon` is now `test:http`, and the CI job
+  `test-daemon-extension` is now `test-http-extension`. They build the
+  `mep-http-backend` example of `morphir-host-native` and run the
+  `HttpChannel` tests.
+- `morphir-daemon` no longer depends on `kameo`, `jsonrpsee`, `extism`,
+  `async-trait`, `serde`, `dirs`, `tempfile` (now a dev-dependency),
+  `morphir-core`, `morphir-distribution`, `morphir-extension-sdk` or
+  `morphir-host-native`.
 - `morphir-host` depends on `morphir-core` to normalize the IR release
   versions a `Registry` resolves against.
 - The extension bundles are released with version-2 descriptors that carry
@@ -107,6 +146,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first release that reads capability claim sets (`claimsVersion`
   `0.1.0-draft.2`), so bundles can move to version-2 descriptors
   (finos/morphir#921).
+
+### Removed
+- From `morphir-daemon`, every duplicate of `morphir-host` and
+  `morphir-host-native`, with the `activation`, `connected`, `container`,
+  `host_functions`, `process`, `protocol`, `registry` and `session` modules
+  of `morphir_daemon::extensions`: `ExtensionRegistry` and its resolved
+  types (`ResolvedFrontend`, `ResolvedBackend`, and the re-exported
+  `InvocationMode`, `InvocationPolicy`, `ProviderMetadata`, `ProviderOrigin`
+  and `CapabilityMetadataScope`), the typestate `Session` (`Loaded`, `Ready`,
+  `Stopped`, `NegotiatedSession`, `FailedSession`, `InvokeOutcome`,
+  `Indeterminate`), `MepTransport`, `TransportError` and `TransportState`,
+  the session actor (`SessionHandle`, `spawn_session`,
+  `spawn_session_with_idle_timeout`), `ExtensionSession` and
+  `ExtensionSessionState`, `SpawnedProcessSession`,
+  `SpawnedProcessTransport`, `ExtismSession`, `ExtismTransport`,
+  `NativeMepSession`, `NativeMepTransport`,
+  `activate_transport` and `BoxedMepTransport`, `ExtensionResponseExt`,
+  `ConnectedDaemonSession`, `ConnectedDaemonTransport` and
+  `DaemonConnection`, `ProcessDescription`, and the `ExtensionContainer`,
+  `MorphirHostFunctions`, `ExpectedExtension`,
+  `PersistedExtensionCapabilities`, `ProcessLaunch`, `ExtensionRequest` and
+  `ExtensionResponse` re-exports. Use `morphir_host::{Registry, Resolved,
+  Session, Pool, describe}` and the `morphir-host` types of the same names,
+  `morphir_host_native::{activate, NativeChannel, NativeSource,
+  InstalledSource}`, `morphir_host_native::process::{ProcessChannel,
+  ProcessLaunch}`, `morphir_host_native::extism::{ExtismChannel,
+  ExtensionContainer, MorphirHostFunctions}`, and
+  `morphir_host_native::http::HttpChannel` (feature `http`).
+  `morphir-daemon` keeps `DaemonError` (with `From<HostError>`),
+  `ExtensionLoader`, `VirtualPathConfig`, `FileSandbox` and `workspace`.
+- `ProcessChild::exchange` in `morphir-host-native`, a hidden helper that
+  only the daemon's compatibility session called. Use `ProcessChild::write`
+  and `ProcessChild::read_within`, or a `ProcessChannel`.
 
 ### Fixed
 - Installed extensions retain frontend `multiDocument` and `fragments` from

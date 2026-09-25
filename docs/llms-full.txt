@@ -945,12 +945,13 @@ cargo test --locked -p morphir-python-binding
 cargo run --locked -p morphir-python-binding --example python_adt
 cargo run --locked -p morphir-python-binding --example python_modules
 cargo build --locked --release -p morphir-python-binding --target wasm32-unknown-unknown
-cargo test --locked -p morphir-daemon --test python_extension -- --ignored --exact python_adt_and_conditional_roundtrip_through_the_real_wasm_extension
+cargo test --locked -p morphir-host-native --test python_extension -- --ignored --exact python_adt_and_conditional_roundtrip_through_the_real_wasm_extension
 ```
 
 The example returns JSON containing IR and generated Python. The WASM test
 performs capability negotiation, compilation, generation and recompilation
-through the daemon's actual extension container. CI runs it with a release guest.
+through the Extism container in `morphir_host_native::extism`. CI runs it
+with a release guest.
 
 ## Install a release bundle
 
@@ -1000,7 +1001,7 @@ For a Windows build using the native toolchain, after the build commands above:
 ```powershell
 python -B scripts/package_extension.py --short-id python --wasm target/wasm32-unknown-unknown/release/morphir_python_binding.wasm --output .morphir/build/extensions/python
 $env:MORPHIR_PYTHON_BUNDLE = (Resolve-Path .morphir/build/extensions/python).Path
-cargo test --locked -p morphir-daemon --test python_extension -- --ignored
+cargo test --locked -p morphir-host-native --test python_extension -- --ignored
 ```
 
 The release pipeline builds from a committed snapshot and verifies that the
@@ -1125,7 +1126,8 @@ The system consists of:
 - **CLI (morphir)**: User-facing commands
 - **Devkit (morphir-devkit)**: Configuration and extension discovery
 - **Common (morphir-common)**: Shared infrastructure
-- **Daemon (morphir-daemon)**: Runtime extension execution
+- **Host (morphir-host, morphir-host-native)**: Extension registration, resolution and execution
+- **Daemon (morphir-daemon)**: Daemon errors, extension file loading and workspaces, as a client of the host
 - **Extensions**: Language-specific implementations
 
 ## Crate Responsibilities
@@ -1564,7 +1566,7 @@ morphir
 
 ## Provider registry
 
-The CLI constructs a fresh transport-neutral provider registry, represented by `ExtensionRegistry`, for each operation that needs a provider. It registers the native Gleam extension as a built-in and then adds validated installed-state snapshots. Built-in registration belongs to the CLI because the executable decides which implementations it links. The daemon has no Gleam dependency.
+The CLI constructs a fresh transport-neutral provider registry, represented by `morphir_host::Registry`, for each operation that needs a provider. It registers the native Gleam extension as a built-in and then adds validated installed-state snapshots. Built-in registration belongs to the CLI because the executable decides which implementations it links. `morphir-host` has no Gleam dependency.
 
 The registry records two independent properties:
 
@@ -1618,7 +1620,7 @@ Extensions return artifact descriptions. They do not choose arbitrary host files
 
 ## MEP execution
 
-`NativeMep`, `ProcessMep`, and `WasmMep` share the daemon's validated session lifecycle. The host initializes the session, checks provider identity and capabilities, invokes the operation, and shuts the session down. A failed transport preserves whether the peer stopped or entered an indeterminate state.
+`NativeMep`, `ProcessMep`, and `WasmMep` share the validated session lifecycle of `morphir_host::Session`. The host initializes the session, checks provider identity and capabilities, invokes the operation, and shuts the session down. A failed transport preserves whether the peer stopped or entered an indeterminate state.
 
 Installed providers reach that session only after the distribution layer verifies the selected artifact against its catalog and lock state. The registry never treats an unverified file beside the CLI executable as a built-in.
 
@@ -1642,7 +1644,7 @@ Source: https://finos.github.io/morphir-rust/contributors/devkit-crate
 
 The `morphir-devkit` crate provides workspace discovery, configuration loading, and path conventions for tools that work on Morphir projects. The CLI, IDEs, and build tools can use it without depending on one another.
 
-It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-daemon`, which owns extension registration, resolution, and execution.
+It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-host`, which owns extension registration, resolution, and execution.
 
 ## Responsibilities
 
@@ -1651,7 +1653,7 @@ The crates divide the work as follows:
 - The CLI handles commands, output formatting, and the set of built-in extensions linked into that executable.
 - The devkit discovers workspace and project configuration, computes effective configuration, and resolves conventional paths.
 - The extension SDK defines MEP data types and native capability traits.
-- The daemon provides the transport-neutral provider registry and MEP sessions.
+- `morphir-host` provides the transport-neutral provider registry and MEP sessions, and `morphir-host-native` the process, Extism and native channels that reach a guest.
 - The distribution crate resolves, verifies, installs, and activates process and WebAssembly artifacts.
 
 The devkit does not scan beside an executable for built-in extension files. A host application registers its linked built-ins explicitly.
@@ -1693,15 +1695,15 @@ These helpers apply Morphir's output layout. They do not choose or activate an e
 
 ## Extension boundary
 
-The provider registry in the daemon resolves providers by requested capability and Morphir IR version. It filters ineligible providers before considering origin. If an installed provider and a built-in provider both match, the installed provider wins.
+The provider registry in `morphir-host` resolves providers by requested capability and Morphir IR version. It filters ineligible providers before considering origin. If an installed provider and a built-in provider both match, the installed provider wins.
 
 Provider origin remains separate from invocation mode. A native built-in can run as `NativeDirect` under `PreferDirect` or as `NativeMep` under `ProtocolOnly`. Installed providers run as `ProcessMep` or `WasmMep` under either policy.
 
-The Morphir CLI owns the built-in Gleam registration. `morphir-daemon` stays language-neutral and does not depend on the Gleam extension.
+The Morphir CLI owns the built-in Gleam registration. `morphir-host` stays language-neutral and does not depend on the Gleam extension.
 
 ## Use in other tools
 
-IDEs and build tools can reuse configuration and workspace discovery from the devkit. A tool that executes extensions should create its own registry, register the built-ins it ships, add installed snapshots from the distribution crate, and resolve the requested capability through the daemon.
+IDEs and build tools can reuse configuration and workspace discovery from the devkit. A tool that executes extensions should create its own registry, register the built-ins it ships, add installed snapshots from the distribution crate, and resolve the requested capability through the `morphir-host` registry.
 
 ## Further reading
 
@@ -1731,7 +1733,7 @@ CI runs only the jobs a change can affect.
    turn it on.
 4. Extension bundles run as a matrix over `.github/extensions.toml`, filtered to
    extensions whose crate or artifact task is affected. Changes to
-   `morphir-daemon`, the extension registry or shared bundle packaging select
+   `morphir-host`, `morphir-host-native` or shared bundle packaging select
    all extensions. Rust guest and offline installation tests run in the Rust
    bundle task, so Rust-only changes do not also run the shared Extism job.
 

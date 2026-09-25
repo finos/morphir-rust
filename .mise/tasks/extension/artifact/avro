@@ -103,9 +103,10 @@ require_snapshot_inputs() {
     require_snapshot_file "crates/morphir-avro-extension/Cargo.toml"
     require_snapshot_file "crates/morphir-avro-extension/src/lib.rs"
     require_snapshot_file "crates/morphir-avro-extension/tests/guest.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/installed_wasm_extension.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/support/mod.rs"
-    require_snapshot_file "crates/morphir-daemon/tests/support/installed_wasm.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/installed_wasm_extension.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/mod.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/installed_wasm.rs"
+    require_snapshot_file "crates/morphir-host-native/tests/support/mep.rs"
     require_snapshot_tree "crates/morphir-avro-extension/src"
     require_snapshot_tree "crates/morphir-avro-extension/tests"
     if find "$REPO_ROOT" -type l -print -quit | grep -q .; then
@@ -122,7 +123,7 @@ run_pipeline() {
         cd "$source_root"
         cargo test --locked -p morphir-avro-extension
         cargo build --locked --release -p morphir-avro-extension --target wasm32-unknown-unknown
-        cargo test --locked -p morphir-daemon --test installed_wasm_extension -- --ignored
+        cargo test --locked -p morphir-host-native --test installed_wasm_extension -- --ignored
         mise run test:avro-idl
         wasm-tools validate target/wasm32-unknown-unknown/release/morphir_avro_extension.wasm
         set -- scripts/package_extension.py \

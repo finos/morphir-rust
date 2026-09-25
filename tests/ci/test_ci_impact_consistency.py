@@ -83,7 +83,7 @@ class ImpactConsistencyTests(unittest.TestCase):
             (".github/extensions.toml", all_extensions),
             ("scripts/package_extension.py", all_extensions),
             ("scripts/extension_packaging/model.py", all_extensions),
-            ("crates/morphir-daemon/src/lib.rs", all_extensions),
+            ("crates/morphir-host-native/src/lib.rs", all_extensions),
             ("crates/morphir-extension-sdk/src/lib.rs", all_extensions),
         ]
         for path, expected in cases:

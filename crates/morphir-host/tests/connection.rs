@@ -235,3 +235,41 @@ async fn a_call_after_a_failure_fails_without_sending() {
     }
     assert_eq!(log.methods(), methods_before);
 }
+
+#[tokio::test]
+async fn rejects_an_invalid_response_envelope_before_negotiation() {
+    let mut response = ok(1, frontend_initialize_result("guest"));
+    response.jsonrpc = "1.0".into();
+    let channel = MemoryChannel::new().respond(response);
+    let log = channel.log();
+    let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+
+    let error = connection
+        .open(params())
+        .await
+        .expect_err("the envelope should fail");
+
+    assert!(error.to_string().contains("JSON-RPC version"), "{error}");
+    assert_eq!(log.methods(), [methods::INITIALIZE]);
+    assert_eq!(log.aborts(), 1, "the guest is stopped");
+}
+
+#[tokio::test]
+async fn retains_an_indeterminate_state_after_an_uncertain_exchange_failure() {
+    let channel = MemoryChannel::new().fail(ChannelError {
+        message: "connection lost".into(),
+        state: ChannelState::Indeterminate,
+        cause: ChannelCause::Transport,
+    });
+    let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+
+    let error = connection
+        .open(params())
+        .await
+        .expect_err("the exchange should fail");
+
+    let morphir_host::HostError::Channel { state, .. } = error else {
+        panic!("a transport failure keeps its channel state: {error:?}");
+    };
+    assert_eq!(state, ChannelState::Indeterminate);
+}

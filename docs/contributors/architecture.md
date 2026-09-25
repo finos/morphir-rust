@@ -15,7 +15,8 @@ The system consists of:
 - **CLI (morphir)**: User-facing commands
 - **Devkit (morphir-devkit)**: Configuration and extension discovery
 - **Common (morphir-common)**: Shared infrastructure
-- **Daemon (morphir-daemon)**: Runtime extension execution
+- **Host (morphir-host, morphir-host-native)**: Extension registration, resolution and execution
+- **Daemon (morphir-daemon)**: Daemon errors, extension file loading and workspaces, as a client of the host
 - **Extensions**: Language-specific implementations
 
 ## Crate Responsibilities

@@ -12,7 +12,7 @@ redirect_from:
 
 The `morphir-devkit` crate provides workspace discovery, configuration loading, and path conventions for tools that work on Morphir projects. The CLI, IDEs, and build tools can use it without depending on one another.
 
-It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-daemon`, which owns extension registration, resolution, and execution.
+It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-host`, which owns extension registration, resolution, and execution.
 
 ## Responsibilities
 
@@ -21,7 +21,7 @@ The crates divide the work as follows:
 - The CLI handles commands, output formatting, and the set of built-in extensions linked into that executable.
 - The devkit discovers workspace and project configuration, computes effective configuration, and resolves conventional paths.
 - The extension SDK defines MEP data types and native capability traits.
-- The daemon provides the transport-neutral provider registry and MEP sessions.
+- `morphir-host` provides the transport-neutral provider registry and MEP sessions, and `morphir-host-native` the process, Extism and native channels that reach a guest.
 - The distribution crate resolves, verifies, installs, and activates process and WebAssembly artifacts.
 
 The devkit does not scan beside an executable for built-in extension files. A host application registers its linked built-ins explicitly.
@@ -63,15 +63,15 @@ These helpers apply Morphir's output layout. They do not choose or activate an e
 
 ## Extension boundary
 
-The provider registry in the daemon resolves providers by requested capability and Morphir IR version. It filters ineligible providers before considering origin. If an installed provider and a built-in provider both match, the installed provider wins.
+The provider registry in `morphir-host` resolves providers by requested capability and Morphir IR version. It filters ineligible providers before considering origin. If an installed provider and a built-in provider both match, the installed provider wins.
 
 Provider origin remains separate from invocation mode. A native built-in can run as `NativeDirect` under `PreferDirect` or as `NativeMep` under `ProtocolOnly`. Installed providers run as `ProcessMep` or `WasmMep` under either policy.
 
-The Morphir CLI owns the built-in Gleam registration. `morphir-daemon` stays language-neutral and does not depend on the Gleam extension.
+The Morphir CLI owns the built-in Gleam registration. `morphir-host` stays language-neutral and does not depend on the Gleam extension.
 
 ## Use in other tools
 
-IDEs and build tools can reuse configuration and workspace discovery from the devkit. A tool that executes extensions should create its own registry, register the built-ins it ships, add installed snapshots from the distribution crate, and resolve the requested capability through the daemon.
+IDEs and build tools can reuse configuration and workspace discovery from the devkit. A tool that executes extensions should create its own registry, register the built-ins it ships, add installed snapshots from the distribution crate, and resolve the requested capability through the `morphir-host` registry.
 
 ## Further reading
 

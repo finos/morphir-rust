@@ -1,6 +1,7 @@
 //! Warm guest reuse, one session per key.
 //!
-//! See [`Pool`] for the locking, fingerprint, retry and abandon rules.
+//! See [`Pool`] for the locking, fingerprint, retry, abandon and idle
+//! eviction rules.
 
 use crate::connection::{CallError, GuestConnection};
 use crate::send::MaybeSend;
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// One cached guest: the fingerprint it was opened with, and its session.
 struct SlotState {
@@ -23,10 +24,13 @@ struct SlotState {
 
 /// A key's guest, once one exists.
 struct Slot {
-    /// Set by [`Pool::abandon`], under the map lock, when it removes this
-    /// slot from the map. A call that gets the slot's lock after that looks
-    /// the key up again instead of using this slot.
+    /// Set by [`Pool::abandon`] or [`Pool::evict_idle`], under the map lock,
+    /// when it removes this slot from the map. A call that gets the slot's
+    /// lock after that looks the key up again instead of using this slot.
     abandoned: AtomicBool,
+    /// The pool's tick when the slot was made, or when a call last took or
+    /// let go of its lock.
+    last_used: AtomicU64,
     /// `None` before the first call for the key, and while a call holds the
     /// session.
     state: Mutex<Option<SlotState>>,
@@ -66,11 +70,17 @@ struct Slot {
 /// Because of that retry, a pooled call must be safe to send twice: when a
 /// session breaks mid-call the guest may already have run the first attempt.
 ///
-/// [`CallError::Open`] means `open`, or the handshake on the connection it
-/// returned, failed. It carries that error as it was. It is not retried and
-/// nothing is cached, whether it came from the first open or from opening
-/// the replacement for a broken session. Only in the first case is it
-/// certain that the call never reached a guest.
+/// [`CallError::Invalid`] means the guest answered, but its result did not
+/// decode or failed the host's checks. The session already closed itself in
+/// order, so the slot is left empty and the next call opens fresh. It is not
+/// retried: the same guest build would give the same bad answer.
+///
+/// [`CallError::Connect`] means `open` failed, so no guest was reached.
+/// [`CallError::Handshake`] means `open` returned a connection but the MEP
+/// handshake on it failed. Each carries that error as it was. Neither is
+/// retried and nothing is cached, whether it came from the first open or
+/// from opening the replacement for a broken session. Only in the first case
+/// is it certain that the call never reached a guest.
 ///
 /// # Cancellation
 ///
@@ -93,8 +103,30 @@ struct Slot {
 /// slot's lock does not use the abandoned slot: once it gets the lock it
 /// sees the mark, looks the key up again, and runs against the key's new
 /// slot, like any new call for the key.
+///
+/// # Idle eviction
+///
+/// The pool has no clock, so it stays portable to `wasm32-unknown-unknown`.
+/// It counts ticks instead: the caller calls [`Pool::tick`] on a timer of its
+/// own, and [`Pool::evict_idle`] with `n` forgets every key whose guest was
+/// not used for at least `n` ticks. A call counts as a use when it finds the
+/// slot, when it takes the slot's lock, and when it lets go of it.
+///
+/// A tick is coarse. A use is stamped with the tick count at that moment, so
+/// a guest used at count `T`, even just before tick `T + 1`, is evicted by
+/// the first sweep at count `T + n`. Its idle time is then between `n - 1`
+/// and `n` tick periods. When `ttl` must be a minimum idle time, use
+/// `n = ceil(ttl / period) + 1`.
+///
+/// A slot whose lock a call holds is skipped, so eviction never touches a
+/// guest in use. Unlike [`Pool::abandon`] of a slot in use, every guest that
+/// eviction removes is closed in order. A call that found an evicted slot
+/// before eviction removed it looks the key up again, the same as after
+/// `abandon`.
 pub struct Pool<K> {
     config: HostConfig,
+    /// How many times [`Pool::tick`] was called.
+    ticks: AtomicU64,
     slots: Mutex<HashMap<K, Arc<Slot>>>,
 }
 
@@ -103,8 +135,69 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
     pub fn new(config: HostConfig) -> Self {
         Self {
             config,
+            ticks: AtomicU64::new(0),
             slots: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Advance the pool's idle count by one tick.
+    ///
+    /// Call it on a timer. See [Idle eviction](Pool#idle-eviction).
+    pub fn tick(&self) {
+        self.ticks.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Close and forget every guest not used for at least `ticks` ticks.
+    ///
+    /// A guest with a call in flight is skipped. Every guest removed is shut
+    /// down in order; its close errors are ignored, since it is being
+    /// discarded either way. A key whose slot holds no guest is forgotten
+    /// too. Returns how many guests it closed.
+    ///
+    /// `evict_idle(0)` flushes idle guests: it evicts every guest not in use,
+    /// including one used a moment ago.
+    ///
+    /// The guests are removed from the pool before any is closed. If this
+    /// future is dropped while it closes them, the ones not yet closed are
+    /// dropped without an orderly close.
+    pub async fn evict_idle(&self, ticks: u64) -> usize {
+        let now = self.current_tick();
+        let mut evicted = Vec::new();
+        {
+            let mut slots = self.slots.lock().await;
+            slots.retain(|_, slot| {
+                let idle = now.saturating_sub(slot.last_used.load(Ordering::Acquire));
+                if idle < ticks {
+                    return true;
+                }
+                // A held lock means a call is using the slot: keep it.
+                let Some(mut state) = slot.state.try_lock() else {
+                    return true;
+                };
+                slot.abandoned.store(true, Ordering::Release);
+                if let Some(state) = state.take() {
+                    evicted.push(state);
+                }
+                false
+            });
+        }
+        let closed = evicted.len();
+        // Dropping this future here drops the sessions not yet closed.
+        for state in evicted {
+            let _ = state.session.close().await;
+        }
+        closed
+    }
+
+    /// The pool's current tick.
+    fn current_tick(&self) -> u64 {
+        self.ticks.load(Ordering::Acquire)
+    }
+
+    /// Mark `slot` as used at the current tick. Never moves the mark back.
+    fn touch(&self, slot: &Slot) {
+        slot.last_used
+            .fetch_max(self.current_tick(), Ordering::AcqRel);
     }
 
     /// Call `method` on the guest for `key`.
@@ -130,13 +223,18 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
             let slot = self.slot_for(key).await;
             let mut guard = slot.state.lock().await;
             if slot.abandoned.load(Ordering::Acquire) {
-                // `abandon` removed this slot while this call waited on its
-                // lock: look the key up again.
+                // `abandon` or `evict_idle` removed this slot while this call
+                // waited on its lock: look the key up again.
                 continue;
             }
-            return self
+            self.touch(&slot);
+            let result = self
                 .call_in(&mut guard, fingerprint, &open, method, params)
                 .await;
+            // Stamped before the lock goes, so a call longer than the idle
+            // limit is not evicted the moment it ends.
+            self.touch(&slot);
+            return result;
         }
     }
 
@@ -174,6 +272,13 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                 *guard = Some(state);
                 Err(CallError::Rejected(error))
             }
+            Err(CallError::Invalid(error)) => {
+                // The session closed itself in order; the slot stays empty.
+                // The same build would give the same answer, so this is not
+                // retried.
+                drop(state);
+                Err(CallError::Invalid(error))
+            }
             Err(CallError::Failed(_)) => {
                 // The connection already tore its own transport down on this
                 // failure, so there is nothing left to close: just drop the
@@ -182,7 +287,7 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                 drop(state);
                 let mut session = open_session(open, &self.config)
                     .await
-                    .map_err(CallError::Open)?;
+                    .map_err(CallError::from)?;
                 match call_on(&mut session, method, params).await {
                     Ok(value) => {
                         *guard = Some(SlotState {
@@ -203,8 +308,8 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                     Err(error) => Err(error),
                 }
             }
-            // A session never reports an open failure; pass anything else
-            // through with the session left out of the slot.
+            // A session never reports a connect or handshake failure; pass
+            // anything else through with the session left out of the slot.
             Err(error) => Err(error),
         }
     }
@@ -236,13 +341,18 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
     }
 
     /// The slot for `key`, inserting an empty one when there is none yet.
+    ///
+    /// A found slot is marked as used, so a sweep does not evict it before
+    /// the caller that found it gets its lock.
     async fn slot_for(&self, key: &K) -> Arc<Slot> {
         let mut slots = self.slots.lock().await;
         if let Some(slot) = slots.get(key) {
+            self.touch(slot);
             return Arc::clone(slot);
         }
         let slot = Arc::new(Slot {
             abandoned: AtomicBool::new(false),
+            last_used: AtomicU64::new(self.current_tick()),
             state: Mutex::new(None),
         });
         slots.insert(key.clone(), Arc::clone(&slot));
@@ -268,7 +378,7 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
             if let Some(state) = guard.take() {
                 let _ = state.session.close().await;
             }
-            let session = open_session(open, config).await.map_err(CallError::Open)?;
+            let session = open_session(open, config).await.map_err(CallError::from)?;
             *guard = Some(SlotState {
                 fingerprint: fingerprint.to_owned(),
                 session,
@@ -289,12 +399,31 @@ where
     session.call(method, params).await
 }
 
+/// Which step of opening a pooled guest failed.
+enum OpenFailure {
+    /// `open` failed: no guest was reached.
+    Connect(HostError),
+    /// The guest started but the MEP handshake failed.
+    Handshake(HostError),
+}
+
+impl From<OpenFailure> for CallError {
+    fn from(failure: OpenFailure) -> Self {
+        match failure {
+            OpenFailure::Connect(error) => CallError::Connect(error),
+            OpenFailure::Handshake(error) => CallError::Handshake(error),
+        }
+    }
+}
+
 /// Run `open`, then negotiate a [`Session`] over the connection it returns.
-async fn open_session<F, Fut>(open: &F, config: &HostConfig) -> Result<Session, HostError>
+async fn open_session<F, Fut>(open: &F, config: &HostConfig) -> Result<Session, OpenFailure>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<Box<dyn GuestConnection>, HostError>>,
 {
-    let connection = open().await?;
-    Session::open(connection, config).await
+    let connection = open().await.map_err(OpenFailure::Connect)?;
+    Session::open(connection, config)
+        .await
+        .map_err(OpenFailure::Handshake)
 }

@@ -44,7 +44,7 @@ jobs:
       job_kit_conformance: ${{ steps.classify.outputs.job_kit_conformance }}
       job_workspace_wasm: ${{ steps.classify.outputs.job_workspace_wasm }}
       job_test_native_extension: ${{ steps.classify.outputs.job_test_native_extension }}
-      job_test_daemon_extension: ${{ steps.classify.outputs.job_test_daemon_extension }}
+      job_test_http_extension: ${{ steps.classify.outputs.job_test_http_extension }}
       job_test_extism: ${{ steps.classify.outputs.job_test_extism }}
       job_example_wasm: ${{ steps.classify.outputs.job_example_wasm }}
       job_lint_shell: ${{ steps.classify.outputs.job_lint_shell }}
@@ -519,12 +519,12 @@ jobs:
       - name: Test real native extension through MEP
         run: mise run test:process
 
-  test-daemon-extension:
-    name: Test (connected daemon extension)
+  test-http-extension:
+    name: Test (HTTP extension)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: changes
-    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.job_test_daemon_extension == 'true') }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.job_test_http_extension == 'true') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -539,8 +539,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
-      - name: Test real connected daemon extension through MEP
-        run: mise run test:daemon
+      - name: Test a real HTTP extension through MEP
+        run: mise run test:http
 
   test-unit:
     name: Test (Unit)
@@ -643,7 +643,7 @@ jobs:
       - extension-bundle
       - workspace-wasm
       - test-native-extension
-      - test-daemon-extension
+      - test-http-extension
       - test-unit
       - docs
       - coverage

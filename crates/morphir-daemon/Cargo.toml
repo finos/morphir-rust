@@ -10,71 +10,37 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Morphir daemon service for workspace management, builds, and IDE integration"
+description = "Morphir daemon services on top of the extension host: errors, extension file loading, virtual paths and workspaces"
 
 [dependencies]
 # Workspace dependencies
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 
-# Async runtime
-tokio = { version = "1", features = [
-    "rt-multi-thread",
-    "macros",
-    "sync",
-    "fs",
-    "io-util",
-    "net",
-    "process",
-    "signal",
-    "time",
-] }
-async-trait = "0.1"
-
-# Actor runtime
-kameo = "0.22"
-
-# JSON-RPC
-jsonrpsee = { version = "0.26", features = ["server", "client", "macros"] }
+# Async file access for the extension cache
+tokio = { version = "1", features = ["fs"] }
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# File watching
+# File watching errors (DaemonError::Watch)
 notify = "8"
 
-# Configuration
+# Configuration errors (DaemonError::Toml)
 toml = "1.0"
 
 # Logging
 tracing = "0.1"
 
-# WASM plugin runtime (Extism)
-extism = "1"
-
 # HTTP client (for downloading extensions)
-reqwest = { version = "0.13", default-features = false, features = [
-    "json",
-    "rustls",
-] }
-
-# Directory utilities
-dirs = "7"
-tempfile = "3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 # Internal crates
-morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" }
 morphir-devkit = { path = "../morphir-devkit" }
-morphir-distribution = { path = "../morphir-distribution" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 morphir-host = { path = "../morphir-host" }
-morphir-host-native = { path = "../morphir-host-native" }
 morphir-workspace = { path = "../morphir-workspace" }
 
 [dev-dependencies]
-base64 = "0.23"
-wat = "1"
-tokio = { version = "1", features = ["test-util"] }
-morphir-projection = { path = "../morphir-projection", features = ["testing"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros"] }

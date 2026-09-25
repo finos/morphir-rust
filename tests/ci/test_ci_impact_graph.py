@@ -57,7 +57,7 @@ class WorkspaceGraphTests(unittest.TestCase):
     def test_load_workspace_reads_the_real_workspace(self) -> None:
         workspace = graph.load_workspace(REPOSITORY_ROOT)
         self.assertIn("morphir-core", workspace.members)
-        self.assertIn("morphir-daemon", workspace.dependents["morphir-extension-sdk"])
+        self.assertIn("morphir-host-native", workspace.dependents["morphir-extension-sdk"])
         self.assertNotIn("morphir-ext-example", workspace.default_members)
 
 

@@ -100,7 +100,7 @@ impl Session {
     ///
     /// A result that does not decode into `R` ends the session: the guest
     /// answered with a valid envelope, so the session closes it in order
-    /// before reporting the decode failure.
+    /// before it reports [`CallError::Invalid`].
     pub async fn call<P: Serialize, R: DeserializeOwned>(
         &mut self,
         method: &str,
@@ -114,8 +114,8 @@ impl Session {
             Err(error) => {
                 let error = HostError::from(error);
                 match self.connection.close().await {
-                    Ok(()) => Err(CallError::Failed(error)),
-                    Err(close) => Err(CallError::Failed(also_failed_to_shut_down(error, close))),
+                    Ok(()) => Err(CallError::Invalid(error)),
+                    Err(close) => Err(CallError::Invalid(also_failed_to_shut_down(error, close))),
                 }
             }
         }
@@ -165,7 +165,12 @@ where
             Ok(()) => Err(error),
             Err(close) => Err(also_failed_to_shut_down(error, close)),
         },
-        Err(CallError::Failed(error) | CallError::Open(error)) => Err(error),
+        Err(
+            CallError::Failed(error)
+            | CallError::Invalid(error)
+            | CallError::Connect(error)
+            | CallError::Handshake(error),
+        ) => Err(error),
     }
 }
 

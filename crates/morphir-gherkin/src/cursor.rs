@@ -1,6 +1,6 @@
 //! Navigation by path, by source offset, and by cursor moves.
 
-use crate::model::Document;
+use crate::model::{Document, StepArgument};
 use crate::path::{NodePath, Segment};
 use crate::span::Span;
 use crate::visit::{Node, children, preamble_children};
@@ -8,6 +8,34 @@ use crate::visit::{Node, children, preamble_children};
 /// Whether a byte offset falls inside a span. A zero-width span still contains its own start.
 fn contains(span: Span, offset: usize) -> bool {
     span.start <= offset && offset < span.end.max(span.start + 1)
+}
+
+fn join(a: Span, b: Span) -> Span {
+    Span {
+        start: a.start.min(b.start),
+        end: a.end.max(b.end),
+    }
+}
+
+/// The extent of a node: its own span, joined with its argument's span (a step's doc string or
+/// table) and the extent of each of its children. A step's own span covers only its line, so
+/// `Document::at` descends by extent, not by span, to find the node that owns an offset inside a
+/// step's argument or notes.
+fn extent(path: &NodePath, node: Node<'_>) -> Span {
+    let mut span = node.span();
+    if let Node::Step(step) = node
+        && let Some(argument) = &step.argument
+    {
+        let argument_span = match argument {
+            StepArgument::DocString(doc_string) => doc_string.span,
+            StepArgument::Table(table) => table.span,
+        };
+        span = join(span, argument_span);
+    }
+    for (child_path, child) in children(path, node) {
+        span = join(span, extent(&child_path, child));
+    }
+    span
 }
 
 impl Document {
@@ -33,8 +61,10 @@ impl Document {
         }
     }
 
-    /// The deepest node whose span contains a byte offset. The preamble's blocks are tried before
-    /// the feature, since they come first in the source.
+    /// The deepest node whose extent contains a byte offset. The preamble's blocks are tried
+    /// before the feature, since they come first in the source. An offset inside a step's doc
+    /// string or table resolves to the step; inside a step's notes, to the note block; in the gap
+    /// between two steps, to the enclosing scenario or background.
     pub fn at(&self, offset: usize) -> Option<NodePath> {
         if let Some((path, _)) = preamble_children(self)
             .into_iter()
@@ -44,12 +74,12 @@ impl Document {
         }
         let feature = self.feature.as_ref()?;
         let mut current = (NodePath::feature(), Node::Feature(feature));
-        if !(current.1.span().start..=current.1.span().end).contains(&offset) {
+        if !contains(extent(&current.0, current.1), offset) {
             return None;
         }
         while let Some(next) = children(&current.0, current.1)
             .into_iter()
-            .find(|(_, node)| contains(node.span(), offset))
+            .find(|(path, node)| contains(extent(path, *node), offset))
         {
             current = next;
         }

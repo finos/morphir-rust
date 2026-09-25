@@ -1,5 +1,5 @@
 use morphir_gherkin::visit::{Node, Visitor, Walk, walk};
-use morphir_gherkin::{NodePath, Segment, read_str};
+use morphir_gherkin::{NodePath, Segment, StepArgument, read_str};
 
 fn doc() -> morphir_gherkin::Document {
     let text = std::fs::read_to_string(format!(
@@ -281,3 +281,134 @@ fn from_segments_builds_a_path_from_a_slice() {
     assert_eq!(path.to_string(), "feature/rule[0]/scenario[1]");
     assert_eq!(path, "feature/rule[0]/scenario[1]".parse().unwrap());
 }
+
+// R7 (fix round 1): `Document::at` finds the node that owns an offset inside a step's argument
+// (its doc string or table) or its notes, rather than the enclosing scenario or background, whose
+// span already covers that offset. A blank gap between two steps still resolves to the enclosing
+// scenario, since it belongs to no step.
+
+fn step0_path() -> NodePath {
+    "feature/scenario[0]/step[0]".parse().unwrap()
+}
+
+#[test]
+fn at_an_offset_in_a_feature_steps_doc_string_resolves_to_the_step() {
+    let text = "\
+Feature: F
+  Scenario: S
+    Given a step
+      \"\"\"
+      doc string body
+      \"\"\"
+    When another step
+";
+    let (doc, _) = read_str("doc-string.feature", text).unwrap();
+    let step = &doc.feature.as_ref().unwrap().scenarios[0].steps[0];
+    let Some(StepArgument::DocString(doc_string)) = &step.argument else {
+        panic!("a doc string")
+    };
+    let offset = doc_string.span.start + doc_string.body.find("doc string body").unwrap();
+    assert_eq!(doc.at(offset), Some(step0_path()));
+}
+
+#[test]
+fn at_an_offset_in_an_mdg_steps_doc_string_resolves_to_the_step() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+  ```text
+  doc string body
+  ```
+
+* When another step
+";
+    let (doc, _) = read_str("doc-string.feature.md", text).unwrap();
+    let step = &doc.feature.as_ref().unwrap().scenarios[0].steps[0];
+    let Some(StepArgument::DocString(doc_string)) = &step.argument else {
+        panic!("a doc string")
+    };
+    let offset = doc_string.span.start + doc_string.body.find("doc string body").unwrap();
+    assert_eq!(doc.at(offset), Some(step0_path()));
+}
+
+#[test]
+fn at_an_offset_in_a_feature_steps_table_resolves_to_the_step() {
+    let text = "\
+Feature: F
+  Scenario: S
+    Given a step
+      | a | b |
+      | 1 | 2 |
+    When another step
+";
+    let (doc, _) = read_str("table.feature", text).unwrap();
+    let step = &doc.feature.as_ref().unwrap().scenarios[0].steps[0];
+    let Some(StepArgument::Table(table)) = &step.argument else {
+        panic!("a table")
+    };
+    assert_eq!(doc.at(table.span.start + 2), Some(step0_path()));
+}
+
+#[test]
+fn at_an_offset_in_an_mdg_steps_table_resolves_to_the_step() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+  | a | b |
+  | - | - |
+  | 1 | 2 |
+
+* When another step
+";
+    let (doc, _) = read_str("table.feature.md", text).unwrap();
+    let step = &doc.feature.as_ref().unwrap().scenarios[0].steps[0];
+    let Some(StepArgument::Table(table)) = &step.argument else {
+        panic!("a table")
+    };
+    assert_eq!(doc.at(table.span.start + 2), Some(step0_path()));
+}
+
+#[test]
+fn at_an_offset_in_a_steps_note_resolves_to_the_note_block() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+A note paragraph.
+
+* When another step
+";
+    let (doc, source) = read_str("step-note.feature.md", text).unwrap();
+    let step = &doc.feature.as_ref().unwrap().scenarios[0].steps[0];
+    let note = step.notes.prose().next().unwrap();
+    assert_eq!(source.slice(note.span).trim(), "A note paragraph.");
+    assert_eq!(
+        doc.at(note.span.start + 1),
+        Some(step0_path().push(Segment::Prose(0)))
+    );
+}
+
+#[test]
+fn at_an_offset_in_the_gap_between_two_feature_steps_resolves_to_the_scenario() {
+    let text = "Feature: F\n  Scenario: S\n    Given a step\n\n    When another step\n";
+    let (doc, source) = read_str("gap.feature", text).unwrap();
+    // Line 4 (1-based) is the blank line between the two steps.
+    let offset = source.line_start(4);
+    assert_eq!(doc.at(offset), Some("feature/scenario[0]".parse().unwrap()));
+}
+
+// This shape does not distinctly exist for `.feature.md`: the Markdown reader gives a step list
+// item's span through the blank line that follows it, up to the start of the next item, so a
+// blank line between two step items already belongs to the first step's own span, not to a gap
+// the scenario owns.

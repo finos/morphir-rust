@@ -47,3 +47,34 @@ async fn an_undefined_step_fails_the_suite_with_no_tag_expression() {
     assert!(result.failed >= 1, "{result:?}");
     assert!(!result.succeeded());
 }
+
+/// T10-c regression: a `Suite` must not let cucumber parse process arguments. `cargo test -- <name>`
+/// (a libtest filter) leaves that filter in the test binary's real `std::env::args()`; before this
+/// fix, `Suite::run` let cucumber's own `clap` parser read that argv, see an argument it didn't
+/// define, and abort the process with exit code 2. This spawns the same compiled test binary as a
+/// subprocess with an exact libtest filter — the same shape as `cargo test -p morphir-bdd --test
+/// suite -- a_suite`, which is how the coordinator's repro reached `Suite::run` — and asserts the
+/// process exits successfully instead of aborting on an unrecognized argument.
+#[test]
+fn a_suite_ignores_the_process_arguments_a_test_filter_adds() {
+    let exe = std::env::current_exe().expect("this test binary's own path");
+    let output = std::process::Command::new(exe)
+        .args([
+            "a_suite_writes_json_and_junit_and_honours_a_tag_expression",
+            "--exact",
+        ])
+        .output()
+        .expect("run this test binary as a subprocess with a libtest filter");
+    assert!(
+        output.status.success(),
+        "a libtest filter argument must not reach cucumber's CLI parser\nstatus: {}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("test result: ok"),
+        "expected the filtered test to run and pass, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}

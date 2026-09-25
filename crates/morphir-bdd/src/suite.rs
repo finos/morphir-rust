@@ -20,6 +20,12 @@ pub fn standard_extensions() -> Extensions {
 
 /// Builds and runs one Morphir Gherkin suite: a feature directory, an extension context, an
 /// optional tag expression, and where to write its JSON and JUnit reports.
+///
+/// A `Suite` never parses process arguments. It takes its configuration only from the builder
+/// methods above and the `MORPHIR_BDD_*` environment variables; [`run`](Suite::run) hands cucumber
+/// an explicit default `cucumber::cli::Opts` instead of letting it parse `std::env::args()`. This
+/// keeps a `Suite` safe to run inside a normal `#[test]`, where the process's real argv holds
+/// libtest's own filter and flags (for example `cargo test -- some_test --exact`), not cucumber's.
 pub struct Suite {
     name: String,
     features: PathBuf,
@@ -132,6 +138,7 @@ impl Suite {
                     .normalized(),
             )
             .fail_on_skipped()
+            .with_default_cli()
             .before({
                 let extensions = extensions.clone();
                 move |feature, _rule, scenario, world| {
@@ -176,6 +183,42 @@ impl Suite {
 /// directory that holds a `Cargo.lock` (the workspace root), or `./.dev/out/bdd` if none is found.
 fn default_out_dir() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = cwd.ancestors().find(|dir| dir.join("Cargo.lock").is_file());
+    workspace_out_dir(&cwd)
+}
+
+/// `.dev/out/bdd` under the nearest ancestor of `start` (inclusive) that holds a `Cargo.lock`, or
+/// `./.dev/out/bdd` if no ancestor does. Pure and side-effect-free so it can be unit tested without
+/// touching the real current directory.
+fn workspace_out_dir(start: &Path) -> PathBuf {
+    let root = start
+        .ancestors()
+        .find(|dir| dir.join("Cargo.lock").is_file());
     root.unwrap_or(Path::new(".")).join(".dev/out/bdd")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_out_dir;
+
+    #[test]
+    fn workspace_out_dir_finds_the_nearest_ancestor_with_a_cargo_lock() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("Cargo.lock"), "").unwrap();
+        let nested = workspace.path().join("crates").join("some-crate");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let out = workspace_out_dir(&nested);
+
+        assert_eq!(out, workspace.path().join(".dev/out/bdd"));
+    }
+
+    #[test]
+    fn workspace_out_dir_falls_back_when_no_ancestor_has_a_cargo_lock() {
+        let orphan = tempfile::tempdir().unwrap();
+        // A fresh temp directory has no `Cargo.lock` in any of its ancestors up to `/`, so the
+        // search must fall back to the current-directory-relative default.
+        let out = workspace_out_dir(orphan.path());
+
+        assert_eq!(out, std::path::Path::new(".").join(".dev/out/bdd"));
+    }
 }

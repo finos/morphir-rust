@@ -66,11 +66,17 @@ struct Slot {
 /// Because of that retry, a pooled call must be safe to send twice: when a
 /// session breaks mid-call the guest may already have run the first attempt.
 ///
-/// [`CallError::Open`] means `open`, or the handshake on the connection it
-/// returned, failed. It carries that error as it was. It is not retried and
-/// nothing is cached, whether it came from the first open or from opening
-/// the replacement for a broken session. Only in the first case is it
-/// certain that the call never reached a guest.
+/// [`CallError::Decode`] means the guest answered but its result did not
+/// decode. The session already closed itself in order, so the slot is left
+/// empty and the next call opens fresh. It is not retried: the same guest
+/// build would give the same bad answer.
+///
+/// [`CallError::Connect`] means `open` failed, so no guest was reached.
+/// [`CallError::Handshake`] means `open` returned a connection but the MEP
+/// handshake on it failed. Each carries that error as it was. Neither is
+/// retried and nothing is cached, whether it came from the first open or
+/// from opening the replacement for a broken session. Only in the first case
+/// is it certain that the call never reached a guest.
 ///
 /// # Cancellation
 ///
@@ -174,6 +180,13 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                 *guard = Some(state);
                 Err(CallError::Rejected(error))
             }
+            Err(CallError::Decode(error)) => {
+                // The session closed itself in order; the slot stays empty.
+                // The same build would give the same answer, so this is not
+                // retried.
+                drop(state);
+                Err(CallError::Decode(error))
+            }
             Err(CallError::Failed(_)) => {
                 // The connection already tore its own transport down on this
                 // failure, so there is nothing left to close: just drop the
@@ -182,7 +195,7 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                 drop(state);
                 let mut session = open_session(open, &self.config)
                     .await
-                    .map_err(CallError::Open)?;
+                    .map_err(CallError::from)?;
                 match call_on(&mut session, method, params).await {
                     Ok(value) => {
                         *guard = Some(SlotState {
@@ -203,8 +216,8 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                     Err(error) => Err(error),
                 }
             }
-            // A session never reports an open failure; pass anything else
-            // through with the session left out of the slot.
+            // A session never reports a connect or handshake failure; pass
+            // anything else through with the session left out of the slot.
             Err(error) => Err(error),
         }
     }
@@ -268,7 +281,7 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
             if let Some(state) = guard.take() {
                 let _ = state.session.close().await;
             }
-            let session = open_session(open, config).await.map_err(CallError::Open)?;
+            let session = open_session(open, config).await.map_err(CallError::from)?;
             *guard = Some(SlotState {
                 fingerprint: fingerprint.to_owned(),
                 session,
@@ -289,12 +302,31 @@ where
     session.call(method, params).await
 }
 
+/// Which step of opening a pooled guest failed.
+enum OpenFailure {
+    /// `open` failed: no guest was reached.
+    Connect(HostError),
+    /// The guest started but the MEP handshake failed.
+    Handshake(HostError),
+}
+
+impl From<OpenFailure> for CallError {
+    fn from(failure: OpenFailure) -> Self {
+        match failure {
+            OpenFailure::Connect(error) => CallError::Connect(error),
+            OpenFailure::Handshake(error) => CallError::Handshake(error),
+        }
+    }
+}
+
 /// Run `open`, then negotiate a [`Session`] over the connection it returns.
-async fn open_session<F, Fut>(open: &F, config: &HostConfig) -> Result<Session, HostError>
+async fn open_session<F, Fut>(open: &F, config: &HostConfig) -> Result<Session, OpenFailure>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<Box<dyn GuestConnection>, HostError>>,
 {
-    let connection = open().await?;
-    Session::open(connection, config).await
+    let connection = open().await.map_err(OpenFailure::Connect)?;
+    Session::open(connection, config)
+        .await
+        .map_err(OpenFailure::Handshake)
 }

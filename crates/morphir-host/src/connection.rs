@@ -14,17 +14,29 @@ pub enum CallError {
     /// The session broke, and the connection closed its channel.
     #[error(transparent)]
     Failed(HostError),
-    /// No guest could be opened for this attempt. The error is the one
-    /// opening the guest or its session reported.
+    /// The guest answered but its result did not decode. The session was
+    /// closed in order.
     ///
-    /// When [`crate::Pool::call`] reports it while replacing a broken
-    /// session, an earlier attempt of the same call may already have reached
-    /// the guest, so this does not mean the call never ran.
-    ///
-    /// Only [`crate::Pool::call`] reports this: a [`GuestConnection`] or a
-    /// [`crate::Session`] is already open when it is called.
+    /// Only [`crate::Session::call`] and the pool built on it report this: a
+    /// [`GuestConnection`] returns the result as JSON and does not decode it.
     #[error(transparent)]
-    Open(HostError),
+    Decode(HostError),
+    /// Only [`crate::Pool::call`]: the `open` function failed, so no guest
+    /// was reached. The error is the one `open` reported.
+    ///
+    /// When the pool reports it while replacing a broken session, an earlier
+    /// attempt of the same call may already have reached a guest, so this
+    /// does not mean the call never ran.
+    #[error(transparent)]
+    Connect(HostError),
+    /// Only [`crate::Pool::call`]: the guest started but the MEP handshake
+    /// failed. The error is the one the handshake reported.
+    ///
+    /// When the pool reports it while replacing a broken session, an earlier
+    /// attempt of the same call may already have reached a guest, so this
+    /// does not mean the call never ran.
+    #[error(transparent)]
+    Handshake(HostError),
 }
 
 /// One guest behind one binding of MEP.

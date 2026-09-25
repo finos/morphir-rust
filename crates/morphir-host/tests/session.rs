@@ -145,7 +145,7 @@ async fn closing_after_a_decode_failure_closes_the_channel_once() {
     let mut session = Session::open(connection, &config()).await.unwrap();
 
     match session.compile(CompileRequest::default()).await {
-        Err(CallError::Failed(_)) => {}
+        Err(CallError::Decode(_)) => {}
         other => panic!("expected a decode failure, got {other:?}"),
     }
 

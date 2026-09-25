@@ -527,7 +527,7 @@ async fn a_dropped_call_lets_the_next_call_open_a_fresh_guest() {
 
 // (Minor, item 3a) An open failure is not cached: the failed attempt leaves
 // nothing behind, so the next call opens again rather than reusing a slot
-// that was never actually populated. It is reported as `CallError::Open`,
+// that was never actually populated. It is reported as `CallError::Connect`,
 // not as a call failure, and is not retried.
 #[tokio::test]
 async fn an_open_failure_is_not_cached() {
@@ -554,10 +554,10 @@ async fn an_open_failure_is_not_cached() {
         .call::<_, Value, _, _>(&key, "fp", &open, "compile", &())
         .await
         .unwrap_err();
-    // An open failure is its own variant, carries the open's error as it
+    // A failed `open` is a connect failure, carries the open's error as it
     // was, and is not retried.
     assert!(
-        matches!(&error, CallError::Open(HostError::Invalid(message)) if message == "scripted open failure"),
+        matches!(&error, CallError::Connect(HostError::Invalid(message)) if message == "scripted open failure"),
         "{error:?}"
     );
     assert_eq!(opens.load(Ordering::SeqCst), 1);
@@ -568,10 +568,10 @@ async fn an_open_failure_is_not_cached() {
 }
 
 // An open failure while replacing a broken session is reported as
-// `CallError::Open` with the open's own error, not as the call failure that
-// led to it, and is not retried again.
+// `CallError::Connect` with the open's own error, not as the call failure
+// that led to it, and is not retried again.
 #[tokio::test]
-async fn a_replacement_that_fails_to_open_is_reported_as_an_open_failure() {
+async fn a_replacement_that_fails_to_open_is_reported_as_a_connect_failure() {
     let opens = Arc::new(AtomicUsize::new(0));
     let open = {
         let opens = Arc::clone(&opens);
@@ -599,10 +599,88 @@ async fn a_replacement_that_fails_to_open_is_reported_as_an_open_failure() {
         .unwrap_err();
 
     assert!(
-        matches!(&error, CallError::Open(HostError::Invalid(message)) if message == "scripted reopen failure"),
+        matches!(&error, CallError::Connect(HostError::Invalid(message)) if message == "scripted reopen failure"),
         "{error:?}"
     );
     assert_eq!(opens.load(Ordering::SeqCst), 2);
+}
+
+// Requirement: a result that does not decode is the guest answering badly,
+// not a lost guest. The same build gives the same bad answer, so the pool
+// does not open a second guest to ask again. The session closed itself in
+// order, so the slot is empty and the next call opens fresh.
+#[tokio::test]
+async fn a_result_that_does_not_decode_is_not_retried() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let open = opener("guest", Arc::clone(&opens), |_attempt| {
+        vec![
+            Ok(ok(1, frontend_initialize_result("guest"))),
+            Ok(ok(2, json!({"unexpected": true}))),
+            // The orderly shutdown after the decode failure.
+            Ok(ok(3, json!({}))),
+        ]
+    });
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    let error = pool
+        .call::<_, u32, _, _>(&key, "fp", open.clone(), "compile", &())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CallError::Decode(_)), "{error:?}");
+    assert_eq!(
+        opens.load(Ordering::SeqCst),
+        1,
+        "a decode failure opens no second guest"
+    );
+
+    let result: Value = pool
+        .call(&key, "fp", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    assert_eq!(result, json!({"unexpected": true}));
+    assert_eq!(opens.load(Ordering::SeqCst), 2);
+}
+
+// Requirement: a caller can tell "no guest was reached" from "the guest
+// started but the handshake failed". A failed `open` is `Connect`; a guest
+// that refuses `initialize` is `Handshake`. Neither is retried.
+#[tokio::test]
+async fn a_failed_open_is_connect_and_a_failed_handshake_is_handshake() {
+    let pool: Pool<String> = Pool::new(config());
+
+    let connect = pool
+        .call::<_, Value, _, _>(
+            &"a".to_owned(),
+            "fp",
+            || std::future::ready(Err(HostError::Invalid("no binary".into()))),
+            "compile",
+            &(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&connect, CallError::Connect(HostError::Invalid(message)) if message == "no binary"),
+        "{connect:?}"
+    );
+
+    let opens = Arc::new(AtomicUsize::new(0));
+    let refuses_initialize = opener("guest", Arc::clone(&opens), |_attempt| {
+        vec![Ok(rejected(1))]
+    });
+    let handshake = pool
+        .call::<_, Value, _, _>(&"b".to_owned(), "fp", refuses_initialize, "compile", &())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(handshake, CallError::Handshake(_)),
+        "{handshake:?}"
+    );
+    assert_eq!(
+        opens.load(Ordering::SeqCst),
+        1,
+        "a failed handshake is not retried"
+    );
 }
 
 // (Minor, item 3b) A fingerprint change does not just forget the old

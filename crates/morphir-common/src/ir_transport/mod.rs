@@ -5,6 +5,7 @@ mod diagnostic;
 mod document_tree;
 mod ion;
 mod json;
+pub mod metadata;
 mod migration;
 mod options;
 mod pipeline;

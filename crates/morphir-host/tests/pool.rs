@@ -1134,15 +1134,19 @@ async fn idle_a_call_waiting_when_its_slot_is_evicted_opens_a_fresh_guest() {
         tokio::pin!(call_a);
         tokio::pin!(call_b);
 
-        // A is in flight on the first guest; B holds the slot and waits on
-        // its lock.
+        // A is in flight on the first guest, stamped at tick 0. After one
+        // tick, B finds the slot (stamping it at tick 1) and waits on its
+        // lock.
         assert_pending(call_a.as_mut());
+        pool.tick();
         assert_pending(call_b.as_mut());
 
         // A finishes and lets go of the lock. B is not polled again yet.
         release_tx.send(()).expect("call_a awaits the gate");
         assert_eq!(call_a.await.unwrap(), json!({"guest": "first"}));
 
+        // The slot was last used at tick 1, so it is not idle yet.
+        assert_eq!(pool.evict_idle(1).await, 0);
         pool.tick();
         assert_eq!(pool.evict_idle(1).await, 1);
         assert!(first_probe.dropped());

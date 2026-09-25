@@ -109,14 +109,20 @@ struct Slot {
 /// The pool has no clock, so it stays portable to `wasm32-unknown-unknown`.
 /// It counts ticks instead: the caller calls [`Pool::tick`] on a timer of its
 /// own, and [`Pool::evict_idle`] with `n` forgets every key whose guest was
-/// not used for at least `n` ticks. A call counts as a use when it takes the
-/// slot's lock and again when it lets go of it.
+/// not used for at least `n` ticks. A call counts as a use when it finds the
+/// slot, when it takes the slot's lock, and when it lets go of it.
+///
+/// A tick is coarse. A use is stamped with the tick count at that moment, so
+/// a guest used at count `T`, even just before tick `T + 1`, is evicted by
+/// the first sweep at count `T + n`. Its idle time is then between `n - 1`
+/// and `n` tick periods. When `ttl` must be a minimum idle time, use
+/// `n = ceil(ttl / period) + 1`.
 ///
 /// A slot whose lock a call holds is skipped, so eviction never touches a
-/// guest in use. Unlike
-/// [`Pool::abandon`] of a slot in use, every guest that eviction removes is
-/// closed in order. A call that found an evicted slot before eviction removed
-/// it looks the key up again, the same as after `abandon`.
+/// guest in use. Unlike [`Pool::abandon`] of a slot in use, every guest that
+/// eviction removes is closed in order. A call that found an evicted slot
+/// before eviction removed it looks the key up again, the same as after
+/// `abandon`.
 pub struct Pool<K> {
     config: HostConfig,
     /// How many times [`Pool::tick`] was called.
@@ -143,9 +149,17 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
 
     /// Close and forget every guest not used for at least `ticks` ticks.
     ///
-    /// A guest with a call in flight is skipped. Every guest removed is shut down in order; its close errors are
-    /// ignored, since it is being discarded either way. A key whose slot
-    /// holds no guest is forgotten too. Returns how many guests it closed.
+    /// A guest with a call in flight is skipped. Every guest removed is shut
+    /// down in order; its close errors are ignored, since it is being
+    /// discarded either way. A key whose slot holds no guest is forgotten
+    /// too. Returns how many guests it closed.
+    ///
+    /// `evict_idle(0)` flushes idle guests: it evicts every guest not in use,
+    /// including one used a moment ago.
+    ///
+    /// The guests are removed from the pool before any is closed. If this
+    /// future is dropped while it closes them, the ones not yet closed are
+    /// dropped without an orderly close.
     pub async fn evict_idle(&self, ticks: u64) -> usize {
         let now = self.current_tick();
         let mut evicted = Vec::new();
@@ -168,6 +182,7 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
             });
         }
         let closed = evicted.len();
+        // Dropping this future here drops the sessions not yet closed.
         for state in evicted {
             let _ = state.session.close().await;
         }
@@ -177,6 +192,12 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
     /// The pool's current tick.
     fn current_tick(&self) -> u64 {
         self.ticks.load(Ordering::Acquire)
+    }
+
+    /// Mark `slot` as used at the current tick. Never moves the mark back.
+    fn touch(&self, slot: &Slot) {
+        slot.last_used
+            .fetch_max(self.current_tick(), Ordering::AcqRel);
     }
 
     /// Call `method` on the guest for `key`.
@@ -206,13 +227,13 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                 // waited on its lock: look the key up again.
                 continue;
             }
-            slot.last_used.store(self.current_tick(), Ordering::Release);
+            self.touch(&slot);
             let result = self
                 .call_in(&mut guard, fingerprint, &open, method, params)
                 .await;
             // Stamped before the lock goes, so a call longer than the idle
             // limit is not evicted the moment it ends.
-            slot.last_used.store(self.current_tick(), Ordering::Release);
+            self.touch(&slot);
             return result;
         }
     }
@@ -320,9 +341,13 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
     }
 
     /// The slot for `key`, inserting an empty one when there is none yet.
+    ///
+    /// A found slot is marked as used, so a sweep does not evict it before
+    /// the caller that found it gets its lock.
     async fn slot_for(&self, key: &K) -> Arc<Slot> {
         let mut slots = self.slots.lock().await;
         if let Some(slot) = slots.get(key) {
+            self.touch(slot);
             return Arc::clone(slot);
         }
         let slot = Arc::new(Slot {

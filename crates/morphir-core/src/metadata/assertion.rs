@@ -208,6 +208,11 @@ impl Assertion {
     }
 
     pub(crate) fn merge_sources(&mut self, other: &Self) -> Result<(), MetadataError> {
+        if self.source_override.is_some() != other.source_override.is_some() {
+            return Err(MetadataError::SourceKnowledgeConflict(Box::new(
+                self.key.clone(),
+            )));
+        }
         if let Some(sources) = &other.source_override {
             let mut merged = self.source_override.clone().unwrap_or_default();
             merged.extend(sources.iter().cloned());

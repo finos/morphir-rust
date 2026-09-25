@@ -48,16 +48,14 @@ fn changed_fact() -> Fact {
 #[test]
 fn metadata_optional_detail_same_graph() {
     let plain = assertion();
-    let mut detailed = assertion();
-    detailed
-        .add_detail(AssertionSource::Compiler {
-            producer: "morphir-gleam".to_owned(),
-            reference: Some("src/Orders.gleam".to_owned()),
-        })
-        .unwrap();
+    let record = SourceRecord::new(
+        plain.key().clone(),
+        vec![AssertionSource::Document(owner()), compiler_source()],
+    )
+    .unwrap();
     let mut graph = GraphIndex::new();
     graph.insert(plain).unwrap();
-    graph.insert(detailed).unwrap();
+    graph.apply_source_records(&owner(), &[record]).unwrap();
 
     assert_eq!(graph.facts().len(), 1);
     assert_eq!(graph.assertions().len(), 1);
@@ -263,6 +261,58 @@ fn metadata_rewrite_preserves_existing_detail() {
     assert_eq!(graph.facts(), &[changed_fact()]);
     assert_eq!(graph.assertions()[0].key().fact(), &changed_fact());
     assert_eq!(graph.assertions()[0].sources(), vec![compiler_source()]);
+}
+
+#[test]
+fn metadata_rewrite_collision_keeps_unknown_ownership() {
+    let original = assertion().key().clone();
+    let colliding = AssertionKey::new(owner(), Carrier::DocumentGraph, changed_fact()).unwrap();
+    let mut graph = GraphIndex::new();
+    graph.insert(Assertion::new(original.clone())).unwrap();
+    graph.insert(Assertion::new(colliding.clone())).unwrap();
+    let record = SourceRecord::new(original.clone(), vec![compiler_source()]).unwrap();
+    graph.apply_source_records(&owner(), &[record]).unwrap();
+    let before = graph.assertions().to_vec();
+    let facts_before = graph.facts().to_vec();
+
+    let result = graph.rewrite_assertion(&original, changed_fact());
+
+    assert_eq!(
+        result,
+        Err(MetadataError::AssertionCollision(Box::new(colliding)))
+    );
+    assert_eq!(graph.assertions(), before);
+    assert_eq!(graph.facts(), facts_before);
+    assert_eq!(
+        graph.remove_source_from_owner(&owner(), &compiler_source()),
+        Err(MetadataError::UnknownSourceOwnership)
+    );
+}
+
+#[test]
+fn metadata_duplicate_insert_cannot_hide_implicit_ownership() {
+    for explicit_first in [true, false] {
+        let key = assertion().key().clone();
+        let mut detailed = Assertion::new(key.clone());
+        detailed.add_detail(compiler_source()).unwrap();
+        let plain = Assertion::new(key);
+        let mut graph = GraphIndex::new();
+        let (first, second) = if explicit_first {
+            (detailed, plain)
+        } else {
+            (plain, detailed)
+        };
+        graph.insert(first.clone()).unwrap();
+
+        assert_eq!(
+            graph.insert(second),
+            Err(MetadataError::SourceKnowledgeConflict(Box::new(
+                first.key().clone()
+            )))
+        );
+        assert_eq!(graph.assertions(), &[first]);
+        assert_eq!(graph.facts().len(), 1);
+    }
 }
 
 #[test]

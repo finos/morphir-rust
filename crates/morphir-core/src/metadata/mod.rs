@@ -49,6 +49,12 @@ pub enum MetadataError {
     /// The old assertion must exist before an atomic rewrite.
     #[error("assertion to rewrite was not found")]
     AssertionNotFound,
+    /// Rewriting into another authored assertion would merge distinct ownership.
+    #[error("replacement collides with an existing assertion: {0:?}")]
+    AssertionCollision(Box<AssertionKey>),
+    /// Duplicate assertions cannot merge known and unknown source ownership.
+    #[error("duplicate assertion has conflicting source knowledge: {0:?}")]
+    SourceKnowledgeConflict(Box<AssertionKey>),
     /// Source-dependent edits require explicit ownership for every assertion in scope.
     #[error("assertion source ownership is unknown")]
     UnknownSourceOwnership,

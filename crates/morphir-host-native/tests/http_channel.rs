@@ -10,7 +10,7 @@
 mod support;
 
 use morphir_extension_sdk::GenerateRequest;
-use morphir_host::{CallError, ChannelState, HostError, Session};
+use morphir_host::{CallError, ChannelCause, ChannelState, HostError, Session};
 use morphir_host_native::http::{HttpChannel, HttpEndpoint};
 use serde_json::json;
 use std::path::PathBuf;
@@ -214,6 +214,7 @@ async fn marks_the_session_indeterminate_when_the_daemon_exceeds_the_request_tim
         error,
         HostError::Channel {
             state: ChannelState::Indeterminate,
+            cause: ChannelCause::Transport,
             ..
         }
     ));

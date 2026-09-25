@@ -14,8 +14,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Tag, fence and prose extensions build a typed scenario context, and a
   converter turns a `.feature.md` document into `.feature` text
   (finos/morphir#946).
+- `Registry`, `GuestSource` and `Pool` in `morphir-host`: a portable provider
+  registry that resolves frontends and backends from registered sources, and
+  a warm-guest pool that opens one session per key and reuses it across
+  calls, evicting and retrying once on a broken session. A call that was
+  waiting on a key when `Pool::abandon` removed it runs against the key's
+  new slot, opening a guest only if none is cached there, instead of using
+  the abandoned one. The registry's `ProviderOrigin`,
+  `InvocationMode` and `CapabilityMetadataScope` are `#[non_exhaustive]`.
+- `Resolved::native` in `morphir-host` is `Some` only under
+  `InvocationMode::NativeDirect`. Under `NativeMep` it is `None`, so a
+  `ProtocolOnly` caller goes through `Resolved::connect` and gets MEP
+  negotiation and result checks.
+- `GuestSource::incarnation` in `morphir-host` tells apart two builds under
+  one id and version, and `Resolved::fingerprint` appends it when it is
+  `Some`. `InstalledSource` reports a SHA-256 of its installed catalog
+  record, so a reinstall under the same version with another artifact, args
+  or claims opens a new pooled guest. `testing::FakeSource::with_incarnation`
+  sets it in tests.
+- `Registry::register` refuses a source whose origin, scope and mode
+  disagree: a `Builtin` source must report `Complete` metadata scope and
+  `NativeDirect`/`NativeMep` invocation modes, and an `Installed` source must
+  report `PersistedFrontendBackend` scope and the same `ProcessMep` or
+  `WasmMep` mode under every policy. The refusal names the mode the source
+  reports under `PreferDirect` and under `ProtocolOnly`.
+- `NativeSource` and `InstalledSource` in `morphir-host-native`: registry
+  sources for a built-in extension already loaded into the host process, and
+  for an installed extension read from its verified catalog and lock.
+- `InstalledSource::activate` and `InstalledSourceError` in
+  `morphir-host-native`: verify and start an installed guest and keep the
+  failure typed (`Verify` with the distribution error, `Activate` with the
+  `HostError` that `activate` returned), so a caller can word its own
+  message. `InstalledSource`'s `GuestSource::connect` reports the same texts
+  as `HostError::Invalid`. Verification reads and hashes the installed bytes
+  on a blocking worker, not on the async executor.
+- `impl GuestConnection for Box<G>` in `morphir-host`, so a boxed connection
+  can open a `Session`.
+- `testing::FakeSource` in `morphir-host` (feature `testing`): a
+  `GuestSource` with scripted answers for registry and pool tests.
 
 ### Changed
+- `ChannelError` and `HostError::Channel` carry a `cause`, a
+  `#[non_exhaustive]` `ChannelCause`, so a transport failure keeps what it
+  began as: an I/O error, a JSON error, or the transport itself.
+- `From<HostError> for DaemonError` turns a `HostError::Channel` whose cause
+  is `Io` or `Json` into `DaemonError::Other` with the channel message. Its
+  text is now `IO error: ...` or `JSON error: ...`, without the
+  `Extension error: ` prefix it had before. A channel failure with a
+  `Transport` cause keeps the prefix.
+- `CallError` is `#[non_exhaustive]` and has a new `Open` variant. `Pool::call`
+  reports a failure to open a guest or its session as `CallError::Open`,
+  with the open's own error, not as `CallError::Failed`, and does not retry
+  it.
+- `morphir-host` depends on `morphir-core` to normalize the IR release
+  versions a `Registry` resolves against.
 - The extension bundles are released with version-2 descriptors that carry
   each guest's capability claims: `extension/avro/v0.2.0`,
   `extension/openapi/v0.2.0`, `extension/python/v0.4.0`,
@@ -31,8 +83,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which reaches the CLI from the bundle's claims from `0.4.0-beta.8`
   (#266). Through `0.4.0-beta.7` the same selection is refused
   (finos/morphir#921).
-
-### Changed
 - WASM extension bundles now carry version-2 (`2.0.0-draft.2`) release
   descriptors with capability claims read from the shipped guest and checked
   against `.github/extensions.toml`. Publishing requires Morphir CLI

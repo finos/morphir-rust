@@ -5,8 +5,8 @@ use morphir_extension_sdk::{
 };
 use morphir_host::testing::MemoryChannel;
 use morphir_host::{
-    BasicChecks, CallError, ChannelError, ChannelState, HostConfig, HostError, JsonRpcConnection,
-    Session,
+    BasicChecks, CallError, ChannelCause, ChannelError, ChannelState, HostConfig, HostError,
+    JsonRpcConnection, Session,
 };
 use morphir_host_native::CheckedConnection;
 use serde_json::json;
@@ -111,6 +111,7 @@ async fn a_failed_shutdown_after_a_rejected_result_names_both_failures() {
         .fail(ChannelError {
             message: "pipe closed".into(),
             state: ChannelState::Indeterminate,
+            cause: ChannelCause::Transport,
         });
     let connection =
         CheckedConnection::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")));
@@ -118,7 +119,7 @@ async fn a_failed_shutdown_after_a_rejected_result_names_both_failures() {
 
     let error = session.generate(generate_request()).await.unwrap_err();
 
-    let CallError::Failed(HostError::Channel { message, state }) = error else {
+    let CallError::Failed(HostError::Channel { message, state, .. }) = error else {
         panic!("a failed shutdown keeps its channel state: {error:?}");
     };
     assert_eq!(state, ChannelState::Indeterminate);

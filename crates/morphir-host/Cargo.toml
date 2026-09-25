@@ -9,8 +9,10 @@ repository.workspace = true
 description = "Portable Morphir extension host: MEP handshake, sessions and channels"
 
 [dependencies]
+morphir-core = { path = "../morphir-core" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 morphir-workspace = { path = "../morphir-workspace" }
+async-lock = "3"
 async-trait = "0.1"
 semver = "1"
 serde = { version = "1.0", features = ["derive"] }
@@ -19,7 +21,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 morphir-host = { path = ".", features = ["testing"] }
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
 [features]
 testing = []

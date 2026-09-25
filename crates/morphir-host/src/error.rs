@@ -11,6 +11,32 @@ pub enum ChannelState {
     Indeterminate,
 }
 
+/// What a transport failure began as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ChannelCause {
+    /// The transport itself failed: a timeout, a closed pipe the host
+    /// detected, a stopped guest.
+    #[default]
+    Transport,
+    /// An I/O error. The message starts with `IO error: `.
+    Io,
+    /// A JSON encoding or decoding error. The message starts with `JSON error: `.
+    Json,
+}
+
+impl ChannelCause {
+    /// What `error` began as, before it became a channel failure.
+    pub fn of(error: &HostError) -> Self {
+        match error {
+            HostError::Io(_) => ChannelCause::Io,
+            HostError::Json(_) => ChannelCause::Json,
+            HostError::Channel { cause, .. } => *cause,
+            _ => ChannelCause::Transport,
+        }
+    }
+}
+
 /// A failure in the MEP session, the negotiation, or the transport.
 ///
 /// The variants that existed as daemon messages before this crate existed
@@ -46,6 +72,8 @@ pub enum HostError {
         message: String,
         /// What the failure proves about the guest.
         state: ChannelState,
+        /// What the failure began as.
+        cause: ChannelCause,
     },
     /// The session is in a state that does not allow the operation.
     #[error("Session cannot {action} while {state}")]
@@ -68,6 +96,7 @@ impl From<crate::channel::ChannelError> for HostError {
         HostError::Channel {
             message: error.message,
             state: error.state,
+            cause: error.cause,
         }
     }
 }

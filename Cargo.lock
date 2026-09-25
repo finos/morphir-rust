@@ -4678,7 +4678,9 @@ dependencies = [
 name = "morphir-host"
 version = "0.2.0"
 dependencies = [
+ "async-lock",
  "async-trait",
+ "morphir-core",
  "morphir-extension-sdk",
  "morphir-host",
  "morphir-workspace",
@@ -4706,6 +4708,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "unicode-casefold",

@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Native channels for the Morphir extension host: processes, Extism and in-process guests"
 
 [dependencies]
+morphir-common = { path = "../morphir-common" }
 morphir-core = { path = "../morphir-core" }
 morphir-distribution = { path = "../morphir-distribution" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
@@ -20,6 +21,7 @@ extism = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3"
+thiserror = { workspace = true }
 tokio = { version = "1", features = ["rt", "sync", "io-util", "process", "time", "macros"] }
 tracing = "0.1"
 unicode-casefold = { workspace = true }
@@ -27,7 +29,6 @@ unicode-normalization = { workspace = true }
 
 [dev-dependencies]
 morphir-avro-extension = { path = "../morphir-avro-extension" }
-morphir-common = { path = "../morphir-common" }
 morphir-host = { path = "../morphir-host", features = ["testing"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 wat = "1"

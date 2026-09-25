@@ -3,7 +3,9 @@
 use crate::extism::ExtensionContainer;
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::ExtensionResponse;
-use morphir_host::{Channel, ChannelError, ChannelState, ExpectedExtension, HostError, Outgoing};
+use morphir_host::{
+    Channel, ChannelCause, ChannelError, ChannelState, ExpectedExtension, HostError, Outgoing,
+};
 
 /// A guest that runs inside an Extism plugin and speaks MEP through its
 /// exported `handle` function.
@@ -34,10 +36,20 @@ impl ExtismChannel {
     }
 }
 
-fn indeterminate(error: impl std::fmt::Display) -> ChannelError {
+fn indeterminate(error: HostError) -> ChannelError {
+    let cause = ChannelCause::of(&error);
     ChannelError {
         message: error.to_string(),
         state: ChannelState::Indeterminate,
+        cause,
+    }
+}
+
+fn indeterminate_message(message: impl Into<String>) -> ChannelError {
+    ChannelError {
+        message: message.into(),
+        state: ChannelState::Indeterminate,
+        cause: ChannelCause::Transport,
     }
 }
 
@@ -62,10 +74,9 @@ impl Channel for ExtismChannel {
     }
 
     async fn receive(&mut self) -> Result<ExtensionResponse, ChannelError> {
-        let output = self
-            .response
-            .take()
-            .ok_or_else(|| indeterminate("Extism extension channel has no response ready"))?;
+        let output = self.response.take().ok_or_else(|| {
+            indeterminate_message("Extism extension channel has no response ready")
+        })?;
         serde_json::from_slice(&output).map_err(|error| indeterminate(HostError::from(error)))
     }
 

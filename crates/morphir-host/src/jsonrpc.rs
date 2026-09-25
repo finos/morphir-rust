@@ -3,7 +3,7 @@
 use crate::channel::{Channel, Outgoing};
 use crate::connection::{CallError, GuestConnection};
 use crate::session_core::{Action, BasicChecks, Event, SessionChecks, SessionCore};
-use crate::{ChannelState, HostError, MaybeSend, Negotiated};
+use crate::{ChannelCause, ChannelState, HostError, MaybeSend, Negotiated};
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::{ExtensionNotification, InitializeParams, methods};
 use serde_json::Value;
@@ -54,6 +54,7 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> JsonRpcConnect
 
     /// Abort the channel after a protocol failure, and keep the first error.
     async fn abort(&mut self, error: HostError) -> HostError {
+        let cause = ChannelCause::of(&error);
         let result = self.channel.abort().await;
         self.finished = true;
         match result {
@@ -61,6 +62,7 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> JsonRpcConnect
             Err(close) => HostError::Channel {
                 message: format!("{error}; transport abort also failed: {}", close.message),
                 state: close.state,
+                cause,
             },
         }
     }
@@ -144,6 +146,7 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> GuestConnectio
                     ChannelState::Indeterminate => Err(HostError::Channel {
                         message: "Extension shutdown outcome is indeterminate".into(),
                         state: ChannelState::Indeterminate,
+                        cause: ChannelCause::Transport,
                     }),
                 }
             }

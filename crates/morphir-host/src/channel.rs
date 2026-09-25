@@ -1,6 +1,6 @@
 //! Moving MEP messages between the host and one guest.
 
-use crate::{ChannelState, MaybeSend};
+use crate::{ChannelCause, ChannelState, MaybeSend};
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::{ExtensionNotification, ExtensionRequest, ExtensionResponse};
 
@@ -21,6 +21,8 @@ pub struct ChannelError {
     pub message: String,
     /// What the failure proves about the guest.
     pub state: ChannelState,
+    /// What the failure began as.
+    pub cause: ChannelCause,
 }
 
 /// Moves MEP messages between the host and one guest.

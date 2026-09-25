@@ -16,12 +16,18 @@
 
 * Then the probe value is "never"
 
-## Scenario Outline: The feature tag reaches an outline row
+## Scenario Outline: The <source> tag reaches an outline row
 
 * Then the probe value is "<value>"
 
-### Examples: One row
+### Examples: First rows
 
-| value    |
-| -------- |
-| feature  |
+| source | value   |
+| ------ | ------- |
+| first  | feature |
+
+### Examples: Second rows
+
+| source | value   |
+| ------ | ------- |
+| second | feature |

@@ -82,12 +82,79 @@ fn load(path: &Path) -> parser::Result<gherkin::Feature> {
             source: std::io::Error::other("no Feature heading"),
         }))
     })?;
-    let lowered = lower_feature(path, feature, &document);
+    let root = NodePath::feature();
+    let feature_slots = scenario_slots(&root, &feature.scenarios);
+    let rule_slots: Vec<_> = feature
+        .rules
+        .iter()
+        .enumerate()
+        .map(|(r, rule)| scenario_slots(&root.push(Segment::Rule(r)), &rule.scenarios))
+        .collect();
+    let lowered = lower_feature(path, feature);
     // Expanding a Scenario Outline's Examples is the parser's job, not the runner's: `cucumber`'s
     // own `parser::Basic` does it here too, in `parser::basic::Basic::parse`.
-    lowered
+    let expanded = lowered
         .expand_examples()
-        .map_err(|error| parser::Error::ExampleExpansion(Arc::new(error)))
+        .map_err(|error| parser::Error::ExampleExpansion(Arc::new(error)))?;
+    register_expanded(path, &document, &feature_slots, &expanded.scenarios);
+    for (slots, rule) in rule_slots.iter().zip(&expanded.rules) {
+        register_expanded(path, &document, slots, &rule.scenarios);
+    }
+    Ok(expanded)
+}
+
+/// How many expanded scenarios a scenario becomes, and the model path that describes it: 1 for a
+/// plain scenario, or the sum of every `Examples` block's data rows for an outline — in the same
+/// block-then-row order `gherkin::Feature::expand_examples` walks them in.
+fn scenario_slots(
+    root: &NodePath,
+    scenarios: &[morphir_gherkin::Scenario],
+) -> Vec<(NodePath, usize)> {
+    scenarios
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (root.push(Segment::Scenario(i)), expanded_count(s)))
+        .collect()
+}
+
+fn expanded_count(s: &morphir_gherkin::Scenario) -> usize {
+    if s.examples.is_empty() {
+        1
+    } else {
+        s.examples
+            .iter()
+            .map(|e| {
+                e.table
+                    .as_ref()
+                    .map_or(0, |t| t.rows.len().saturating_sub(1))
+            })
+            .sum()
+    }
+}
+
+/// Registers every scenario cucumber actually produced, by its real expanded name and line: never
+/// predicted, always read back from `expand_examples`'s own output. `slots` and `expanded` line up
+/// because `expand_examples` keeps each scenario's row order and never reorders scenarios past one
+/// another; each slot claims exactly the `count` expanded scenarios that follow the ones before it.
+fn register_expanded(
+    path: &Path,
+    document: &Arc<Document>,
+    slots: &[(NodePath, usize)],
+    expanded: &[gherkin::Scenario],
+) {
+    let mut at = 0;
+    for (node, count) in slots {
+        for scenario in &expanded[at..at + count] {
+            register(
+                path,
+                &scenario.name,
+                scenario.position.line,
+                document,
+                node.clone(),
+            );
+        }
+        at += count;
+    }
 }
 
 fn register(path: &Path, name: &str, line: usize, document: &Arc<Document>, node: NodePath) {
@@ -144,38 +211,7 @@ fn lower_steps(steps: &[morphir_gherkin::Step]) -> Vec<gherkin::Step> {
         .collect()
 }
 
-/// Registers every line an expanded outline row might land on. `cucumber` expands an outline into
-/// one scenario per examples row and sets that scenario's `position` to the *lowered* examples
-/// block's position, plus the row's 0-based index, plus 2 (as if the row sat two lines below an
-/// `Examples:` keyword, header included) — see `cucumber::feature::expand_scenario` in
-/// cucumber 0.23. It never looks at the source file again, so this mirrors that formula against
-/// the same lowered position we hand it, rather than the row's real line in a `.feature.md` file.
-fn register_outline_rows(
-    path: &Path,
-    s: &morphir_gherkin::Scenario,
-    document: &Arc<Document>,
-    node: &NodePath,
-) {
-    for example in &s.examples {
-        let Some(table) = &example.table else {
-            continue;
-        };
-        let data_rows = table.rows.len().saturating_sub(1);
-        for row in 0..data_rows {
-            let row_line = example.position.line + row + 2;
-            register(path, &s.name, row_line, document, node.clone());
-        }
-    }
-}
-
-fn lower_scenario(
-    path: &Path,
-    s: &morphir_gherkin::Scenario,
-    document: &Arc<Document>,
-    node: NodePath,
-) -> gherkin::Scenario {
-    register(path, &s.name, s.position.line, document, node.clone());
-    register_outline_rows(path, s, document, &node);
+fn lower_scenario(s: &morphir_gherkin::Scenario) -> gherkin::Scenario {
     gherkin::Scenario {
         keyword: s.keyword.clone(),
         name: s.name.clone(),
@@ -215,45 +251,22 @@ fn lower_background(b: &morphir_gherkin::Background) -> gherkin::Background {
     }
 }
 
-fn lower_feature(
-    path: &Path,
-    f: &morphir_gherkin::Feature,
-    document: &Arc<Document>,
-) -> gherkin::Feature {
-    let root = NodePath::feature();
+fn lower_feature(path: &Path, f: &morphir_gherkin::Feature) -> gherkin::Feature {
     gherkin::Feature {
         keyword: f.keyword.clone(),
         name: f.name.clone(),
         description: None,
         background: f.background.as_ref().map(lower_background),
-        scenarios: f
-            .scenarios
-            .iter()
-            .enumerate()
-            .map(|(i, s)| lower_scenario(path, s, document, root.push(Segment::Scenario(i))))
-            .collect(),
+        scenarios: f.scenarios.iter().map(lower_scenario).collect(),
         rules: f
             .rules
             .iter()
-            .enumerate()
-            .map(|(r, rule)| gherkin::Rule {
+            .map(|rule| gherkin::Rule {
                 keyword: rule.keyword.clone(),
                 name: rule.name.clone(),
                 description: None,
                 background: rule.background.as_ref().map(lower_background),
-                scenarios: rule
-                    .scenarios
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| {
-                        lower_scenario(
-                            path,
-                            s,
-                            document,
-                            root.push(Segment::Rule(r)).push(Segment::Scenario(i)),
-                        )
-                    })
-                    .collect(),
+                scenarios: rule.scenarios.iter().map(lower_scenario).collect(),
                 tags: tags(&rule.tags),
                 span: span(rule.span),
                 position: position(rule.position),

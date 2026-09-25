@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 use std::future::{Future, Ready};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use tokio::sync::oneshot;
 use tokio::time::{Duration, timeout};
@@ -302,10 +302,37 @@ async fn a_changed_fingerprint_replaces_the_cached_session() {
 /// order: a session a gated call shares with another call (same key,
 /// cached) must still be able to serve that second call once the gate
 /// opens.
+///
+/// It counts every `send` and raises a flag when it is dropped, so a test
+/// can see whether the pool still holds it.
 struct GatedChannel {
     handshake: Option<ExtensionResponse>,
     answers: VecDeque<ExtensionResponse>,
     gate: Option<oneshot::Receiver<()>>,
+    probe: Probe,
+}
+
+/// What a test can observe about a [`GatedChannel`] after the pool owns it.
+#[derive(Clone, Default)]
+struct Probe {
+    sends: Arc<AtomicUsize>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Probe {
+    fn sends(&self) -> usize {
+        self.sends.load(Ordering::SeqCst)
+    }
+
+    fn dropped(&self) -> bool {
+        self.dropped.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for GatedChannel {
+    fn drop(&mut self) {
+        self.probe.dropped.store(true, Ordering::SeqCst);
+    }
 }
 
 impl GatedChannel {
@@ -318,13 +345,21 @@ impl GatedChannel {
             handshake: Some(handshake),
             answers: answers.into_iter().collect(),
             gate: Some(gate),
+            probe: Probe::default(),
         }
+    }
+
+    /// Report sends and the drop to `probe`.
+    fn with_probe(mut self, probe: Probe) -> Self {
+        self.probe = probe;
+        self
     }
 }
 
 #[async_trait]
 impl Channel for GatedChannel {
     async fn send(&mut self, _message: Outgoing) -> Result<(), ChannelError> {
+        self.probe.sends.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -421,9 +456,13 @@ async fn a_slow_provider_does_not_block_another() {
 
 // Requirement (item 2, cancellation safety): dropping a call's future before
 // it completes (a caller's own timeout) must not leave a session cached with
-// a request permanently in flight. The channel here never answers the real
-// call, so the only way this test finishes is if the dropped call's session
-// is dropped with it and the next call for the same key opens fresh.
+// a request permanently in flight.
+//
+// The next call's result alone cannot prove this: a stale cached session
+// would fail that call, and the pool's one retry on a fresh guest would
+// still answer it. So the test watches the hung channel itself. It must be
+// dropped as soon as the timeout drops the call, before the next call runs,
+// and it must see no further send.
 #[tokio::test]
 async fn a_dropped_call_lets_the_next_call_open_a_fresh_guest() {
     let pool: Pool<String> = Pool::new(config());
@@ -433,16 +472,21 @@ async fn a_dropped_call_lets_the_next_call_open_a_fresh_guest() {
     // gated receive resolve with an error immediately instead of hanging.
     let (_keep_alive, never_rx) = oneshot::channel::<()>();
     let hung_gate = std::sync::Mutex::new(Some(never_rx));
-    let open_hung = move || {
-        let gate = hung_gate.lock().unwrap().take().expect("opened once");
-        let channel = GatedChannel::new(
-            ok(1, frontend_initialize_result("guest")),
-            [ok(2, json!({"call": "never answered"}))],
-            gate,
-        );
-        let connection: Box<dyn GuestConnection> =
-            Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")));
-        std::future::ready(Ok(connection))
+    let hung_probe = Probe::default();
+    let open_hung = {
+        let hung_probe = hung_probe.clone();
+        move || {
+            let gate = hung_gate.lock().unwrap().take().expect("opened once");
+            let channel = GatedChannel::new(
+                ok(1, frontend_initialize_result("guest")),
+                [ok(2, json!({"call": "never answered"}))],
+                gate,
+            )
+            .with_probe(hung_probe.clone());
+            let connection: Box<dyn GuestConnection> =
+                Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")));
+            std::future::ready(Ok(connection))
+        }
     };
 
     let hung = timeout(
@@ -454,6 +498,11 @@ async fn a_dropped_call_lets_the_next_call_open_a_fresh_guest() {
         hung.is_err(),
         "the call must still be pending when the short timeout fires"
     );
+    assert!(
+        hung_probe.dropped(),
+        "the timed-out call must drop its session, not leave it cached"
+    );
+    let sends_at_timeout = hung_probe.sends();
 
     let opens = Arc::new(AtomicUsize::new(0));
     let open_fresh = opener("guest", Arc::clone(&opens), |_attempt| {
@@ -469,11 +518,17 @@ async fn a_dropped_call_lets_the_next_call_open_a_fresh_guest() {
 
     assert_eq!(result, json!({"call": "fresh"}));
     assert_eq!(opens.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        hung_probe.sends(),
+        sends_at_timeout,
+        "the next call must not reach the hung guest"
+    );
 }
 
 // (Minor, item 3a) An open failure is not cached: the failed attempt leaves
 // nothing behind, so the next call opens again rather than reusing a slot
-// that was never actually populated.
+// that was never actually populated. It is reported as `CallError::Open`,
+// not as a call failure, and is not retried.
 #[tokio::test]
 async fn an_open_failure_is_not_cached() {
     let opens = Arc::new(AtomicUsize::new(0));
@@ -499,11 +554,54 @@ async fn an_open_failure_is_not_cached() {
         .call::<_, Value, _, _>(&key, "fp", &open, "compile", &())
         .await
         .unwrap_err();
-    assert!(matches!(error, CallError::Failed(_)));
+    // An open failure is its own variant, carries the open's error as it
+    // was, and is not retried.
+    assert!(
+        matches!(&error, CallError::Open(HostError::Invalid(message)) if message == "scripted open failure"),
+        "{error:?}"
+    );
     assert_eq!(opens.load(Ordering::SeqCst), 1);
 
     let result: Value = pool.call(&key, "fp", &open, "compile", &()).await.unwrap();
     assert_eq!(result, json!({"call": "opened"}));
+    assert_eq!(opens.load(Ordering::SeqCst), 2);
+}
+
+// An open failure while replacing a broken session is reported as
+// `CallError::Open` with the open's own error, not as the call failure that
+// led to it, and is not retried again.
+#[tokio::test]
+async fn a_replacement_that_fails_to_open_is_reported_as_an_open_failure() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let open = {
+        let opens = Arc::clone(&opens);
+        move || {
+            let attempt = opens.fetch_add(1, Ordering::SeqCst);
+            let result: Result<Box<dyn GuestConnection>, HostError> = if attempt == 0 {
+                let channel = MemoryChannel::new()
+                    .respond(ok(1, frontend_initialize_result("guest")))
+                    .fail(transport_failure());
+                Ok(Box::new(JsonRpcConnection::new(
+                    channel,
+                    BasicChecks::new("guest"),
+                )))
+            } else {
+                Err(HostError::Invalid("scripted reopen failure".into()))
+            };
+            std::future::ready(result)
+        }
+    };
+    let pool: Pool<String> = Pool::new(config());
+
+    let error = pool
+        .call::<_, Value, _, _>(&"provider".to_owned(), "fp", open, "compile", &())
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&error, CallError::Open(HostError::Invalid(message)) if message == "scripted reopen failure"),
+        "{error:?}"
+    );
     assert_eq!(opens.load(Ordering::SeqCst), 2);
 }
 
@@ -626,6 +724,87 @@ async fn two_concurrent_first_calls_on_the_same_key_open_only_one_guest() {
     })
     .await
     .expect("must not hang once released");
+}
+
+// A call that waits on a slot's lock while `abandon` removes that slot must
+// not use the abandoned slot once it gets the lock: it looks the key up
+// again and opens a fresh guest there. The call already in flight finishes
+// against the session it holds, and that session is dropped with the
+// detached slot once both calls are done.
+#[tokio::test]
+async fn a_call_waiting_when_the_key_is_abandoned_opens_a_fresh_guest() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let (release_tx, release_rx) = oneshot::channel();
+    let first_probe = Probe::default();
+    let open = {
+        let opens = Arc::clone(&opens);
+        let gate = Arc::new(std::sync::Mutex::new(Some(release_rx)));
+        let first_probe = first_probe.clone();
+        move || {
+            let attempt = opens.fetch_add(1, Ordering::SeqCst);
+            let connection: Box<dyn GuestConnection> = if attempt == 0 {
+                let gate = gate.lock().unwrap().take().expect("gated once");
+                // Two answers, so that a waiter wrongly riding this session
+                // would get "first" instead of failing and retrying.
+                let channel = GatedChannel::new(
+                    ok(1, frontend_initialize_result("guest")),
+                    [
+                        ok(2, json!({"guest": "first"})),
+                        ok(3, json!({"guest": "first"})),
+                    ],
+                    gate,
+                )
+                .with_probe(first_probe.clone());
+                Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")))
+            } else {
+                let channel = MemoryChannel::new()
+                    .respond(ok(1, frontend_initialize_result("guest")))
+                    .respond(ok(2, json!({"guest": "second"})))
+                    .respond(ok(3, json!({"guest": "second, reused"})));
+                Box::new(JsonRpcConnection::new(channel, BasicChecks::new("guest")))
+            };
+            std::future::ready(Ok(connection))
+        }
+    };
+    let pool: Pool<String> = Pool::new(config());
+    let key = "provider".to_owned();
+
+    timeout(Duration::from_secs(5), async {
+        let call_a = pool.call::<_, Value, _, _>(&key, "fp", open.clone(), "compile", &());
+        let call_b = pool.call::<_, Value, _, _>(&key, "fp", open.clone(), "compile", &());
+        tokio::pin!(call_a);
+        tokio::pin!(call_b);
+
+        // A is in flight on the first guest; B waits on the slot's lock.
+        assert_pending(call_a.as_mut());
+        assert_pending(call_b.as_mut());
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+
+        pool.abandon(&key).await;
+
+        release_tx
+            .send(())
+            .expect("call_a is still awaiting the gate");
+        let (a_result, b_result) = tokio::join!(call_a, call_b);
+        assert_eq!(a_result.unwrap(), json!({"guest": "first"}));
+        assert_eq!(b_result.unwrap(), json!({"guest": "second"}));
+        assert_eq!(opens.load(Ordering::SeqCst), 2);
+    })
+    .await
+    .expect("must not hang once released");
+
+    assert!(
+        first_probe.dropped(),
+        "the abandoned guest must not stay cached"
+    );
+
+    // B's guest is the one cached for the key now.
+    let reused: Value = pool
+        .call(&key, "fp", open.clone(), "compile", &())
+        .await
+        .unwrap();
+    assert_eq!(reused, json!({"guest": "second, reused"}));
+    assert_eq!(opens.load(Ordering::SeqCst), 2);
 }
 
 // (Item 6) `Pool::call`'s future must stay `Send` on native targets when its

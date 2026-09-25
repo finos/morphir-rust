@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// One cached guest: the fingerprint it was opened with, and its session.
 struct SlotState {
@@ -20,8 +21,16 @@ struct SlotState {
     session: Session,
 }
 
-/// A key's guest, once one exists. `None` before the first call for the key.
-type Slot = Mutex<Option<SlotState>>;
+/// A key's guest, once one exists.
+struct Slot {
+    /// Set by [`Pool::abandon`], under the map lock, when it removes this
+    /// slot from the map. A call that gets the slot's lock after that looks
+    /// the key up again instead of using this slot.
+    abandoned: AtomicBool,
+    /// `None` before the first call for the key, and while a call holds the
+    /// session.
+    state: Mutex<Option<SlotState>>,
+}
 
 /// Warm guests, one per key, reused across calls.
 ///
@@ -44,16 +53,20 @@ type Slot = Mutex<Option<SlotState>>;
 /// `fingerprint`. A slot whose cached fingerprint differs from the one a call
 /// supplies is stale: the old session is closed (its close errors are
 /// ignored, since the old guest is being discarded either way) and a new one
-/// is opened with `open` before the call runs. An open failure is reported as
-/// [`CallError::Failed`] without caching anything.
+/// is opened with `open` before the call runs.
 ///
 /// # Failure and retry
 ///
 /// [`CallError::Rejected`] is the guest answering; the session stays cached.
 /// [`CallError::Failed`] means the session broke, so the slot is evicted, a
-/// new guest is opened, and the call is retried exactly once on it. A second
-/// failure, from the retry's call or from opening its replacement, evicts the
-/// slot again (leaving it empty) and returns [`CallError::Failed`].
+/// new guest is opened, and the call is retried exactly once on it. A failure
+/// of the retried call leaves the slot empty and returns
+/// [`CallError::Failed`].
+///
+/// [`CallError::Open`] means `open`, or the handshake on the connection it
+/// returned, failed, so the call never ran. It carries that error as it was.
+/// It is not retried and nothing is cached, whether it came from the first
+/// open or from opening the replacement for a broken session.
 ///
 /// # Cancellation
 ///
@@ -66,14 +79,16 @@ type Slot = Mutex<Option<SlotState>>;
 ///
 /// # Abandon
 ///
-/// [`Pool::abandon`] removes the slot from the map immediately. When no call
-/// is using that slot, the removed session is closed right away. When a call
-/// is in flight, `abandon` only drops its own reference to the slot: the call
-/// in flight finishes against the session it already holds, and the session
-/// is dropped once that call releases the last reference. A caller already
-/// holding the removed `Arc` (in flight, or already waiting on its lock) thus
-/// still finishes against the abandoned session, while any new call for the
-/// same key finds no entry and opens a fresh guest.
+/// [`Pool::abandon`] removes the slot from the map immediately and marks it
+/// abandoned. When no call holds the slot's lock, the removed session is
+/// closed right away. When a call holds it, `abandon` only drops its own
+/// reference to the slot: that call finishes against the session it already
+/// holds (including its one retry, if the session breaks), and whatever
+/// session it leaves behind is dropped, without an orderly close, once the
+/// last reference to the detached slot goes. A call still waiting on the
+/// slot's lock does not use the abandoned slot: once it gets the lock it
+/// sees the mark, looks the key up again, and runs against the key's new
+/// slot, like any new call for the key.
 pub struct Pool<K> {
     config: HostConfig,
     slots: Mutex<HashMap<K, Arc<Slot>>>,
@@ -107,10 +122,36 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
         F: Fn() -> Fut,
         Fut: Future<Output = Result<Box<dyn GuestConnection>, HostError>>,
     {
-        let slot = self.slot_for(key).await;
-        let mut guard = slot.lock().await;
+        loop {
+            let slot = self.slot_for(key).await;
+            let mut guard = slot.state.lock().await;
+            if slot.abandoned.load(Ordering::Acquire) {
+                // `abandon` removed this slot while this call waited on its
+                // lock: look the key up again.
+                continue;
+            }
+            return self
+                .call_in(&mut guard, fingerprint, &open, method, params)
+                .await;
+        }
+    }
 
-        Self::ensure_matching(&mut guard, fingerprint, &open, &self.config).await?;
+    /// [`Pool::call`] against one slot's state, with its lock held.
+    async fn call_in<P, R, F, Fut>(
+        &self,
+        guard: &mut Option<SlotState>,
+        fingerprint: &str,
+        open: &F,
+        method: &str,
+        params: &P,
+    ) -> Result<R, CallError>
+    where
+        P: Serialize + Sync,
+        R: DeserializeOwned,
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<Box<dyn GuestConnection>, HostError>>,
+    {
+        Self::ensure_matching(guard, fingerprint, open, &self.config).await?;
         // Taken out of the slot, not just borrowed: if this call's own future
         // is dropped before it finishes (a caller's timeout), `state` drops
         // with it mid-call, taking its session with it, and the slot is left
@@ -135,9 +176,9 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                 // broken session. The slot is already empty since it was
                 // taken above.
                 drop(state);
-                let mut session = open_session(&open, &self.config)
+                let mut session = open_session(open, &self.config)
                     .await
-                    .map_err(CallError::Failed)?;
+                    .map_err(CallError::Open)?;
                 match call_on(&mut session, method, params).await {
                     Ok(value) => {
                         *guard = Some(SlotState {
@@ -155,27 +196,35 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
                     }
                     // The slot is already empty: the retry's own failure
                     // leaves it evicted for the next caller to open fresh.
-                    Err(CallError::Failed(error)) => Err(CallError::Failed(error)),
+                    Err(error) => Err(error),
                 }
             }
+            // A session never reports an open failure; pass anything else
+            // through with the session left out of the slot.
+            Err(error) => Err(error),
         }
     }
 
     /// Forget the guest for `key`.
     ///
-    /// Closes the removed session right away when no call is using it.
-    /// Otherwise only drops the slot reference: the call in flight finishes
-    /// against the session it already holds, and the session is dropped once
-    /// that call releases the last reference to the slot.
+    /// Closes the removed session right away when no call holds the slot.
+    /// Otherwise only drops the slot reference: the call holding the slot
+    /// finishes against the session it already holds, and that session is
+    /// dropped once the last reference to the slot goes. A call waiting on
+    /// the slot runs against the key's new slot instead. See [`Pool`].
     pub async fn abandon(&self, key: &K) {
         let slot = {
             let mut slots = self.slots.lock().await;
-            slots.remove(key)
+            let slot = slots.remove(key);
+            if let Some(slot) = &slot {
+                slot.abandoned.store(true, Ordering::Release);
+            }
+            slot
         };
         let Some(slot) = slot else {
             return;
         };
-        if let Some(mut guard) = slot.try_lock()
+        if let Some(mut guard) = slot.state.try_lock()
             && let Some(state) = guard.take()
         {
             let _ = state.session.close().await;
@@ -188,7 +237,10 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
         if let Some(slot) = slots.get(key) {
             return Arc::clone(slot);
         }
-        let slot = Arc::new(Mutex::new(None));
+        let slot = Arc::new(Slot {
+            abandoned: AtomicBool::new(false),
+            state: Mutex::new(None),
+        });
         slots.insert(key.clone(), Arc::clone(&slot));
         slot
     }
@@ -212,9 +264,7 @@ impl<K: Eq + Hash + Clone + MaybeSend + Sync> Pool<K> {
             if let Some(state) = guard.take() {
                 let _ = state.session.close().await;
             }
-            let session = open_session(open, config)
-                .await
-                .map_err(CallError::Failed)?;
+            let session = open_session(open, config).await.map_err(CallError::Open)?;
             *guard = Some(SlotState {
                 fingerprint: fingerprint.to_owned(),
                 session,

@@ -6,6 +6,7 @@ use morphir_extension_sdk::protocol::InitializeParams;
 
 /// How a call ended when it did not succeed.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CallError {
     /// The guest or the host refused the call. The session is still ready.
     #[error(transparent)]
@@ -13,6 +14,13 @@ pub enum CallError {
     /// The session broke, and the connection closed its channel.
     #[error(transparent)]
     Failed(HostError),
+    /// No guest could be opened for the call, so the call never ran. The
+    /// error is the one opening the guest or its session reported.
+    ///
+    /// Only [`crate::Pool::call`] reports this: a [`GuestConnection`] or a
+    /// [`crate::Session`] is already open when it is called.
+    #[error(transparent)]
+    Open(HostError),
 }
 
 /// One guest behind one binding of MEP.

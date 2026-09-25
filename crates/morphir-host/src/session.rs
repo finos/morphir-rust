@@ -165,7 +165,7 @@ where
             Ok(()) => Err(error),
             Err(close) => Err(also_failed_to_shut_down(error, close)),
         },
-        Err(CallError::Failed(error)) => Err(error),
+        Err(CallError::Failed(error) | CallError::Open(error)) => Err(error),
     }
 }
 

@@ -22,3 +22,24 @@ Feature: File and output steps
       """
       2
       """
+
+  Scenario: Stdout and stderr compare whole
+    Given the output:
+      """
+      out line
+      """
+    And the error output:
+      """
+      warning: one
+      warning: two
+      """
+    Then stdout should be:
+      """
+      out line
+      """
+    And stderr should be:
+      """
+      warning: one
+      warning: two
+      """
+    And stderr should contain "two"

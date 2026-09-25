@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use morphir_bdd::steps::cli::{CliProgram, run_program};
 
-#[test]
-fn run_program_removes_inherited_morphir_variables() {
+#[tokio::test]
+async fn run_program_removes_inherited_morphir_variables() {
     let dir = tempfile::tempdir().expect("create a temporary directory");
     let program = CliProgram {
         name: "morphir".to_owned(),
@@ -20,10 +20,10 @@ fn run_program_removes_inherited_morphir_variables() {
         )),
     };
 
-    // SAFETY: this binary holds only this test, so no other thread reads the environment while
-    // it changes.
+    // SAFETY: this binary holds only this test, and `#[tokio::test]` runs it on a current-thread
+    // runtime, so no other thread reads the environment while it changes.
     unsafe { std::env::set_var("MORPHIR_BDD_LEAK_PROBE", "leaked") };
-    let result = run_program(&program, &[], dir.path());
+    let result = run_program(&program, &[], dir.path()).await;
     // SAFETY: as above.
     unsafe { std::env::remove_var("MORPHIR_BDD_LEAK_PROBE") };
 

@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cucumber::writer::{self, Stats as _};
 use cucumber::{World as _, WriterExt as _};
@@ -27,6 +28,22 @@ pub fn standard_extensions() -> Extensions {
 /// an explicit default `cucumber::cli::Opts` instead of letting it parse `std::env::args()`. This
 /// keeps a `Suite` safe to run inside a normal `#[test]`, where the process's real argv holds
 /// libtest's own filter and flags (for example `cargo test -- some_test --exact`), not cucumber's.
+///
+/// A downstream crate usually runs its suite from a test binary of its own. Give the binary a
+/// `[[test]]` entry with `harness = false` in `Cargo.toml` (for example `name = "bdd"`,
+/// `harness = false`), so that its `main` runs instead of libtest's, and let `main` run the
+/// suite in a Tokio runtime:
+///
+/// ```no_run
+/// use morphir_bdd::Suite;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     Suite::new("x").features("tests/features").run_and_exit().await
+/// }
+/// ```
+///
+/// The runtime must be Tokio: `When I run {string}` waits for its program on `tokio::process`.
 pub struct Suite {
     name: String,
     features: PathBuf,
@@ -45,7 +62,9 @@ pub struct SuiteResult {
     pub failed: usize,
     /// How many steps were skipped without being counted as failed (for example `@allow.skipped`).
     pub skipped: usize,
-    /// Parsing errors plus scenario hook errors.
+    /// Parsing errors, plus scenario hook errors (for example an extension error while building a
+    /// scenario's context), plus suite errors: a features path that does not exist or cannot be
+    /// read, and a run that selects no scenario at all while no tag expression is set.
     pub errors: usize,
     /// Where the JSON report was written.
     pub json: PathBuf,
@@ -54,7 +73,8 @@ pub struct SuiteResult {
 }
 
 impl SuiteResult {
-    /// Reports whether the suite had no failed steps and no parsing or hook errors.
+    /// Reports whether the suite had no failed steps and no errors of any kind (see
+    /// [`SuiteResult::errors`]).
     #[must_use]
     pub fn succeeded(&self) -> bool {
         self.failed == 0 && self.errors == 0
@@ -135,8 +155,21 @@ impl Suite {
     /// runs every remaining step, and writes a console summary, a JSON report and a JUnit report.
     /// An undefined step fails its scenario, so [`SuiteResult::succeeded`] is `false` unless every
     /// selected scenario's steps were defined and passed.
+    ///
+    /// Two more cases count in [`SuiteResult::errors`] and print a message to stderr: a features
+    /// path that does not exist or cannot be read, and a run with no tag expression that selects
+    /// no scenario at all (every scenario was skipped, or none was found) and has no parsing
+    /// error to explain it. A run that a tag expression narrows to no scenario is not an error.
     pub async fn run(self) -> SuiteResult {
         crate::link();
+        let mut suite_errors = 0;
+        let features_error = unreadable_features(&self.features);
+        if let Some(message) = &features_error {
+            eprintln!("morphir-bdd: suite `{}`: {message}", self.name);
+            suite_errors += 1;
+        }
+        let has_tags = self.tags.is_some();
+        let selected = Arc::new(AtomicUsize::new(0));
         let out = self.out_dir.clone().unwrap_or_else(default_out_dir);
         std::fs::create_dir_all(&out).expect("create the output directory");
         let json_path = out.join(format!("{}.json", self.name));
@@ -175,21 +208,41 @@ impl Suite {
                     })
                 }
             })
-            .filter_run(self.features.clone(), move |feature, rule, scenario| {
-                let mut all_tags: Vec<String> = feature.tags.clone();
-                if let Some(rule) = rule {
-                    all_tags.extend(rule.tags.clone());
+            .filter_run(self.features.clone(), {
+                let selected = selected.clone();
+                move |feature, rule, scenario| {
+                    let mut all_tags: Vec<String> = feature.tags.clone();
+                    if let Some(rule) = rule {
+                        all_tags.extend(rule.tags.clone());
+                    }
+                    all_tags.extend(scenario.tags.clone());
+                    let keep = expr.as_ref().is_none_or(|e| e.matches(&all_tags))
+                        && skip_reason(feature, rule, scenario, &extensions).is_none();
+                    if keep {
+                        selected.fetch_add(1, Ordering::SeqCst);
+                    }
+                    keep
                 }
-                all_tags.extend(scenario.tags.clone());
-                expr.as_ref().is_none_or(|e| e.matches(&all_tags))
-                    && skip_reason(feature, rule, scenario, &extensions).is_none()
             })
             .await;
+        if features_error.is_none()
+            && writer.parsing_errors() == 0
+            && !has_tags
+            && selected.load(Ordering::SeqCst) == 0
+        {
+            eprintln!(
+                "morphir-bdd: suite `{}`: no scenario was selected from {} and no tag expression \
+                 is set: every scenario was skipped, or none was found",
+                self.name,
+                self.features.display()
+            );
+            suite_errors += 1;
+        }
         SuiteResult {
             passed: writer.passed_steps(),
             failed: writer.failed_steps(),
             skipped: writer.skipped_steps(),
-            errors: writer.parsing_errors() + writer.hook_errors(),
+            errors: writer.parsing_errors() + writer.hook_errors() + suite_errors,
             json: json_path,
             junit: junit_path,
         }
@@ -201,6 +254,28 @@ impl Suite {
         if !result.succeeded() {
             std::process::exit(1);
         }
+    }
+}
+
+/// Why the features path cannot give a suite anything to run: it does not exist, or it (or, for a
+/// directory, its listing) cannot be read. `None` when it can be read.
+fn unreadable_features(path: &Path) -> Option<String> {
+    match std::fs::metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(format!(
+            "the features path {} does not exist",
+            path.display()
+        )),
+        Err(e) => Some(format!(
+            "the features path {} cannot be read: {e}",
+            path.display()
+        )),
+        Ok(meta) if meta.is_dir() => std::fs::read_dir(path).err().map(|e| {
+            format!(
+                "the features directory {} cannot be read: {e}",
+                path.display()
+            )
+        }),
+        Ok(_) => None,
     }
 }
 

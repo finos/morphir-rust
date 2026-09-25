@@ -20,8 +20,12 @@ futures = "0.3"
 similar = "2"
 tempfile = { workspace = true }
 serde_json = "1.0"
-thiserror = { workspace = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process"] }
+# `process` only: `When I run {string}` waits on `tokio::process`. The runtime itself comes from
+# the test binary (`#[tokio::main]`), so this crate does not pick one.
+tokio = { version = "1", features = ["process"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[test]]
 name = "bdd"

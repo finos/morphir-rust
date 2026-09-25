@@ -23,8 +23,9 @@ fn truncated(text: &str) -> String {
 
 /// The stdout, stderr and exit status of the last command a scenario ran.
 ///
-/// Task 12's CLI steps fill this component when they run a command; this task's output steps
-/// only read it. `Given the output:` also fills it, for testing the output steps on their own.
+/// `When I run {string}` fills this component when it runs a command; the output steps only read
+/// it. `Given the output:` and `Given the error output:` also fill it, for testing the output
+/// steps on their own.
 #[derive(Debug, Default, Clone)]
 pub struct LastOutput {
     /// What the last command wrote to stdout.
@@ -60,6 +61,21 @@ fn the_output(world: &mut MorphirWorld, step: &Step) {
     });
 }
 
+/// `Given the error output:` sets [`LastOutput::stderr`] to the doc string. It keeps the stdout
+/// and status a `Given the output:` before it set, or starts from an empty [`LastOutput`]. It
+/// lets a scenario test the stderr steps without running a command.
+#[given("the error output:")]
+fn the_error_output(world: &mut MorphirWorld, step: &Step) {
+    let stderr = doc_string(step).to_owned();
+    match world.context.get_mut::<LastOutput>() {
+        Some(out) => out.stderr = stderr,
+        None => world.context.insert(LastOutput {
+            stderr,
+            ..LastOutput::default()
+        }),
+    }
+}
+
 /// `Then stdout should contain {string}` asserts that the last command's stdout contains `text`.
 #[then(expr = "stdout should contain {string}")]
 fn stdout_contains(world: &mut MorphirWorld, text: String) {
@@ -91,6 +107,21 @@ fn stdout_is(world: &mut MorphirWorld, step: &Step) {
         panic!(
             "stdout differs:\n{}",
             unified_diff(expected, actual, "expected stdout", "actual stdout")
+        );
+    }
+}
+
+/// `Then stderr should be:` asserts that the last command's stderr equals the doc string,
+/// printing a unified diff on mismatch. As with `stdout should be:`, trailing whitespace is not
+/// significant.
+#[then("stderr should be:")]
+fn stderr_is(world: &mut MorphirWorld, step: &Step) {
+    let expected = doc_string(step);
+    let actual = &last(world).stderr;
+    if !same_text(expected, actual) {
+        panic!(
+            "stderr differs:\n{}",
+            unified_diff(expected, actual, "expected stderr", "actual stderr")
         );
     }
 }

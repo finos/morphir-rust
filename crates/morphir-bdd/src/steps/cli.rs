@@ -7,9 +7,9 @@
 //! `When I run 'morphir x "a b"'`: the double quotes inside it group as usual and arrive intact.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use cucumber::{then, when};
+use tokio::process::Command;
 
 use crate::steps::files::workspace;
 use crate::steps::output::LastOutput;
@@ -87,9 +87,13 @@ pub fn split_command_line(line: &str) -> Result<Vec<String>, String> {
 /// isolation above, or the tag filtering / output directory this crate's own `Suite` reads from
 /// the same namespace.
 ///
+/// It runs on `tokio::process`, so a scenario waiting for its program does not block the
+/// executor: cucumber keeps running other scenarios meanwhile. It must be awaited inside a Tokio
+/// runtime, as a `#[tokio::main]` or `#[tokio::test]` gives.
+///
 /// Returns `Err` naming `program.path` if the process fails to start, for example because the
 /// binary is missing. It never reports an empty [`LastOutput`] in that case.
-pub fn run_program(
+pub async fn run_program(
     program: &CliProgram,
     args: &[String],
     dir: &Path,
@@ -99,8 +103,10 @@ pub fn run_program(
         .map_err(|e| format!("cannot create the isolated home {}: {e}", home.display()))?;
     let mut command = Command::new(&program.path);
     command.args(args).current_dir(dir);
-    for (name, _) in std::env::vars() {
-        if name.starts_with("MORPHIR_") {
+    // `vars_os`, not `vars`: `vars` panics on a variable that is not valid UTF-8. A name that is
+    // not UTF-8 cannot start with `MORPHIR_`, so it is skipped.
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(|n| n.starts_with("MORPHIR_")) {
             command.env_remove(name);
         }
     }
@@ -111,6 +117,7 @@ pub fn run_program(
         .env("XDG_CACHE_HOME", home.join(".cache"))
         .env("MORPHIR_NO_BANNER", "1")
         .output()
+        .await
         .map_err(|e| format!("cannot start {}: {e}", program.path.display()))?;
     Ok(LastOutput {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -123,9 +130,10 @@ pub fn run_program(
 /// the suite's program, runs it in the scenario's workspace with an isolated home, and records the
 /// result as [`LastOutput`].
 #[when(expr = "I run {string}")]
-fn i_run(world: &mut MorphirWorld, line: String) {
+async fn i_run(world: &mut MorphirWorld, line: String) {
     let program = world.context.get::<CliProgram>().cloned().expect(
-        "no CLI program: the suite must call Suite::cli(path) or Suite::cli_named(name, path)",
+        "no CLI program: the suite must call `Suite::cli(path)` or `Suite::cli_named(name, path)` \
+         first",
     );
     let words = split_command_line(&line).unwrap_or_else(|e| panic!("{e}"));
     let (first, args) = words.split_first().expect("a command line names a program");
@@ -136,26 +144,25 @@ fn i_run(world: &mut MorphirWorld, line: String) {
         );
     }
     let dir = workspace(world).dir.path().to_owned();
-    let output = run_program(&program, args, &dir).unwrap_or_else(|e| panic!("{e}"));
+    let output = run_program(&program, args, &dir)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
     world.context.insert(output);
 }
 
-/// Returns the last command's exit status, panicking if no command has run yet.
-fn status(world: &MorphirWorld) -> Option<i32> {
-    world
-        .context
-        .get::<LastOutput>()
-        .expect("no command has run")
-        .status
+/// The message a status step panics with when no command has run in the scenario yet. It names
+/// the step that provides the missing [`LastOutput`], in the same style as the output steps.
+const NO_COMMAND: &str = "no command has run: add `When I run \"…\"` first";
+
+/// Returns the scenario's [`LastOutput`], panicking with [`NO_COMMAND`] if no command has run yet.
+fn last(world: &MorphirWorld) -> &LastOutput {
+    world.context.get::<LastOutput>().expect(NO_COMMAND)
 }
 
 /// `Then the command should succeed` asserts that the last command exited with status 0.
 #[then("the command should succeed")]
 fn should_succeed(world: &mut MorphirWorld) {
-    let out = world
-        .context
-        .get::<LastOutput>()
-        .expect("no command has run");
+    let out = last(world);
     assert_eq!(
         out.status,
         Some(0),
@@ -168,16 +175,13 @@ fn should_succeed(world: &mut MorphirWorld) {
 /// `Then the command should fail` asserts that the last command exited with a non-zero status.
 #[then("the command should fail")]
 fn should_fail(world: &mut MorphirWorld) {
-    assert_ne!(status(world), Some(0), "the command succeeded");
+    assert_ne!(last(world).status, Some(0), "the command succeeded");
 }
 
 /// `Then the exit code should be {int}` asserts the last command's exact exit status.
 #[then(expr = "the exit code should be {int}")]
 fn exit_code(world: &mut MorphirWorld, code: i32) {
-    let out = world
-        .context
-        .get::<LastOutput>()
-        .expect("no command has run");
+    let out = last(world);
     let actual = out
         .status
         .map_or_else(|| "killed by a signal".to_owned(), |s| s.to_string());
@@ -205,15 +209,17 @@ mod tests {
         assert!(split_command_line(r#"morphir "open"#).is_err());
     }
 
-    #[test]
-    fn run_program_reports_a_missing_binary_by_path() {
+    #[tokio::test]
+    async fn run_program_reports_a_missing_binary_by_path() {
         let dir = tempfile::tempdir().expect("create a temporary directory");
         let program = CliProgram {
             name: "morphir".to_owned(),
             path: PathBuf::from("/no/such/morphir-binary"),
         };
 
-        let err = run_program(&program, &[], dir.path()).expect_err("the binary does not exist");
+        let err = run_program(&program, &[], dir.path())
+            .await
+            .expect_err("the binary does not exist");
 
         assert!(
             err.contains("/no/such/morphir-binary"),

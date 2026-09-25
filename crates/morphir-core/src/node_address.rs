@@ -5,6 +5,7 @@
 //! the file that happened to contain it.
 
 pub use crate::format_version::ReleaseTriplet as IrFormatVersion;
+use crate::ir::v4::serde_v4::with_fingerprint_semantics;
 use crate::ir::v4::{TypeEncoding, with_type_encoding};
 use crate::naming::{Name, PackageName, Path};
 use serde::Serialize;
@@ -184,8 +185,17 @@ impl fmt::Display for Sha256Digest {
 /// child is a typed IR node, serialized through the normalized model; its
 /// source JSON/YAML syntax and document-tree file location never enter the
 /// digest. Named ancestors and unrelated siblings are deliberately excluded.
+#[derive(Clone, Copy)]
+enum FingerprintMode {
+    Legacy,
+    V4_1,
+}
+
 #[derive(Clone)]
-pub struct NodeFingerprintBuilder(Sha256);
+pub struct NodeFingerprintBuilder {
+    hash: Sha256,
+    mode: FingerprintMode,
+}
 
 impl Default for NodeFingerprintBuilder {
     fn default() -> Self {
@@ -197,7 +207,19 @@ impl NodeFingerprintBuilder {
     pub fn new() -> Self {
         let mut hash = Sha256::new();
         hash.update(b"morphir-node-fingerprint-draft.1\0");
-        Self(hash)
+        Self {
+            hash,
+            mode: FingerprintMode::Legacy,
+        }
+    }
+
+    /// Build a guard for V4.1 nodes, omitting nonsemantic attributes before
+    /// the V4 serializer chooses its shorthand or expanded representation.
+    pub fn for_v4_1() -> Self {
+        Self {
+            mode: FingerprintMode::V4_1,
+            ..Self::new()
+        }
     }
 
     /// Add one selected ordered child and its typed semantic subtree.
@@ -217,24 +239,29 @@ impl NodeFingerprintBuilder {
                 ));
             }
         };
-        let mut value = semantic_json(child)
-            .map_err(|error| NodeUriError::InvalidFingerprint(error.to_string()))?;
-        strip_nonsemantic_attributes(&mut value);
+        let mut value = match self.mode {
+            FingerprintMode::Legacy => semantic_json(child),
+            FingerprintMode::V4_1 => with_fingerprint_semantics(|| semantic_json(child)),
+        }
+        .map_err(|error| NodeUriError::InvalidFingerprint(error.to_string()))?;
+        if matches!(self.mode, FingerprintMode::Legacy) {
+            strip_nonsemantic_attributes(&mut value);
+        }
         let mut canonical = Vec::new();
         write_canonical_json(&value, &mut canonical)
             .map_err(|error| NodeUriError::InvalidFingerprint(error.to_string()))?;
-        self.0.update((role.len() as u32).to_be_bytes());
-        self.0.update(role.as_bytes());
-        self.0.update((index as u64).to_be_bytes());
-        self.0.update((canonical.len() as u64).to_be_bytes());
-        self.0.update(&canonical);
+        self.hash.update((role.len() as u32).to_be_bytes());
+        self.hash.update(role.as_bytes());
+        self.hash.update((index as u64).to_be_bytes());
+        self.hash.update((canonical.len() as u64).to_be_bytes());
+        self.hash.update(&canonical);
         Ok(())
     }
 
     /// Finish and return the lowercase SHA-256 token used in `guard=`.
     pub fn finish(self) -> Sha256Digest {
         Sha256Digest(
-            self.0
+            self.hash
                 .finalize()
                 .iter()
                 .map(|byte| format!("{byte:02x}"))

@@ -28,6 +28,53 @@ pub enum TypeEncoding {
 
 thread_local! {
     static TYPE_ENCODING: Cell<TypeEncoding> = const { Cell::new(TypeEncoding::Expanded) };
+    static FINGERPRINT_SEMANTICS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Serialize V4 nodes without location, tool, or linked metadata for 4.1 guards.
+/// The previous mode is restored even if serialization panics.
+pub(crate) fn with_fingerprint_semantics<R>(operation: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FINGERPRINT_SEMANTICS.set(self.0);
+        }
+    }
+    let previous = FINGERPRINT_SEMANTICS.replace(true);
+    let _restore = Restore(previous);
+    operation()
+}
+
+#[derive(Clone, Copy)]
+struct TypeAttributesView<'a>(&'a TypeAttributes);
+
+impl Serialize for TypeAttributesView<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if !FINGERPRINT_SEMANTICS.get() {
+            return self.0.serialize(serializer);
+        }
+        let mut map = serializer.serialize_map(None)?;
+        if !self.0.constraints.is_empty() {
+            map.serialize_entry("constraints", &self.0.constraints)?;
+        }
+        map.end()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ValueAttributesView<'a>(&'a ValueAttributes);
+
+impl Serialize for ValueAttributesView<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if !FINGERPRINT_SEMANTICS.get() {
+            return self.0.serialize(serializer);
+        }
+        let mut map = serializer.serialize_map(None)?;
+        if let Some(inferred_type) = &self.0.inferred_type {
+            map.serialize_entry("inferredType", inferred_type)?;
+        }
+        map.end()
+    }
 }
 
 /// Select the v4 type encoding for every nested type serialized by `operation`.
@@ -155,8 +202,13 @@ where
 }
 
 /// Decision 0005: an empty `attributes` member is accepted but never written.
-fn written(attrs: &TypeAttributes) -> Option<&TypeAttributes> {
-    (attrs != &TypeAttributes::default()).then_some(attrs)
+fn written(attrs: &TypeAttributes) -> Option<TypeAttributesView<'_>> {
+    let nonempty = if FINGERPRINT_SEMANTICS.get() {
+        !attrs.constraints.is_empty()
+    } else {
+        attrs != &TypeAttributes::default()
+    };
+    nonempty.then_some(TypeAttributesView(attrs))
 }
 
 /// A record's fields are an object keyed by field name, so the declaration order is the
@@ -174,7 +226,7 @@ fn field_map(fields: &[crate::ir::v4::types::Field]) -> IndexMap<String, &Type> 
 #[serde(rename_all = "camelCase")]
 struct VariableContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a TypeAttributes>,
+    attributes: Option<TypeAttributesView<'a>>,
     name: String,
 }
 
@@ -182,7 +234,7 @@ struct VariableContent<'a> {
 #[serde(rename_all = "camelCase")]
 struct ReferenceContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a TypeAttributes>,
+    attributes: Option<TypeAttributesView<'a>>,
     fqname: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     args: &'a Vec<Type>,
@@ -192,7 +244,7 @@ struct ReferenceContent<'a> {
 #[serde(rename_all = "camelCase")]
 struct TupleContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a TypeAttributes>,
+    attributes: Option<TypeAttributesView<'a>>,
     elements: &'a Vec<Type>,
 }
 
@@ -200,7 +252,7 @@ struct TupleContent<'a> {
 #[serde(rename_all = "camelCase")]
 struct RecordContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a TypeAttributes>,
+    attributes: Option<TypeAttributesView<'a>>,
     fields: IndexMap<String, &'a Type>,
 }
 
@@ -208,7 +260,7 @@ struct RecordContent<'a> {
 #[serde(rename_all = "camelCase")]
 struct ExtensibleRecordContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a TypeAttributes>,
+    attributes: Option<TypeAttributesView<'a>>,
     variable: String,
     fields: IndexMap<String, &'a Type>,
 }
@@ -217,7 +269,7 @@ struct ExtensibleRecordContent<'a> {
 #[serde(rename_all = "camelCase")]
 struct FunctionContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a TypeAttributes>,
+    attributes: Option<TypeAttributesView<'a>>,
     parameter_type: &'a Type,
     return_type: &'a Type,
 }
@@ -313,7 +365,7 @@ where
 #[serde(rename_all = "camelCase")]
 struct UnitContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a TypeAttributes>,
+    attributes: Option<TypeAttributesView<'a>>,
 }
 
 // =============================================================================
@@ -437,8 +489,13 @@ where
 }
 
 /// Decision 0005: an empty `attributes` member is accepted but never written.
-fn written_value(attrs: &ValueAttributes) -> Option<&ValueAttributes> {
-    (attrs != &ValueAttributes::default()).then_some(attrs)
+fn written_value(attrs: &ValueAttributes) -> Option<ValueAttributesView<'_>> {
+    let nonempty = if FINGERPRINT_SEMANTICS.get() {
+        attrs.inferred_type.is_some()
+    } else {
+        attrs != &ValueAttributes::default()
+    };
+    nonempty.then_some(ValueAttributesView(attrs))
 }
 
 // Helper structs for V4 Pattern serialization. `attributes` is declared first in each, which is
@@ -447,13 +504,13 @@ fn written_value(attrs: &ValueAttributes) -> Option<&ValueAttributes> {
 #[derive(Serialize)]
 struct PatternAttributes<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
 }
 
 #[derive(Serialize)]
 struct AsPatternContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     #[serde(serialize_with = "serialize_pattern")]
     pattern: &'a Pattern,
     name: String,
@@ -462,14 +519,14 @@ struct AsPatternContent<'a> {
 #[derive(Serialize)]
 struct TuplePatternContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     patterns: &'a Vec<Pattern>,
 }
 
 #[derive(Serialize)]
 struct ConstructorPatternContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     fqname: String,
     patterns: &'a Vec<Pattern>,
 }
@@ -477,7 +534,7 @@ struct ConstructorPatternContent<'a> {
 #[derive(Serialize)]
 struct HeadTailPatternContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     #[serde(serialize_with = "serialize_pattern")]
     head: &'a Pattern,
     #[serde(serialize_with = "serialize_pattern")]
@@ -487,7 +544,7 @@ struct HeadTailPatternContent<'a> {
 #[derive(Serialize)]
 struct LiteralPatternContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     #[serde(serialize_with = "serialize_literal")]
     literal: &'a Literal,
 }
@@ -713,49 +770,49 @@ fn field_values(fields: &[RecordFieldEntry]) -> IndexMap<String, &Value> {
 #[derive(Serialize)]
 struct LiteralValueContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     literal: &'a Literal,
 }
 
 #[derive(Serialize)]
 struct FqNameValueContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     fqname: String,
 }
 
 #[derive(Serialize)]
 struct NamedValueContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     name: String,
 }
 
 #[derive(Serialize)]
 struct TupleValueContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     elements: &'a Vec<Value>,
 }
 
 #[derive(Serialize)]
 struct ListValueContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     items: &'a Vec<Value>,
 }
 
 #[derive(Serialize)]
 struct RecordValueContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     fields: IndexMap<String, &'a Value>,
 }
 
 #[derive(Serialize)]
 struct FieldValueContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     target: &'a Value,
     name: String,
 }
@@ -763,7 +820,7 @@ struct FieldValueContent<'a> {
 #[derive(Serialize)]
 struct ApplyContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     function: &'a Value,
     argument: &'a Value,
 }
@@ -771,7 +828,7 @@ struct ApplyContent<'a> {
 #[derive(Serialize)]
 struct LambdaContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     pattern: &'a Pattern,
     body: &'a Value,
 }
@@ -779,7 +836,7 @@ struct LambdaContent<'a> {
 #[derive(Serialize)]
 struct LetDefinitionContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     name: String,
     definition: &'a ValueDefinition,
     #[serde(rename = "in")]
@@ -789,7 +846,7 @@ struct LetDefinitionContent<'a> {
 #[derive(Serialize)]
 struct LetRecursionContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     definitions: IndexMap<String, &'a ValueDefinition>,
     #[serde(rename = "in")]
     body: &'a Value,
@@ -798,7 +855,7 @@ struct LetRecursionContent<'a> {
 #[derive(Serialize)]
 struct DestructureContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     pattern: &'a Pattern,
     value: &'a Value,
     #[serde(rename = "in")]
@@ -808,7 +865,7 @@ struct DestructureContent<'a> {
 #[derive(Serialize)]
 struct IfThenElseContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     condition: &'a Value,
     #[serde(rename = "then")]
     then_branch: &'a Value,
@@ -819,7 +876,7 @@ struct IfThenElseContent<'a> {
 #[derive(Serialize)]
 struct PatternMatchContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     value: &'a Value,
     cases: Vec<PatternCaseContent<'a>>,
 }
@@ -834,7 +891,7 @@ struct PatternCaseContent<'a> {
 #[derive(Serialize)]
 struct UpdateRecordContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     target: &'a Value,
     fields: IndexMap<String, &'a Value>,
 }
@@ -842,14 +899,14 @@ struct UpdateRecordContent<'a> {
 #[derive(Serialize)]
 struct ValueUnitContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HoleContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<&'a ValueAttributes>,
+    attributes: Option<ValueAttributesView<'a>>,
     reason: &'a HoleReason,
     #[serde(skip_serializing_if = "Option::is_none")]
     expected_type: Option<&'a Type>,
@@ -884,5 +941,27 @@ mod tests {
         let v = Value::Unit(ValueAttributes::default());
         let json = serde_json::to_string(&v).unwrap();
         assert!(json.contains("\"Unit\""));
+    }
+
+    #[test]
+    fn fingerprint_mode_restores_after_panic() {
+        let value = Value::Variable(
+            ValueAttributes {
+                source: Some(super::super::attributes::SourceLocation::new(1, 1, 1, 2)),
+                ..ValueAttributes::default()
+            },
+            Name::from("x"),
+        );
+        let regular = serde_json::to_value(&value).unwrap();
+        assert!(
+            std::panic::catch_unwind(|| {
+                with_fingerprint_semantics(|| {
+                    assert_ne!(serde_json::to_value(&value).unwrap(), regular);
+                    panic!("exercise restoration");
+                });
+            })
+            .is_err()
+        );
+        assert_eq!(serde_json::to_value(&value).unwrap(), regular);
     }
 }

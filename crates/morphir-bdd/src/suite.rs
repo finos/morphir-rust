@@ -11,7 +11,7 @@ use cucumber::writer::{self, Coloring, Stats as _, Verbosity};
 use cucumber::{World as _, WriterExt as _, gherkin};
 use morphir_gherkin::extension::{Component, Context, Extensions};
 
-use crate::parser::{MorphirParser, Reader, prepare, skip_reason};
+use crate::parser::{MorphirParser, Reader, panic_payload_text, prepare, skip_reason};
 use crate::steps::cli::CliProgram;
 use crate::tags::{TagExpr, WipTag};
 use crate::world::MorphirWorld;
@@ -78,9 +78,10 @@ fn scenario_outcome(
 
     let failure = match ev {
         event::ScenarioFinished::StepFailed(_, _, err) => Some(err.to_string()),
-        event::ScenarioFinished::BeforeHookFailed(info) => {
-            Some(format!("before hook failed: {}", panic_payload_text(info)))
-        }
+        event::ScenarioFinished::BeforeHookFailed(info) => Some(format!(
+            "before hook failed: {}",
+            panic_payload_text(&**info)
+        )),
         // cucumber's own `StepSkipped` covers both a step deliberately skipped and a step that
         // matched no step definition (undefined). Nothing in this event or in `ExecutionFailure`
         // (its source in cucumber 0.23) says which `gherkin::Step` it was: `ExecutionFailure::StepSkipped`
@@ -101,16 +102,6 @@ fn scenario_outcome(
         steps: background_steps + scenario.steps.len(),
         failure,
     }
-}
-
-/// Reads a panic payload as text, the same way cucumber's own console writer does internally (that
-/// helper is private to the `cucumber` crate, so hook-error messages need their own copy of it).
-fn panic_payload_text(info: &event::Info) -> String {
-    (**info)
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| (**info).downcast_ref::<&str>().map(|s| (*s).to_owned()))
-        .unwrap_or_else(|| "(could not resolve panic payload)".to_owned())
 }
 
 /// Builds and runs one Morphir Gherkin suite: a feature directory, an extension context, an
@@ -218,7 +209,9 @@ impl Suite {
         }
     }
 
-    /// Sets where to discover `.feature` and `.feature.md` documents.
+    /// Sets where to discover `.feature` and `.feature.md` documents, plus any file whose exact
+    /// name was registered with [`Suite::reader`]: discovery finds those the same way, anywhere
+    /// under this root.
     #[must_use]
     pub fn features(mut self, path: impl AsRef<Path>) -> Self {
         self.features = path.as_ref().to_owned();

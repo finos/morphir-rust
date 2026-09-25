@@ -1,6 +1,8 @@
 //! Feeds morphir-gherkin documents to cucumber-rs and finds each running scenario's model node.
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -205,19 +207,43 @@ fn parse_error(message: String) -> parser::Error {
     }))
 }
 
+/// Reads a panic payload as text: `payload.downcast_ref::<String>()` covers a formatted
+/// `panic!("{args}")`, `payload.downcast_ref::<&str>()` covers a string-literal `panic!("...")`.
+/// Shared between a reader's panic (here, in [`read_one`]) and a before-hook's panic
+/// ([`suite::scenario_outcome`](crate::suite)), so both report the same text for the same kind of
+/// panic. cucumber's own console writer has an internal copy of this same logic, private to the
+/// `cucumber` crate, so callers outside it need their own.
+pub(crate) fn panic_payload_text(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "(could not resolve panic payload)".to_owned())
+}
+
 /// Reads `path` into a [`Document`]: through the reader registered for its exact file name, if
 /// any, else through [`morphir_gherkin::read_document`]. Either way, a read failure becomes a
 /// parsing error through [`parse_error`]; for a custom reader, that error's text carries both
-/// `path` and the reader's own message, since a bare `Err(message)` names no file on its own.
+/// `path` and the reader's own message (or, if the reader panicked instead of returning `Err`,
+/// the panic's own payload text), since a bare message alone names no file. A reader's panic is
+/// caught with [`std::panic::catch_unwind`] rather than left to unwind out of
+/// [`cucumber::Parser::parse`]: an uncaught panic there would abort the whole run with no report,
+/// instead of failing just the one file the way every other read failure does.
 fn read_one(path: &Path, readers: &HashMap<String, Reader>) -> parser::Result<Document> {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     match readers.get(name) {
-        Some(reader) => {
-            reader(path).map_err(|message| parse_error(format!("{}: {message}", path.display())))
-        }
+        Some(reader) => match panic::catch_unwind(AssertUnwindSafe(|| reader(path))) {
+            Ok(Ok(document)) => Ok(document),
+            Ok(Err(message)) => Err(parse_error(format!("{}: {message}", path.display()))),
+            Err(payload) => Err(parse_error(format!(
+                "{}: the reader panicked: {}",
+                path.display(),
+                panic_payload_text(&*payload)
+            ))),
+        },
         None => morphir_gherkin::read_document(path)
             .map(|(document, _)| document)
             .map_err(|error| parse_error(error.to_string())),

@@ -762,3 +762,63 @@ async fn a_reader_error_fails_the_run_with_its_message() {
     assert!(!result.succeeded(), "{result:?}");
     driver.then_the_json_report_contains("bad toy");
 }
+
+/// Fix round 1, Important 1: a reader that panics instead of returning `Err` must not take the
+/// whole run down with it. The panic is caught and turned into a parsing error naming the file
+/// and the panic's own message, and a sibling feature file in the same run still runs and passes.
+/// The panicking file is named so it shares no substring with the panic message, so a report that
+/// contains both names proves both reached it, not just one via the other.
+#[tokio::test]
+async fn a_panicking_reader_fails_only_its_own_file_and_reports_the_panic() {
+    let reader: Reader = Arc::new(|_path: &Path| panic!("boom"));
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature("panicky.txt", "irrelevant content\n");
+    driver.given_a_feature(
+        "ok.feature",
+        "Feature: K\n  Scenario: k\n    Given the step library is linked\n",
+    );
+    let result = driver
+        .when_the_suite_runs_with(move |s| s.clear_tags().reader("panicky.txt", reader))
+        .await;
+    assert!(!result.succeeded(), "{result:?}");
+    assert!(result.errors >= 1, "{result:?}");
+    assert_eq!(
+        result.passed, 1,
+        "the sibling feature file must still run and pass: {result:?}"
+    );
+    driver.then_the_json_report_contains("panicky.txt");
+    driver.then_the_json_report_contains("boom");
+}
+
+/// Fix round 1, Important 2: a reader registered for an exact file name wins over the built-in
+/// `.feature.md` suffix rule for that same name, not just for a name the built-in rules would
+/// never have matched at all. `x.feature.md`'s real content is malformed by the built-in
+/// Markdown-Gherkin grammar (a step continuation line, the same shape
+/// `a_malformed_feature_md_fails_the_run_with_its_message` proves is refused elsewhere); the
+/// custom reader ignores that content entirely and always lowers to its own one passing scenario.
+/// A run that succeeds, with the reader's own scenario name in the report, proves the reader ran
+/// in its place — the built-in grammar would have failed the run on this content instead.
+#[tokio::test]
+async fn a_reader_wins_over_the_built_in_feature_md_grammar_for_its_exact_name() {
+    let malformed_markdown_gherkin =
+        "# Feature: F\n\n## Scenario: S\n\n* Given a step\n  that goes on\n";
+    let reader: Reader = Arc::new(|path: &Path| {
+        // A `.feature` name, not `.feature.md`: the text below is plain Gherkin, and
+        // `read_str` picks its grammar from the path's own suffix.
+        let synthetic_path = path.with_extension("feature");
+        morphir_gherkin::read_str(
+            synthetic_path,
+            "Feature: Custom\n  Scenario: from the reader\n    Given the step library is linked\n",
+        )
+        .map(|(doc, _)| doc)
+        .map_err(|e| e.to_string())
+    });
+    let mut driver = SuiteDriver::new();
+    driver.given_a_feature("x.feature.md", malformed_markdown_gherkin);
+    let result = driver
+        .when_the_suite_runs_with(move |s| s.clear_tags().reader("x.feature.md", reader))
+        .await;
+    driver.then_it_succeeds();
+    assert_eq!(result.passed, 1, "{result:?}");
+    driver.then_the_json_report_contains("from the reader");
+}

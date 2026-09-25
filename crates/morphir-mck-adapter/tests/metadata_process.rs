@@ -46,10 +46,7 @@ fn compare_facts_claim_uses_real_context_expansion_and_json_datatype() {
         json!({"predicates":[{"uri":predicate,"object":{"kind":"json","type":datatype}}]});
     let replies = exchange(left, right, closure);
     assert_eq!(replies[0]["suite"], "metadata");
-    assert_eq!(
-        replies[0]["claims"],
-        json!([{"operation":"compareFacts","profile":"json","layout":"single","irRevision":"4.1.0"}])
-    );
+    assert!(replies[0]["claims"].as_array().unwrap().iter().any(|claim| claim == &json!({"operation":"compareFacts","profile":"json","layout":"single","irRevision":"4.1.0"})));
     assert_eq!(replies[1]["ok"], true);
     assert_eq!(replies[1]["observation"]["equal"], true);
     assert_eq!(replies[1]["observation"]["distinctFacts"], 1);
@@ -77,4 +74,63 @@ fn compare_facts_keeps_json_array_order_distinct() {
     );
     assert_eq!(replies[1]["observation"]["equal"], false);
     assert_eq!(replies[1]["observation"]["distinctFacts"], 2);
+}
+
+#[test]
+fn source_resolution_matches_expanded_assertion_and_rejects_stale_selector() {
+    let subject = "morphir://ir/pkg/acme/orders?format=4.1.0#/module/api";
+    let predicate =
+        "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated";
+    let given = |fact| {
+        json!({"ownerDocument":"morphir://ir/pkg/acme/orders?format=4.1.0",
+        "$meta":{"@context":{"deprecated":predicate},
+            "@graph":[{"@id":subject,"deprecated":fact}],
+            "assertionSources":[{"selector":{"carrier":"documentGraph","subject":subject,
+                "predicate":predicate,"object":{"@value":true}},
+                "sources":[{"kind":"author","ref":"review/deprecation"}]}]}})
+    };
+    let fixture = b"{\"predicates\":[]}";
+    let fixture = json!({"path":"metadata-fixtures/schema-closure.json",
+        "sha256":Sha256::digest(fixture).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "contentBase64":base64::engine::general_purpose::STANDARD.encode(fixture)});
+    let request = |id, given| {
+        json!({"id":id,"op":"run","caseId":"metadata-0015",
+        "operation":"resolveSources","targets":[{"profile":"json","layout":"single","irRevision":"4.1.0"}],
+        "given":given,"schemaClosure":"metadata-fixtures/schema-closure.json","fixtures":[fixture]})
+    };
+    let input = [
+        json!({"id":1,"op":"capabilities"}),
+        request(2, given(true)),
+        request(3, given(false)),
+        json!({"id":4,"op":"exit"}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect::<Vec<_>>()
+    .join("\n")
+        + "\n";
+    let mut output = Vec::new();
+    run(input.as_bytes(), &mut output).unwrap();
+    let responses: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        responses[0]["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|claim| claim["operation"] == "resolveSources")
+    );
+    assert_eq!(
+        responses[1]["observation"],
+        json!({"outcome":"accepted","sources":[[{"kind":"author","ref":"review/deprecation"}]]})
+    );
+    assert_eq!(
+        responses[2]["observation"],
+        json!({"outcome":"rejected","diagnostic":"assertion_selector_unmatched"}),
+        "{}",
+        responses[2]
+    );
 }

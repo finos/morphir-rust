@@ -4,8 +4,10 @@
 
 use anyhow::{Result, anyhow};
 use base64::Engine as _;
+use morphir_core::ir::v4::{DocumentGraphError, DocumentMeta, expand_document_graph};
 use morphir_core::metadata::{
-    ContextResources, Fact, ObjectTerm, expand_properties, resolve_context,
+    AssertionSource, ContextResources, DocumentId, Fact, MetadataError, ObjectTerm,
+    expand_properties, resolve_context,
 };
 use morphir_core::node_address::NodeUri;
 use serde::Deserialize;
@@ -59,8 +61,11 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
             Request::Capabilities { id } => {
                 check_id(id)?;
                 json!({"id":id,"suite":"metadata","contractVersion":CONTRACT,
-                    "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
-                    "claims":[{"operation":"compareFacts","profile":"json","layout":"single","irRevision":"4.1.0"}]})
+                "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
+                "claims":[
+                    {"operation":"compareFacts","profile":"json","layout":"single","irRevision":"4.1.0"},
+                    {"operation":"resolveSources","profile":"json","layout":"single","irRevision":"4.1.0"}
+                ]})
             }
             Request::Run {
                 id,
@@ -72,11 +77,16 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 fixtures,
             } => {
                 check_id(id)?;
-                if operation != "compareFacts" {
+                if operation != "compareFacts" && operation != "resolveSources" {
                     json!({"id":id,"ok":false,"error":{"code":"unsupported_operation",
-                        "message":"this adapter currently implements compareFacts only"}})
+                        "message":"this metadata operation is not implemented"}})
                 } else {
-                    match compare_facts(&case_id, &targets, &given, &schema_closure, &fixtures) {
+                    let observed = if operation == "compareFacts" {
+                        compare_facts(&case_id, &targets, &given, &schema_closure, &fixtures)
+                    } else {
+                        resolve_sources(&case_id, &targets, &given, &schema_closure, &fixtures)
+                    };
+                    match observed {
                         Ok(observation) => json!({"id":id,"ok":true,"observation":observation}),
                         Err(message) => {
                             json!({"id":id,"ok":false,"error":{"code":"invalid_request","message":message}})
@@ -95,6 +105,85 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
     Ok(())
 }
 
+fn resolve_sources(
+    case_id: &str,
+    targets: &[Value],
+    given: &Value,
+    schema_closure: &str,
+    fixtures: &[Fixture],
+) -> Result<Value, String> {
+    if !valid_case_id(case_id) {
+        return Err("invalid metadata case id".into());
+    }
+    if targets != [json!({"profile":"json","layout":"single","irRevision":"4.1.0"})] {
+        return Err("resolveSources target is not supported".into());
+    }
+    let closure = read_closure(schema_closure, fixtures)?;
+    let owner = DocumentId::new(
+        given["ownerDocument"]
+            .as_str()
+            .ok_or("missing owner document")?,
+    )
+    .map_err(|error| error.to_string())?;
+    let metadata = match DocumentMeta::parse(&given["$meta"]) {
+        Ok(metadata) => metadata,
+        Err(message) if message.contains("duplicate assertion source selector") => {
+            return Ok(json!({"outcome":"rejected","diagnostic":"duplicate_assertion_selector"}));
+        }
+        Err(message) if message.contains("no matching document-graph assertion") => {
+            return Ok(json!({"outcome":"rejected","diagnostic":"assertion_selector_unmatched"}));
+        }
+        Err(message) => return Err(message),
+    };
+    let graph = match expand_document_graph(
+        &metadata,
+        &owner,
+        &ContextResources::new("metadata-fixtures"),
+        |predicate| closure.get(&predicate.to_string()).cloned(),
+    ) {
+        Ok(graph) => graph,
+        Err(DocumentGraphError::Model(MetadataError::UnmatchedSourceSelector(_))) => {
+            return Ok(json!({"outcome":"rejected","diagnostic":"assertion_selector_unmatched"}));
+        }
+        Err(DocumentGraphError::Model(MetadataError::DuplicateSourceSelector(_))) => {
+            return Ok(json!({"outcome":"rejected","diagnostic":"duplicate_assertion_selector"}));
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let sources = graph
+        .assertions()
+        .iter()
+        .map(|assertion| {
+            assertion
+                .sources()
+                .iter()
+                .map(|source| match source {
+                    AssertionSource::Document(_) => json!({"kind":"document"}),
+                    AssertionSource::Compiler {
+                        producer,
+                        reference,
+                    } => match reference {
+                        Some(reference) => {
+                            json!({"kind":"compiler","producer":producer,"ref":reference})
+                        }
+                        None => json!({"kind":"compiler","producer":producer}),
+                    },
+                    AssertionSource::Author { reference } => {
+                        json!({"kind":"author","ref":reference})
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({"outcome":"accepted","sources":sources}))
+}
+
+fn valid_case_id(case_id: &str) -> bool {
+    case_id.len() == 13
+        && case_id.starts_with("metadata-")
+        && case_id[9..].bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn check_id(id: u64) -> Result<()> {
     if id == 0 {
         Err(anyhow!("metadata request id must be positive"))
@@ -110,10 +199,7 @@ fn compare_facts(
     schema_closure: &str,
     fixtures: &[Fixture],
 ) -> Result<Value, String> {
-    if case_id.len() != 13
-        || !case_id.starts_with("metadata-")
-        || !case_id[9..].bytes().all(|byte| byte.is_ascii_digit())
-    {
+    if !valid_case_id(case_id) {
         return Err("invalid metadata case id".into());
     }
     if targets != [json!({"profile":"json","layout":"single","irRevision":"4.1.0"})] {

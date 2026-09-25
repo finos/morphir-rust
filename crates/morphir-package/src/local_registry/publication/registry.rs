@@ -275,6 +275,9 @@ impl Registry {
         let directory = staging.child(&stage)?;
         directory.install("manifest.json", library.manifest_bytes())?;
         directory.install("ir.json", library.ir_bytes())?;
+        for (path, bytes) in library.context_files() {
+            directory.install_relative(path, bytes)?;
+        }
         directory.flush()?;
         staging.promote(&stage, &bundles, name)?;
         Ok(())
@@ -369,13 +372,21 @@ impl Registry {
     }
 }
 fn verify_bundle(directory: &Directory, library: &AuthoredLibrary) -> Result<(), Error> {
-    if directory.names()? != vec!["ir.json".to_owned(), "manifest.json".to_owned()] {
+    let mut expected = vec!["ir.json".to_owned(), "manifest.json".to_owned()];
+    expected.extend(library.context_files().map(|(path, _)| path.to_owned()));
+    expected.sort();
+    if directory.inventory()? != expected {
         return Err(Error::Invalid("immutable-object-conflict"));
     }
     if directory.read("manifest.json", 1_048_576)? != library.manifest_bytes()
         || directory.read("ir.json", 64 * 1024 * 1024)? != library.ir_bytes()
     {
         return Err(Error::Invalid("immutable-object-conflict"));
+    }
+    for (path, bytes) in library.context_files() {
+        if directory.read_relative(path, 1_048_576)? != bytes {
+            return Err(Error::Invalid("immutable-object-conflict"));
+        }
     }
     Ok(())
 }

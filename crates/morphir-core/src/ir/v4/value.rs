@@ -26,7 +26,6 @@ use serde::de::Deserializer;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
-use super::annotation::Annotation;
 use super::attributes::ValueAttributes;
 use super::literal::Literal;
 use super::pattern::Pattern;
@@ -457,7 +456,7 @@ impl NativeInfo {
 pub struct ValueSpecification {
     /// The annotations on the value's public face, written first and only when non-empty
     /// (definitions-0021).
-    pub annotations: Vec<Annotation>,
+    pub annotations: super::annotation::Annotations,
     pub inputs: IndexMap<String, Type>,
     pub output: Type,
 }
@@ -485,7 +484,7 @@ impl<'de> Deserialize<'de> for ValueSpecification {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_value_specification,
         )
@@ -606,7 +605,7 @@ impl<'de> Deserialize<'de> for ValueDefinition {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_value_definition,
         )
@@ -721,7 +720,7 @@ impl<'de> Deserialize<'de> for ValueBody {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_value_body,
         )

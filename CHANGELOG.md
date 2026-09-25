@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opted-in Ion draft.2 reads and writes 4.1.0 linked metadata in datagrams and
+  document trees, and reads the equivalent `$meta` member in a single record.
+  Document context defaults, protected bindings, Type/Value attributes and
+  specification annotations survive roundtrip (finos/morphir#883).
+- JSON and YAML V4 document trees can opt into the proposed 4.1 linked-metadata
+  profile. The manifest retains document `$meta`, node files retain facts and
+  annotations, and reading validates inherited context and source records
+  (finos/morphir#883).
+- `morphir-common` can explicitly load linked-metadata context files from a
+  confined document root or a trusted digest resolver, with byte, count and
+  depth limits before pure context resolution (finos/morphir#883).
+- `morphir-core` linked metadata assertions can apply optional detailed source
+  records by expanded owner, carrier and fact, preserving sources across fact
+  rewrites and rejecting unsafe source-dependent edits (finos/morphir#883).
 - The new `morphir-gherkin` crate reads `.feature` and `.feature.md` files
   (Markdown with Gherkin) into one Gherkin document model, with source spans,
   node paths, and visitor and cursor navigation. Prose is parsed as Markdown.

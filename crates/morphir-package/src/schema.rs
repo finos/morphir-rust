@@ -28,24 +28,31 @@ impl Retrieve for Offline {
     }
 }
 
-/// Both driver-supplied schemas, compiled before examining any document.
+/// Driver-supplied legacy schemas and the exact draft.2 context manifest schema.
 pub struct PackageSchemas {
     manifest: Validator,
+    manifest_draft_2: Validator,
     lock: Validator,
 }
 
 impl PackageSchemas {
-    /// Compile draft 2020-12 schemas with only the supplied resources available.
+    /// Compile draft 2020-12 schemas without external retrieval.
     pub fn compile(manifest: &Value, lock: &Value) -> Result<Self, SchemaError> {
         if !manifest.is_object() || !lock.is_object() {
             return Err(SchemaError("schemas must be objects".into()));
         }
-        let resources = [manifest, lock].into_iter().filter_map(|schema| {
-            schema
-                .get("$id")
-                .and_then(Value::as_str)
-                .map(|id| (id, schema))
-        });
+        let manifest_draft_2: Value = serde_json::from_str(include_str!(
+            "local_registry/mvp/schemas/library-manifest-draft-2.schema.json"
+        ))
+        .map_err(|e| SchemaError(e.to_string()))?;
+        let resources = [manifest, &manifest_draft_2, lock]
+            .into_iter()
+            .filter_map(|schema| {
+                schema
+                    .get("$id")
+                    .and_then(Value::as_str)
+                    .map(|id| (id, schema))
+            });
         let registry = Registry::new()
             .draft(Draft::Draft202012)
             .retriever(Offline)
@@ -59,10 +66,17 @@ impl PackageSchemas {
         let manifest = options
             .build(manifest)
             .map_err(|e| SchemaError(e.to_string()))?;
+        let manifest_draft_2 = options
+            .build(&manifest_draft_2)
+            .map_err(|e| SchemaError(e.to_string()))?;
         let lock = options
             .build(lock)
             .map_err(|e| SchemaError(e.to_string()))?;
-        Ok(Self { manifest, lock })
+        Ok(Self {
+            manifest,
+            manifest_draft_2,
+            lock,
+        })
     }
 
     /// Validate JSON structure, refusing duplicate decoded keys.
@@ -73,6 +87,9 @@ impl PackageSchemas {
 
     pub(crate) fn is_valid(&self, artifact: Artifact, value: &Value) -> bool {
         match artifact {
+            Artifact::Manifest if value["formatVersion"] == "0.1.0-draft.2" => {
+                &self.manifest_draft_2
+            }
             Artifact::Manifest => &self.manifest,
             Artifact::Lock => &self.lock,
         }

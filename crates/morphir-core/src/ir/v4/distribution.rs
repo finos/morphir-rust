@@ -60,7 +60,7 @@ impl<'de> Deserialize<'de> for Distribution {
     where
         D: serde::Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_distribution,
         )

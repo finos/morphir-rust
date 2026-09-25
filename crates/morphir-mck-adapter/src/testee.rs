@@ -30,12 +30,12 @@ use morphir_core::ir::classic;
 use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::serde_document;
 use morphir_core::ir::v4::{
-    AccessControlled, Annotation, AnnotationArgument, ApplicationContent, ConstructorArg,
-    ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution,
-    DistributionManifestFile, Documented, Field, FormatVersion, IRFile, Incompleteness, LetBinding,
-    LibraryContent, Literal, ModuleDefinition, ModuleEntries, ModuleManifestFile,
-    ModuleSpecification, NodeFileBody, PackageDefinition, PackageSpecification, Pattern,
-    PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
+    AccessControlled, Annotation, AnnotationArgument, Annotations, ApplicationContent,
+    ConstructorArg, ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification,
+    Distribution, DistributionManifestFile, Documented, Field, FormatVersion, IRFile,
+    Incompleteness, LetBinding, LibraryContent, Literal, ModuleDefinition, ModuleEntries,
+    ModuleManifestFile, ModuleSpecification, NodeFileBody, PackageDefinition, PackageSpecification,
+    Pattern, PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
     TypeDefinition, TypeDefinitionFile, TypeEncoding, TypeSpecification, Value, ValueAttributes,
     ValueBody, ValueDefinition, ValueDefinitionFile, ValueSpecification, with_spelling_mode,
     with_type_encoding,
@@ -426,6 +426,31 @@ fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
 // =============================================================================
 
 fn read_v4(req: &DecodeRequest, value: Json) -> Result<(Node, Vec<Warning>), Diagnostic> {
+    // The separate metadata draft can read 4.1.0, while this established IR
+    // suite still advertises the released support table ending before 4.1.0.
+    // Keep that boundary at the adapter rather than restricting the new codec.
+    let version = match req.node {
+        NodeKind::FormatVersion => Some(&value),
+        NodeKind::IRFile
+        | NodeKind::Distribution
+        | NodeKind::DistributionManifestFile
+        | NodeKind::ModuleManifestFile
+        | NodeKind::TypeDefinitionFile
+        | NodeKind::ValueDefinitionFile => value.get("formatVersion"),
+        _ => None,
+    };
+    if version.and_then(Json::as_str) == Some("4.1.0") {
+        let cursor = if req.node == NodeKind::FormatVersion {
+            "/"
+        } else {
+            "/formatVersion"
+        };
+        return Err(Diagnostic::normalization(
+            DiagnosticCode::UnsupportedFormatVersionMinor,
+            cursor,
+            "formatVersion 4.1.0 is outside this IR suite's advertised support table",
+        ));
+    }
     // Both path modes read through the same readers, so both decode under the open window (see
     // the module's note on `current` and `pinned`). `req.path` is matched rather than ignored so
     // the day the two paths differ, this is where that shows up.
@@ -940,6 +965,7 @@ impl Node {
             }
             Node::IRFile(node) => Node::IRFile(IRFile {
                 format_version: node.format_version,
+                metadata: node.metadata,
                 distribution: strip_distribution(node.distribution),
             }),
             // A distribution manifest is names, a kind and a budget: nothing it holds carries
@@ -1313,8 +1339,9 @@ fn strip_record_field(field: RecordFieldEntry) -> RecordFieldEntry {
 
 /// Strips the attributes off the value expressions an annotation's arguments carry; the names and
 /// the free text of an annotation carry none.
-fn strip_annotations(annotations: Vec<Annotation>) -> Vec<Annotation> {
-    annotations
+fn strip_annotations(mut annotations: Annotations) -> Annotations {
+    annotations.entries = annotations
+        .entries
         .into_iter()
         .map(|annotation| match annotation {
             Annotation::Compact { name, text } => Annotation::Compact { name, text },
@@ -1333,8 +1360,57 @@ fn strip_annotations(annotations: Vec<Annotation>) -> Vec<Annotation> {
                     })
                     .collect(),
             },
+            Annotation::LinkedCompact {
+                authored_name,
+                declaration,
+            } => Annotation::LinkedCompact {
+                authored_name,
+                declaration,
+            },
+            Annotation::LinkedStructured {
+                authored_name,
+                declaration,
+                args,
+            } => Annotation::LinkedStructured {
+                authored_name,
+                declaration,
+                args: args
+                    .into_iter()
+                    .map(|argument| match argument {
+                        AnnotationArgument::Positional(value) => {
+                            AnnotationArgument::Positional(strip_value(value))
+                        }
+                        AnnotationArgument::Named { name, value } => AnnotationArgument::Named {
+                            name,
+                            value: strip_value(value),
+                        },
+                    })
+                    .collect(),
+            },
+            Annotation::PendingCompact { authored_name } => {
+                Annotation::PendingCompact { authored_name }
+            }
+            Annotation::PendingStructured {
+                authored_name,
+                args,
+            } => Annotation::PendingStructured {
+                authored_name,
+                args: args
+                    .into_iter()
+                    .map(|argument| match argument {
+                        AnnotationArgument::Positional(value) => {
+                            AnnotationArgument::Positional(strip_value(value))
+                        }
+                        AnnotationArgument::Named { name, value } => AnnotationArgument::Named {
+                            name,
+                            value: strip_value(value),
+                        },
+                    })
+                    .collect(),
+            },
         })
-        .collect()
+        .collect();
+    annotations
 }
 
 fn strip_type_specification(node: TypeSpecification) -> TypeSpecification {

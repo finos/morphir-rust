@@ -129,6 +129,71 @@ fn accepts_current_codec_version_four_string_spelling() {
 }
 
 #[test]
+fn versioned_context_inventory_binds_media_and_raw_digest() {
+    let mut provider = a_provider();
+    provider.ir["formatVersion"] = json!("4.1.0");
+    provider.manifest["formatVersion"] = json!("0.1.0-draft.2");
+    let ir = provider.ir.to_string().into_bytes();
+    let context = br#"{"@context":{"label":"morphir://example/label"}}"#.to_vec();
+    provider.manifest["content"] = json!({
+        "ir.json": Digest::of_bytes(&ir).to_string(),
+        "contexts/names.jsonld": Digest::of_bytes(&context).to_string()
+    });
+    provider.manifest["contextResources"] = json!({
+        "contexts/names.jsonld": {
+            "mediaType": "application/ld+json",
+            "digest": Digest::of_bytes(&context).to_string()
+        }
+    });
+    let metadata = NormalizedMetadata::parse(&provider.manifest.to_string()).unwrap();
+    let lock = json!({"formatVersion":"0.1.0-draft.1","kind":"LibraryLockCore","root":"n0","nodes":{"n0":{
+        "release":{"packagePath":"example.com/provider","version":"1.0.0"},
+        "irPackageName":"example/provider",
+        "manifestDigest":metadata.manifest_digest().to_string(),
+        "contentDigest":metadata.content_digest().to_string(),"bindings":{}
+    }}});
+    let input = |manifest: &Value| {
+        LibraryInput::new(
+            manifest.to_string(),
+            vec![
+                ("ir.json".into(), ir.clone()),
+                ("contexts/names.jsonld".into(), context.clone()),
+            ],
+        )
+    };
+    assert!(verify(&lock, &[input(&provider.manifest)]));
+    for (pointer, replacement) in [
+        (
+            "/contextResources/contexts~1names.jsonld/digest",
+            json!(Digest::of_bytes(b"changed").to_string()),
+        ),
+        (
+            "/contextResources/contexts~1names.jsonld/mediaType",
+            json!("text/plain"),
+        ),
+    ] {
+        let mut changed = provider.manifest.clone();
+        *changed.pointer_mut(pointer).unwrap() = replacement;
+        let normalized = NormalizedMetadata::parse(&changed.to_string()).unwrap();
+        let mut relocked = lock.clone();
+        relocked["nodes"]["n0"]["manifestDigest"] = json!(normalized.manifest_digest().to_string());
+        relocked["nodes"]["n0"]["contentDigest"] = json!(normalized.content_digest().to_string());
+        assert!(!verify(&relocked, &[input(&changed)]), "{pointer}");
+    }
+    let mut legacy = provider.manifest.clone();
+    legacy["formatVersion"] = json!("0.1.0-draft.1");
+    legacy.as_object_mut().unwrap().remove("contextResources");
+    let normalized = NormalizedMetadata::parse(&legacy.to_string()).unwrap();
+    let mut relocked = lock;
+    relocked["nodes"]["n0"]["manifestDigest"] = json!(normalized.manifest_digest().to_string());
+    relocked["nodes"]["n0"]["contentDigest"] = json!(normalized.content_digest().to_string());
+    assert!(
+        !verify(&relocked, &[input(&legacy)]),
+        "draft.1 must reject context extras"
+    );
+}
+
+#[test]
 fn accepts_ir_payload_deeper_than_serde_default_limit() {
     let mut provider = a_provider();
     let mut tpe = json!({"Unit":{}});

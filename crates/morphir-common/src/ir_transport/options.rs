@@ -157,6 +157,7 @@ pub struct CodecOptions {
     vocabulary: VocabularyId,
     normalization: NormalizationPolicy,
     path_budget: u32,
+    linked_metadata: bool,
 }
 
 impl CodecOptions {
@@ -170,6 +171,7 @@ impl CodecOptions {
             vocabulary: VocabularyId::readable(),
             normalization: NormalizationPolicy::Strict,
             path_budget: DEFAULT_PATH_BUDGET,
+            linked_metadata: false,
         }
     }
 
@@ -187,6 +189,17 @@ impl CodecOptions {
     pub fn with_path_budget(mut self, path_budget: u32) -> Self {
         self.path_budget = path_budget;
         self
+    }
+
+    /// Opt into the proposed 4.1.0 JSON/YAML linked-metadata revision.
+    pub fn with_linked_metadata(mut self) -> Self {
+        self.linked_metadata = true;
+        self
+    }
+
+    /// Whether the proposed 4.1.0 revision was explicitly selected.
+    pub fn linked_metadata(&self) -> bool {
+        self.linked_metadata
     }
 
     /// Return the selected document-tree path budget.

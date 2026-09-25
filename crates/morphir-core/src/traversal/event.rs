@@ -81,6 +81,8 @@ pub enum ModuleEvent {
 pub enum SemanticEventKind {
     /// Starts a distribution.
     Begin(DistributionHeader),
+    /// Document-owned 4.1.0 metadata, emitted immediately after the header.
+    DocumentMetadata(Box<v4::DocumentMeta>),
     /// Provides one dependency specification.
     Dependency(DependencyEvent),
     /// Provides one module.

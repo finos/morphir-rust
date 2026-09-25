@@ -24,7 +24,7 @@ impl<'de> Deserialize<'de> for PackageSpecification {
     where
         D: serde::Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_package_specification,
         )
@@ -66,7 +66,7 @@ impl PackageDefinition {
 fn module_to_specification(definition: &ModuleDefinition) -> ModuleSpecification {
     ModuleSpecification {
         // A definition carries no annotations, so the specification derived from one has none.
-        annotations: Vec::new(),
+        annotations: Vec::new().into(),
         types: definition
             .types
             .iter()
@@ -96,7 +96,7 @@ fn module_to_specification(definition: &ModuleDefinition) -> ModuleSpecification
 /// The specification a value definition states, or nothing while its output type is unknown.
 fn value_to_specification(definition: &ValueDefinition) -> Option<ValueSpecification> {
     Some(ValueSpecification {
-        annotations: Vec::new(),
+        annotations: Vec::new().into(),
         inputs: definition.input_types.clone(),
         output: definition.output_type.clone()?,
     })
@@ -108,7 +108,7 @@ fn type_to_specification(definition: &TypeDefinition) -> TypeSpecification {
             type_params,
             type_expr,
         } => TypeSpecification::TypeAliasSpecification {
-            annotations: Vec::new(),
+            annotations: Vec::new().into(),
             type_params: type_params.clone(),
             type_expr: type_expr.clone(),
         },
@@ -117,7 +117,7 @@ fn type_to_specification(definition: &TypeDefinition) -> TypeSpecification {
             constructors,
         } => match constructors.access {
             Access::Public => TypeSpecification::CustomTypeSpecification {
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 type_params: type_params.clone(),
                 constructors: constructors
                     .value
@@ -136,14 +136,14 @@ fn type_to_specification(definition: &TypeDefinition) -> TypeSpecification {
                     .collect(),
             },
             Access::Private => TypeSpecification::OpaqueTypeSpecification {
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 type_params: type_params.clone(),
             },
         },
         // A type still being written publishes no shape, so it is opaque until it has one.
         TypeDefinition::IncompleteTypeDefinition { type_params, .. } => {
             TypeSpecification::OpaqueTypeSpecification {
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 type_params: type_params.clone(),
             }
         }
@@ -155,7 +155,7 @@ impl<'de> Deserialize<'de> for PackageDefinition {
     where
         D: serde::Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_package_definition,
         )

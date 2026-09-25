@@ -15,12 +15,12 @@ use super::model::{
     Role, TreeModel, TypeNode, TypeNodeRef, ValueNode, ValueNodeRef,
 };
 use super::paths::Root;
-use crate::ir::v4::FormatVersion;
 use crate::ir::v4::access::{Access, AccessControlled};
 use crate::ir::v4::distribution::{
     ApplicationContent, DefinitionDependencies, Dependencies, Distribution, EntryPoints,
     LibraryContent, SpecsContent,
 };
+use crate::ir::v4::linked_metadata_scan::{LinkedMetadataCarrier, validate_document_scopes};
 use crate::ir::v4::module::{Documented, ModuleDefinition, ModuleSpecification};
 use crate::ir::v4::package::{PackageDefinition, PackageSpecification};
 use crate::ir::v4::tree_files::{
@@ -29,6 +29,7 @@ use crate::ir::v4::tree_files::{
 };
 use crate::ir::v4::types::{TypeDefinition, TypeSpecification};
 use crate::ir::v4::value::{ValueDefinition, ValueSpecification};
+use crate::ir::v4::{DocumentMeta, FormatVersion};
 use crate::ir::v4::{IRFile, TypeEncoding, serde_document, with_type_encoding};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage};
 use crate::naming::{ModuleName, Name, PackageName};
@@ -42,6 +43,7 @@ pub(crate) struct V4Extra {
     pub format_version: FormatVersion,
     /// An application's entry points; empty for the other two kinds.
     pub entry_points: EntryPoints,
+    pub metadata: Option<Box<DocumentMeta>>,
 }
 
 impl TreeModel for V4 {
@@ -70,6 +72,7 @@ impl TreeModel for V4 {
             path_budget,
             dependencies,
             entry_points,
+            metadata,
         } = serde_document::decode_distribution_manifest_file(value, cursor)?;
         Ok(Envelope {
             kind: distribution,
@@ -79,6 +82,7 @@ impl TreeModel for V4 {
             extra: V4Extra {
                 format_version,
                 entry_points,
+                metadata,
             },
         })
     }
@@ -156,11 +160,12 @@ impl TreeModel for V4 {
                 V4Extra {
                     format_version,
                     entry_points,
+                    metadata,
                 },
             ..
         } = envelope;
         let Packages { own, dependencies } = packages;
-        let distribution = match kind {
+        let mut distribution = match kind {
             DistributionKind::Specs => Distribution::Specs(SpecsContent {
                 package_name,
                 spec: specification_package(own)?,
@@ -178,9 +183,30 @@ impl TreeModel for V4 {
                 entry_points,
             }),
         };
+        if format_version != FormatVersion::String("4.1.0".to_owned())
+            && distribution.contains_linked_metadata()
+        {
+            return Err(Diagnostic::new(
+                DiagnosticCode::InvalidDistributionShape,
+                DiagnosticStage::Semantic,
+                "manifest",
+                "linked metadata requires formatVersion 4.1.0",
+            ));
+        }
+        if format_version == FormatVersion::String("4.1.0".to_owned()) {
+            validate_document_scopes(&mut distribution, metadata.as_deref()).map_err(|error| {
+                Diagnostic::new(
+                    DiagnosticCode::InvalidType,
+                    DiagnosticStage::Semantic,
+                    "manifest",
+                    error,
+                )
+            })?;
+        }
         Ok(IRFile {
             format_version,
             distribution,
+            metadata,
         })
     }
 
@@ -194,6 +220,7 @@ impl TreeModel for V4 {
             path_budget: envelope.path_budget,
             dependencies: envelope.dependencies.clone(),
             entry_points: envelope.extra.entry_points.clone(),
+            metadata: envelope.extra.metadata.clone(),
         })
     }
 
@@ -381,7 +408,7 @@ fn specification_package(modules: Vec<Module>) -> Result<PackageSpecification, D
             ModuleSpecification {
                 // A tree has nowhere to keep module annotations, so a module read out of one
                 // has none; the writer refuses one that has any.
-                annotations: Vec::new(),
+                annotations: Vec::new().into(),
                 types: specifications(module.types, &key)?,
                 values: specifications(module.values, &key)?,
                 doc: module.doc,

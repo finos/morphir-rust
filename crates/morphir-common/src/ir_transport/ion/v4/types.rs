@@ -222,6 +222,7 @@ pub(super) fn read_type_def(element: &Element) -> Result<(String, TypeDef), Tran
     let names = annotation_names(element)?;
     let access = access_of(&names)?;
     let fields = struct_fields(element, "type")?;
+    super::refuse_top_level_metadata(&fields)?;
     refuse_on_definition(&fields)?;
     let name = required_string(&fields, "name")?.to_owned();
     let type_params = name_list(&fields, "typeParams")?;
@@ -341,6 +342,7 @@ pub(super) fn write_type_def(
 pub(super) fn read_type_spec(element: &Element) -> Result<(String, TypeSpec), TransportDiagnostic> {
     let names = annotation_names(element)?;
     let fields = struct_fields(element, "type spec")?;
+    super::refuse_top_level_metadata(&fields)?;
     let annotations = read_annotations(&fields)?;
     let name = required_string(&fields, "name")?.to_owned();
     let type_params = name_list(&fields, "typeParams")?;

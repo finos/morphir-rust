@@ -112,6 +112,7 @@ impl Emitter for V4Emitter {
 
         let file = IRFile {
             format_version: FormatVersion::Integer(4),
+            metadata: None,
             distribution: Distribution::Library(LibraryContent {
                 package_name: package_name(input.package),
                 dependencies,

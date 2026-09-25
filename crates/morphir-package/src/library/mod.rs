@@ -4,12 +4,14 @@ mod model;
 use crate::{
     InvalidDocument,
     digest::Digest,
+    local_registry::RegistryPath,
     metadata::NormalizedMetadata,
     schema::{Artifact, PackageSchemas},
     strict_json,
 };
 use model::{Lock, Manifest};
 use morphir_core::ir::v4::{Access, Distribution, IRFile, SpellingMode, with_spelling_mode};
+use morphir_core::metadata::{ContextResources, inline_document_contexts};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Untrusted Library bytes supplied by a caller. No filesystem access is performed.
@@ -161,6 +163,42 @@ fn verify_payload(input: &LibraryInput, manifest: &Manifest) -> Result<(), Inval
         .map(|(path, bytes)| (path, bytes))
         .collect();
     require(files.len() == input.files.len() && files.keys().copied().eq(manifest.content.keys()))?;
+    require(files.len() <= 129)?;
+    for path in files.keys() {
+        require(RegistryPath::parse(path).is_ok() && *path != "manifest.json")?;
+    }
+    match manifest.format_version.as_str() {
+        "0.1.0-draft.1" => {
+            require(manifest.context_resources.is_empty() && manifest.content.len() == 1)?;
+        }
+        "0.1.0-draft.2" => {
+            require(
+                !manifest.context_resources.is_empty()
+                    && manifest.context_resources.len() + 1 == manifest.content.len(),
+            )?;
+            let mut total = 0usize;
+            for (path, resource) in &manifest.context_resources {
+                require(
+                    path != &manifest.ir.payload.path
+                        && resource.media_type == "application/ld+json",
+                )?;
+                require(manifest.content.get(path) == Some(&resource.digest))?;
+                let bytes = files.get(path).ok_or(InvalidDocument)?;
+                require(bytes.len() <= 1_048_576)?;
+                total = total.checked_add(bytes.len()).ok_or(InvalidDocument)?;
+                require(total <= 8 * 1_048_576)?;
+                let context =
+                    strict_json::parse(std::str::from_utf8(bytes).map_err(|_| InvalidDocument)?)
+                        .map_err(|_| InvalidDocument)?;
+                require(
+                    context
+                        .as_object()
+                        .is_some_and(|value| value.len() == 1 && value.contains_key("@context")),
+                )?;
+            }
+        }
+        _ => return Err(InvalidDocument),
+    }
     for (path, bytes) in &files {
         require(Digest::of_bytes(bytes).to_string() == manifest.content[*path])?;
     }
@@ -169,18 +207,31 @@ fn verify_payload(input: &LibraryInput, manifest: &Manifest) -> Result<(), Inval
         .ok_or(InvalidDocument)?;
     let text = std::str::from_utf8(bytes).map_err(|_| InvalidDocument)?;
     let json = strict_json::parse(text).map_err(|_| InvalidDocument)?;
+    let semantic_json = if manifest.format_version == "0.1.0-draft.2" {
+        let mut resources = ContextResources::new(".");
+        for (path, bytes) in &files {
+            if *path != &manifest.ir.payload.path {
+                resources.insert_local((*path).clone(), (*bytes).clone());
+            }
+        }
+        inline_document_contexts(&json, &resources, Some(&manifest.ir.payload.path))
+            .map_err(|_| InvalidDocument)?
+    } else {
+        json.clone()
+    };
     let (file, warnings) = with_spelling_mode(SpellingMode::Current, || {
-        serde_json::from_value::<IRFile>(json.clone())
+        serde_json::from_value::<IRFile>(semantic_json)
     });
     let file = file.map_err(|_| InvalidDocument)?;
-    require(
-        file.format_version
-            .normalize()
-            .map_err(|_| InvalidDocument)?
-            .release
-            .major()
-            == 4,
-    )?;
+    let release = file
+        .format_version
+        .normalize()
+        .map_err(|_| InvalidDocument)?
+        .release;
+    require(release.major() == 4)?;
+    if manifest.format_version == "0.1.0-draft.2" {
+        require(release.minor() >= 1)?;
+    }
     require(warnings.is_empty())?;
     let Distribution::Library(library) = file.distribution else {
         return Err(InvalidDocument);

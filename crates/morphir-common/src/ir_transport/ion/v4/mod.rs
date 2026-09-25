@@ -28,12 +28,16 @@ use types::{read_type_def, read_type_spec, write_type_def, write_type_spec};
 use values::{read_value_def, read_value_spec, write_value_def, write_value_spec};
 
 const RELEASE: &str = "4.0.0";
+const LINKED_RELEASE: &str = "4.1.0";
 
 // =============================================================================
 // Distribution
 // =============================================================================
 
-pub(super) fn decode(values: &ion_rs::Sequence) -> Result<v4::IRFile, TransportDiagnostic> {
+pub(super) fn decode(
+    values: &ion_rs::Sequence,
+    linked_metadata: bool,
+) -> Result<v4::IRFile, TransportDiagnostic> {
     let header = values.get(0).ok_or_else(|| {
         IonCodec::error(
             "morphir::ir::ion::unexpected_value",
@@ -43,13 +47,36 @@ pub(super) fn decode(values: &ion_rs::Sequence) -> Result<v4::IRFile, TransportD
     })?;
     expect_marker(header, "morphir")?;
     let fields = struct_fields(header, "morphir")?;
-    super::accept_ion_version(super::optional_string(&fields, "ionVersion")?)?;
+    refuse_top_level_metadata(&fields)?;
+    if values.len() > 1 && fields.contains_key("$meta") {
+        return Err(member(
+            "a datagram places metadata in a morphir::$meta:: element",
+        ));
+    }
+    let ion_version = super::optional_string(&fields, "ionVersion")?;
+    super::accept_ion_version(ion_version, linked_metadata)?;
     let version = required_string(&fields, "formatVersion")?;
-    if version != RELEASE {
+    if version != RELEASE && version != LINKED_RELEASE {
         return Err(IonCodec::error(
             "morphir::ir::ion::version_mismatch",
             Stage::Detection,
             format!("a v4 Ion document uses formatVersion {RELEASE}, found {version}"),
+        ));
+    }
+    if version == LINKED_RELEASE
+        && (!linked_metadata || ion_version != Some(super::LINKED_ION_CONTRACT))
+    {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_version",
+            Stage::Detection,
+            "formatVersion 4.1.0 requires the linked-metadata option and ionVersion 0.1.0-draft.2",
+        ));
+    }
+    if version == RELEASE && ion_version == Some(super::LINKED_ION_CONTRACT) {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::version_mismatch",
+            Stage::Detection,
+            "ionVersion 0.1.0-draft.2 requires formatVersion 4.1.0",
         ));
     }
     let kind = super::required_text(&fields, "kind")?;
@@ -57,7 +84,7 @@ pub(super) fn decode(values: &ion_rs::Sequence) -> Result<v4::IRFile, TransportD
     if kind != "application" && fields.contains_key("entryPoints") {
         return Err(member("only an application has entryPoints"));
     }
-    let body = read_body(values)?;
+    let (body, metadata) = read_body(values)?;
     let distribution = match kind {
         "library" => {
             body.refuse_definition_dependencies(kind)?;
@@ -109,17 +136,54 @@ pub(super) fn decode(values: &ion_rs::Sequence) -> Result<v4::IRFile, TransportD
             ));
         }
     };
-    Ok(v4::IRFile {
-        format_version: v4::FormatVersion::String(RELEASE.to_owned()),
+    let file = v4::IRFile {
+        format_version: v4::FormatVersion::String(version.to_owned()),
         distribution,
-    })
+        metadata,
+    };
+    if version == RELEASE && file.has_linked_metadata() {
+        return Err(member("linked metadata requires formatVersion 4.1.0"));
+    }
+    if version == LINKED_RELEASE {
+        let authored = serde_json::to_value(&file).map_err(|error| member(error.to_string()))?;
+        serde_json::from_value(authored).map_err(|error| member(error.to_string()))
+    } else {
+        Ok(file)
+    }
 }
 
-pub(super) fn datagram(file: v4::IRFile) -> Result<ion_rs::Sequence, TransportDiagnostic> {
+pub(super) fn datagram(
+    file: v4::IRFile,
+    linked_metadata: bool,
+) -> Result<ion_rs::Sequence, TransportDiagnostic> {
+    let proposed = file.format_version == v4::FormatVersion::String(LINKED_RELEASE.to_owned());
+    if proposed && !linked_metadata {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_version",
+            Stage::Encoding,
+            "formatVersion 4.1.0 requires the linked-metadata option",
+        ));
+    }
+    if !matches!(&file.format_version, v4::FormatVersion::Integer(4))
+        && !matches!(&file.format_version, v4::FormatVersion::String(release) if release == RELEASE || release == LINKED_RELEASE)
+    {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_version",
+            Stage::Encoding,
+            "the Ion v4 profile supports formatVersion 4.0.0 and opted-in 4.1.0",
+        ));
+    }
+    if !proposed && file.has_linked_metadata() {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_metadata",
+            Stage::Encoding,
+            "the Ion v4 profile does not carry linked metadata",
+        ));
+    }
     let mut sequence = ion_rs::Sequence::builder();
     match &file.distribution {
         v4::Distribution::Library(content) => {
-            sequence = sequence.push(header("library", &content.package_name, None)?);
+            sequence = sequence.push(header("library", &content.package_name, None, proposed)?);
             for (name, spec) in &content.dependencies {
                 sequence = sequence.push(package_spec(name, spec)?);
             }
@@ -128,7 +192,7 @@ pub(super) fn datagram(file: v4::IRFile) -> Result<ion_rs::Sequence, TransportDi
             }
         }
         v4::Distribution::Specs(content) => {
-            sequence = sequence.push(header("specs", &content.package_name, None)?);
+            sequence = sequence.push(header("specs", &content.package_name, None, proposed)?);
             for (name, spec) in &content.dependencies {
                 sequence = sequence.push(package_spec(name, spec)?);
             }
@@ -141,6 +205,7 @@ pub(super) fn datagram(file: v4::IRFile) -> Result<ion_rs::Sequence, TransportDi
                 "application",
                 &content.package_name,
                 Some(&content.entry_points),
+                proposed,
             )?);
             for (name, definition) in &content.dependencies {
                 sequence = sequence.push(package_def(name, definition)?);
@@ -150,7 +215,40 @@ pub(super) fn datagram(file: v4::IRFile) -> Result<ion_rs::Sequence, TransportDi
             }
         }
     }
-    Ok(sequence.push(footer()).build())
+    let sequence = if let Some(metadata) = &file.metadata {
+        // The document container follows the header, before any distribution members.
+        let mut ordered = ion_rs::Sequence::builder();
+        let written = sequence.build();
+        let mut elements = written.iter();
+        ordered = ordered.push(elements.next().expect("header was written").clone());
+        ordered = ordered.push(write_document_meta(metadata)?);
+        for element in elements {
+            ordered = ordered.push(element.clone());
+        }
+        ordered.push(footer()).build()
+    } else {
+        sequence.push(footer()).build()
+    };
+    if proposed {
+        let decoded = decode(&sequence, true).map_err(|error| {
+            IonCodec::error(
+                "morphir::ir::ion::unsupported_metadata",
+                Stage::Encoding,
+                format!(
+                    "the Ion draft.2 writer cannot roundtrip this metadata: {}",
+                    error.message()
+                ),
+            )
+        })?;
+        if decoded != file {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::unsupported_metadata",
+                Stage::Encoding,
+                "the Ion draft.2 writer would change this IR document on roundtrip",
+            ));
+        }
+    }
+    Ok(sequence)
 }
 
 /// The modules and dependencies a datagram's body holds, before the header's kind is applied.
@@ -184,20 +282,25 @@ impl Body {
     }
 }
 
-fn read_body(values: &ion_rs::Sequence) -> Result<Body, TransportDiagnostic> {
+fn read_body(
+    values: &ion_rs::Sequence,
+) -> Result<(Body, Option<Box<v4::DocumentMeta>>), TransportDiagnostic> {
     if values.len() == 1 {
-        return Err(IonCodec::error(
-            "morphir::ir::ion::unsupported_node",
-            Stage::Normalization,
-            "read a v4 distribution from its datagram",
-        ));
+        return read_record_body(values.get(0).expect("length checked"));
     }
     let last = values.len() - 1;
     expect_marker(values.get(last).expect("length checked"), "morphir_footer")?;
     let mut body = Body::default();
+    let mut metadata = None;
     for index in 1..last {
         let element = values.get(index).expect("index in range");
         match annotation_names(element)?.as_slice() {
+            ["morphir", "$meta"] => {
+                if metadata.is_some() {
+                    return Err(member("document metadata is listed twice"));
+                }
+                metadata = Some(Box::new(read_document_meta(element)?));
+            }
             ["package", "spec"] => {
                 let (name, spec) = read_package_spec(element)?;
                 merge_modules(&mut body.specifications, name, spec, |spec| {
@@ -230,17 +333,66 @@ fn read_body(values: &ion_rs::Sequence) -> Result<Body, TransportDiagnostic> {
             }
         }
     }
-    Ok(body)
+    Ok((body, metadata))
+}
+
+fn read_record_body(
+    header: &Element,
+) -> Result<(Body, Option<Box<v4::DocumentMeta>>), TransportDiagnostic> {
+    let fields = struct_fields(header, "morphir")?;
+    let mut values = ion_rs::Sequence::builder().push(header.clone());
+    if let Some(metadata) = fields.get("$meta") {
+        if !annotation_names(metadata)?.is_empty() {
+            return Err(member(
+                "the single-record $meta member is an unannotated struct",
+            ));
+        }
+        values = values.push((*metadata).clone().with_annotations(["morphir", "$meta"]));
+    }
+    for name in ["dependencies", "modules"] {
+        if let Some(elements) = fields.get(name) {
+            let elements = elements
+                .as_list()
+                .ok_or_else(|| member(format!("{name} is a list")))?;
+            for element in elements.iter() {
+                values = values.push(element.clone());
+            }
+        }
+    }
+    read_body(&values.push(footer()).build())
+}
+
+fn read_document_meta(element: &Element) -> Result<v4::DocumentMeta, TransportDiagnostic> {
+    let value = serde_json::Value::Object(json::object_from_ion(
+        &element.clone().with_annotations(std::iter::empty::<&str>()),
+    )?);
+    v4::DocumentMeta::parse(&value).map_err(member)
+}
+
+fn write_document_meta(metadata: &v4::DocumentMeta) -> Result<Element, TransportDiagnostic> {
+    let value = serde_json::to_value(metadata).map_err(|error| member(error.to_string()))?;
+    Ok(json::to_ion(&value)?.with_annotations(["morphir", "$meta"]))
 }
 
 fn header(
     kind: &str,
     package: &PackageName,
     entry_points: Option<&v4::EntryPoints>,
+    proposed: bool,
 ) -> Result<Element, TransportDiagnostic> {
     let mut builder = ion_rs::Struct::builder()
-        .with_field("ionVersion", ION_CONTRACT)
-        .with_field("formatVersion", RELEASE)
+        .with_field(
+            "ionVersion",
+            if proposed {
+                super::LINKED_ION_CONTRACT
+            } else {
+                ION_CONTRACT
+            },
+        )
+        .with_field(
+            "formatVersion",
+            if proposed { LINKED_RELEASE } else { RELEASE },
+        )
         .with_field("kind", Element::symbol(kind))
         .with_field("packageName", package.to_canonical_string());
     if let Some(entry_points) = entry_points.filter(|entry_points| !entry_points.is_empty()) {
@@ -306,6 +458,7 @@ fn read_package_spec(
     element: &Element,
 ) -> Result<(String, v4::PackageSpecification), TransportDiagnostic> {
     let fields = struct_fields(element, "package::spec")?;
+    refuse_top_level_metadata(&fields)?;
     refuse_annotations(&fields)?;
     let name = canonical_package(required_string(&fields, "name")?)?;
     let mut modules = IndexMap::new();
@@ -336,6 +489,7 @@ fn read_package_def(
     element: &Element,
 ) -> Result<(String, v4::PackageDefinition), TransportDiagnostic> {
     let fields = struct_fields(element, "package::def")?;
+    refuse_top_level_metadata(&fields)?;
     let name = canonical_package(required_string(&fields, "name")?)?;
     let mut modules = IndexMap::new();
     for module in list_items(&fields, "modules")? {
@@ -368,6 +522,7 @@ fn read_module_spec(
         return Err(member("expected module::spec"));
     }
     let fields = struct_fields(element, "module::spec")?;
+    refuse_top_level_metadata(&fields)?;
     let annotations = annotations::read_annotations(&fields)?;
     let name = canonical_module(required_string(&fields, "name")?)?;
     let mut types = IndexMap::new();
@@ -429,6 +584,7 @@ fn read_def_module(
     }
     let access = access_of(&names)?;
     let fields = struct_fields(element, "module")?;
+    refuse_top_level_metadata(&fields)?;
     annotations::refuse_on_definition(&fields)?;
     let name = canonical_module(required_string(&fields, "name")?)?;
     let mut types = IndexMap::new();
@@ -452,6 +608,16 @@ fn read_def_module(
             },
         },
     ))
+}
+
+fn refuse_top_level_metadata(fields: &BTreeMap<&str, &Element>) -> Result<(), TransportDiagnostic> {
+    if fields.contains_key("facts") || fields.contains_key("@context") {
+        Err(member(
+            "linked metadata on a declaration belongs inside annotations; Type and Value expressions use attributes",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn def_module(

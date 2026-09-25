@@ -1,7 +1,7 @@
 //! Amazon Ion codec for a single-file Morphir IR distribution.
 //!
-//! `ionVersion` is the spelling contract. A missing value means the latest
-//! version this reader implements. `formatVersion` selects the IR.
+//! `ionVersion` is the spelling contract. A missing value retains the draft.1
+//! v3/v4 spelling; opted-in 4.1.0 requires explicit draft.2. `formatVersion` selects the IR.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{Read, Write};
@@ -24,6 +24,7 @@ use super::{
 
 /// Spelling contract implemented by this reader. Drafts match only this string.
 const ION_CONTRACT: &str = "0.1.0-draft.1";
+const LINKED_ION_CONTRACT: &str = "0.1.0-draft.2";
 
 const HEADER_MEMBERS: &[&str] = &[
     "critical",
@@ -75,6 +76,7 @@ impl IonCodec {
 struct IonEncoder<'writer> {
     writer: &'writer mut dyn Write,
     version: IrVersion,
+    linked_metadata: bool,
     events: Vec<SemanticEvent>,
 }
 
@@ -94,11 +96,13 @@ impl EventSink for IonEncoder<'_> {
         }
 
         let mut source = Memory(std::mem::take(&mut self.events).into());
-        IonCodec::new().encode(
-            &mut source,
-            self.writer,
-            &CodecOptions::new(self.version, super::Layout::SingleFile, FormatId::ion()),
-        )
+        let options = CodecOptions::new(self.version, super::Layout::SingleFile, FormatId::ion());
+        let options = if self.linked_metadata {
+            options.with_linked_metadata()
+        } else {
+            options
+        };
+        IonCodec::new().encode(&mut source, self.writer, &options)
     }
 }
 
@@ -135,7 +139,7 @@ impl IrCodec for IonCodec {
             )
             .with_guidance("correct the Ion syntax or select the actual input format")
         })?;
-        emit_values(&values, options.version(), sink)
+        emit_values(&values, options.version(), options.linked_metadata(), sink)
     }
 
     fn encoder<'writer>(
@@ -146,6 +150,7 @@ impl IrCodec for IonCodec {
         Ok(Box::new(IonEncoder {
             writer,
             version: options.version(),
+            linked_metadata: options.linked_metadata(),
             events: Vec::new(),
         }))
     }
@@ -156,7 +161,10 @@ impl IrCodec for IonCodec {
         writer: &mut dyn Write,
         options: &CodecOptions,
     ) -> Result<(), TransportDiagnostic> {
-        let values = datagram(semantic::collect(source, options.version())?)?;
+        let values = datagram(
+            semantic::collect(source, options.version())?,
+            options.linked_metadata(),
+        )?;
         writer
             .write_all(ion_text(values)?.as_bytes())
             .map_err(|error| {
@@ -173,6 +181,7 @@ impl IrCodec for IonCodec {
 fn emit_values(
     values: &ion_rs::Sequence,
     version: IrVersion,
+    linked_metadata: bool,
     sink: &mut dyn EventSink,
 ) -> Result<(), TransportDiagnostic> {
     let header = values.get(0).ok_or_else(|| {
@@ -183,7 +192,7 @@ fn emit_values(
         )
     })?;
     if version == IrVersion::V4 {
-        let file = v4::decode(values)?;
+        let file = v4::decode(values, linked_metadata)?;
         return semantic::emit_v4(file, sink);
     }
     expect_marker(header, "morphir")?;
@@ -222,27 +231,35 @@ fn emit_values(
 pub(super) fn read_tree(
     files: &morphir_core::ir::layout::Tree,
     version: IrVersion,
+    linked_metadata: bool,
     sink: &mut dyn EventSink,
 ) -> Result<(), TransportDiagnostic> {
-    emit_values(&tree::read(files)?, version, sink)
+    emit_values(&tree::read(files)?, version, linked_metadata, sink)
 }
 
 /// The files of an Ion document tree, keyed by logical path, in write order.
 pub(super) fn write_tree(
     source: &mut dyn EventSource,
     version: IrVersion,
+    linked_metadata: bool,
     path_budget: u32,
 ) -> Result<Vec<(String, String)>, TransportDiagnostic> {
-    tree::write(datagram(semantic::collect(source, version)?)?, path_budget)
+    tree::write(
+        datagram(semantic::collect(source, version)?, linked_metadata)?,
+        path_budget,
+    )
 }
 
 pub(super) use tree::EXTENSION as TREE_EXTENSION;
 
 /// The datagram a single-file writer emits for a distribution.
-fn datagram(file: semantic::SemanticFile) -> Result<ion_rs::Sequence, TransportDiagnostic> {
+fn datagram(
+    file: semantic::SemanticFile,
+    linked_metadata: bool,
+) -> Result<ion_rs::Sequence, TransportDiagnostic> {
     match file {
         semantic::SemanticFile::ClassicV3(distribution) => v3_datagram(distribution),
-        semantic::SemanticFile::V4(file) => v4::datagram(file),
+        semantic::SemanticFile::V4(file) => v4::datagram(file, linked_metadata),
     }
 }
 
@@ -491,7 +508,7 @@ fn read_classic_header(
     selected: IrVersion,
 ) -> Result<ClassicHeader, TransportDiagnostic> {
     reject_critical_unknowns(fields, HEADER_MEMBERS)?;
-    accept_ion_version(optional_string(fields, "ionVersion")?)?;
+    accept_ion_version(optional_string(fields, "ionVersion")?, false)?;
     let format_version = required_string(fields, "formatVersion")?;
     let release = accept_format_version(format_version, selected)?;
     if selected != IrVersion::V3 {
@@ -1222,7 +1239,10 @@ fn duplicate_name(kind: &str, path: &classic::Path) -> TransportDiagnostic {
     )
 }
 
-fn accept_ion_version(text: Option<&str>) -> Result<(), TransportDiagnostic> {
+fn accept_ion_version(
+    text: Option<&str>,
+    linked_metadata: bool,
+) -> Result<(), TransportDiagnostic> {
     let Some(text) = text else {
         return Ok(());
     };
@@ -1234,7 +1254,10 @@ fn accept_ion_version(text: Option<&str>) -> Result<(), TransportDiagnostic> {
         )
     })?;
     let supported = semver::Version::parse(ION_CONTRACT).expect("ion contract version parses");
-    if version != supported || version.to_string() != text {
+    let linked = semver::Version::parse(LINKED_ION_CONTRACT).expect("ion contract version parses");
+    if (version != supported && (!linked_metadata || version != linked))
+        || version.to_string() != text
+    {
         return Err(IonCodec::error(
             "morphir::ir::ion::unsupported_version",
             Stage::Detection,

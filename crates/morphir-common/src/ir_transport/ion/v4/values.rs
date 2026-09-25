@@ -620,6 +620,7 @@ pub(super) fn read_value_def(element: &Element) -> Result<(String, ValueDef), Tr
     let names = annotation_names(element)?;
     let access = access_of(&names)?;
     let fields = struct_fields(element, "value")?;
+    super::refuse_top_level_metadata(&fields)?;
     refuse_on_definition(&fields)?;
     let name = required_string(&fields, "name")?.to_owned();
     let output_type = fields.get("outputType").map(|e| read_type(e)).transpose()?;
@@ -736,6 +737,7 @@ pub(super) fn read_value_spec(
         return Err(member("a value specification is public::spec::value"));
     }
     let fields = struct_fields(element, "value spec")?;
+    super::refuse_top_level_metadata(&fields)?;
     let annotations = read_annotations(&fields)?;
     Ok((
         required_string(&fields, "name")?.to_owned(),

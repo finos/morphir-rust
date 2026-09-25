@@ -263,13 +263,13 @@ mod tests {
             modules: [(
                 module.into(),
                 ModuleSpecification {
-                    annotations: vec![],
+                    annotations: Vec::new().into(),
                     types: [(
                         name.into(),
                         Documented::new(
                             None,
                             TypeSpecification::OpaqueTypeSpecification {
-                                annotations: vec![],
+                                annotations: Vec::new().into(),
                                 type_params: (0..arity)
                                     .map(|i| Name::from(format!("t{i}").as_str()))
                                     .collect(),
@@ -319,7 +319,7 @@ mod tests {
             .get_mut("maybe")
             .unwrap()
             .value = TypeSpecification::CustomTypeSpecification {
-            annotations: vec![],
+            annotations: Vec::new().into(),
             type_params: vec![Name::from("a")],
             constructors: vec![],
         };

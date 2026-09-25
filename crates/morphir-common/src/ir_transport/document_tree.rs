@@ -33,7 +33,9 @@ use morphir_core::ir::layout::{
     self, ManifestHeader, Profile, Root, Tree, TreePolicy, V3Kind, from_physical, to_physical,
 };
 use morphir_core::ir::v4::tree_files::DistributionKind;
-use morphir_core::ir::v4::{EntryPoints, FormatVersion, IRFile};
+use morphir_core::ir::v4::{
+    DocumentMeta, EntryPoints, FormatVersion, IRFile, LinkedMetadataCarrier,
+};
 use morphir_core::ir::{Diagnostic as CoreDiagnostic, DiagnosticCode};
 use morphir_core::migration::migrate_path;
 use morphir_core::naming::{ModuleName, PackageName};
@@ -568,6 +570,7 @@ struct SinkHeader {
     distribution: DistributionKind,
     package: PackageName,
     entry_points: EntryPoints,
+    metadata: Option<Box<DocumentMeta>>,
 }
 
 /// Push-based document-tree encoder.
@@ -590,12 +593,16 @@ impl DocumentTreeSink {
         root.create_dir_all()
             .map_err(|error| io_error("create", &root, Stage::Publication, error))?;
         let inner = match policy.kit() {
-            Some(policy) => {
-                SinkSpelling::Kit(Box::new(KitSink::new(root, policy, options.version())))
-            }
+            Some(policy) => SinkSpelling::Kit(Box::new(KitSink::new(
+                root,
+                policy,
+                options.version(),
+                options.linked_metadata(),
+            ))),
             None => SinkSpelling::Ion(IonSink {
                 root,
                 version: options.version(),
+                linked_metadata: options.linked_metadata(),
                 path_budget: policy.path_budget,
                 events: VecDeque::new(),
                 ended: false,
@@ -678,6 +685,7 @@ fn prune(tree: &VfsPath) -> Result<(), TransportDiagnostic> {
 struct IonSink {
     root: VfsPath,
     version: IrVersion,
+    linked_metadata: bool,
     path_budget: u32,
     events: VecDeque<SemanticEvent>,
     ended: bool,
@@ -699,7 +707,12 @@ impl EventSink for IonSink {
         }
         self.ended = true;
         let mut source = QueueSource(std::mem::take(&mut self.events));
-        let files = ion::write_tree(&mut source, self.version, self.path_budget)?;
+        let files = ion::write_tree(
+            &mut source,
+            self.version,
+            self.linked_metadata,
+            self.path_budget,
+        )?;
         prune(&self.root)?;
         files
             .into_iter()
@@ -737,6 +750,7 @@ struct KitSink {
     root: VfsPath,
     policy: TreePolicy,
     version: IrVersion,
+    linked_metadata: bool,
     header: Option<KitHeader>,
     /// The dependency packages, in the order their events arrived; the manifest lists them.
     dependencies: Vec<PackageName>,
@@ -759,11 +773,12 @@ struct V3Header {
 }
 
 impl KitSink {
-    fn new(root: VfsPath, policy: TreePolicy, version: IrVersion) -> Self {
+    fn new(root: VfsPath, policy: TreePolicy, version: IrVersion, linked_metadata: bool) -> Self {
         Self {
             root,
             policy,
             version,
+            linked_metadata,
             header: None,
             dependencies: Vec::new(),
             dependency_keys: HashSet::new(),
@@ -809,6 +824,7 @@ impl KitSink {
                 distribution: DistributionKind::Library,
                 package,
                 entry_points: EntryPoints::new(),
+                metadata: None,
             }),
             (
                 IrVersion::V4,
@@ -821,6 +837,7 @@ impl KitSink {
                 distribution: DistributionKind::Specs,
                 package,
                 entry_points: EntryPoints::new(),
+                metadata: None,
             }),
             (
                 IrVersion::V4,
@@ -834,6 +851,7 @@ impl KitSink {
                 distribution: DistributionKind::Application,
                 package,
                 entry_points,
+                metadata: None,
             }),
             (IrVersion::V4, _) => {
                 return Err(self.error(
@@ -862,9 +880,52 @@ impl KitSink {
                 ));
             }
         };
+        if !self.linked_metadata
+            && matches!(
+                &header,
+                KitHeader::V4(SinkHeader {
+                    format_version: FormatVersion::String(version),
+                    ..
+                }) if version == "4.1.0"
+            )
+        {
+            return Err(self.error(
+                "unsupported_metadata",
+                cursor,
+                "the proposed 4.1.0 revision requires linked-metadata opt-in",
+            ));
+        }
         prune(&self.root)?;
         self.header = Some(header);
         Ok(())
+    }
+
+    fn document_metadata(
+        &mut self,
+        metadata: Box<DocumentMeta>,
+        cursor: &IrCursor,
+    ) -> Result<(), TransportDiagnostic> {
+        if !self.linked_metadata || !self.dependencies.is_empty() || self.modules_started {
+            return Err(self.error(
+                "unsupported_metadata",
+                cursor,
+                "document metadata requires a 4.1 tree and must precede dependencies and modules",
+            ));
+        }
+        match &mut self.header {
+            Some(KitHeader::V4(header))
+                if header.format_version == FormatVersion::String("4.1.0".to_owned())
+                    && header.metadata.is_none() =>
+            {
+                header.metadata = Some(metadata);
+                Ok(())
+            }
+            _ => Err(self.error(
+                "unsupported_metadata",
+                cursor,
+                "document metadata requires a 4.1 tree and may occur only once",
+            )),
+        }
     }
 
     /// The v4 header, or the `missing_begin` an event arriving before it earns. A v4 sink never
@@ -1195,9 +1256,11 @@ impl KitSink {
                     package: header.package.clone(),
                     dependencies: self.dependencies.clone(),
                     entry_points: header.entry_points.clone(),
+                    metadata: header.metadata.clone(),
                 },
                 &self.policy,
-            ),
+            )
+            .map_err(core_error)?,
             Some(KitHeader::V3(header)) => layout::write_v3_manifest(
                 header.kind,
                 &header.package,
@@ -1227,9 +1290,37 @@ impl EventSink for KitSink {
                 "an event appeared after the tree end",
             ));
         }
+        if matches!(
+            &self.header,
+            Some(KitHeader::V4(SinkHeader { format_version, .. }))
+                if *format_version != FormatVersion::String("4.1.0".to_owned())
+        ) && match event.kind() {
+            SemanticEventKind::Dependency(DependencyEvent::V4 { specification, .. }) => {
+                specification.contains_linked_metadata()
+            }
+            SemanticEventKind::Dependency(DependencyEvent::V4Definition { definition, .. }) => {
+                definition.contains_linked_metadata()
+            }
+            SemanticEventKind::Module(ModuleEvent::V4Definition { module, .. }) => {
+                module.contains_linked_metadata()
+            }
+            SemanticEventKind::Module(ModuleEvent::V4Specification { module, .. }) => {
+                module.contains_linked_metadata()
+            }
+            _ => false,
+        } {
+            return Err(self.error(
+                "unsupported_metadata",
+                event.cursor(),
+                "linked metadata requires formatVersion 4.1.0",
+            ));
+        }
         let (cursor, kind) = event.into_parts();
         match kind {
             SemanticEventKind::Begin(header) => self.begin(header, &cursor),
+            SemanticEventKind::DocumentMetadata(metadata) => {
+                self.document_metadata(metadata, &cursor)
+            }
             SemanticEventKind::Dependency(dependency) => self.dependency(dependency, &cursor),
             SemanticEventKind::Module(module) => self.module(module, &cursor),
             SemanticEventKind::End => self.end(&cursor),
@@ -1319,11 +1410,26 @@ impl DocumentTreeSource {
                     IrVersion::V4 => {
                         let (file, _warnings) =
                             layout::read_tree(&files, kit.profile).map_err(core_error)?;
+                        if file.format_version == FormatVersion::String("4.1.0".to_owned())
+                            && !options.linked_metadata()
+                        {
+                            return Err(tree_error(
+                                "morphir::ir::document_tree::unsupported_metadata",
+                                Stage::Detection,
+                                "the proposed 4.1.0 revision requires linked-metadata opt-in",
+                                "select the 4.1 linked-metadata tree profile",
+                            ));
+                        }
                         semantic::emit_v4(file, &mut queue)?;
                     }
                 }
             }
-            None => ion::read_tree(&files, options.version(), &mut queue)?,
+            None => ion::read_tree(
+                &files,
+                options.version(),
+                options.linked_metadata(),
+                &mut queue,
+            )?,
         }
         Ok(Self {
             events: queue.events,

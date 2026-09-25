@@ -183,6 +183,7 @@ struct WalkContext {
     root: NodeRoot,
     steps: Vec<NodeStep>,
     lineage: Option<NodeFingerprintBuilder>,
+    linked_metadata_guards: bool,
 }
 
 impl WalkContext {
@@ -191,6 +192,14 @@ impl WalkContext {
             root,
             steps: Vec::new(),
             lineage: None,
+            linked_metadata_guards: false,
+        }
+    }
+
+    fn v4_root(root: NodeRoot, format: IrFormatVersion) -> Self {
+        Self {
+            linked_metadata_guards: format.major() == 4 && format.minor() == 1,
+            ..Self::root(root)
         }
     }
 
@@ -206,7 +215,13 @@ impl WalkContext {
         child: &T,
     ) -> Result<Self, NodeResolutionError> {
         let mut next = self.named(step.clone());
-        let mut lineage = next.lineage.unwrap_or_default();
+        let mut lineage = next.lineage.unwrap_or_else(|| {
+            if self.linked_metadata_guards {
+                NodeFingerprintBuilder::for_v4_1()
+            } else {
+                NodeFingerprintBuilder::new()
+            }
+        });
         lineage
             .push(&step, child)
             .map_err(|error| NodeResolutionError::InvalidFingerprint(error.to_string()))?;
@@ -227,11 +242,17 @@ impl NodeIndex {
         file: &v4::IRFile,
         artifact: ArtifactSelector,
     ) -> Result<Self, NodeResolutionError> {
-        let normalized = file
-            .format_version
-            .normalize()
-            .map_err(|_| NodeResolutionError::FormatVersionMismatch)?;
-        if normalized.release.major() != 4 || !normalized.is_supported() {
+        let scalar = match &file.format_version {
+            v4::FormatVersion::String(version) => ScalarValue::String(version.clone()),
+            v4::FormatVersion::Integer(version) => ScalarValue::Integer(u64::from(*version)),
+        };
+        let normalized =
+            NormalizedFormatVersion::from_scalar(&scalar, &SupportTable::linked_metadata())
+                .map_err(|_| NodeResolutionError::FormatVersionMismatch)?;
+        if normalized.release.major() != 4
+            || !normalized.is_supported()
+            || (file.has_linked_metadata() && normalized.release != IrFormatVersion::new(4, 1, 0))
+        {
             return Err(NodeResolutionError::FormatVersionMismatch);
         }
         Self::v4_with_format(&file.distribution, artifact, normalized.release)
@@ -539,11 +560,14 @@ impl NodeIndex {
                 definition,
             )?;
             for (name, controlled) in &definition.types {
-                let context = WalkContext::root(NodeRoot::Type {
-                    owner: owner.clone(),
-                    module: module.clone(),
-                    name: parse_name(name)?,
-                });
+                let context = WalkContext::v4_root(
+                    NodeRoot::Type {
+                        owner: owner.clone(),
+                        module: module.clone(),
+                        name: parse_name(name)?,
+                    },
+                    self.format,
+                );
                 self.add(
                     &context,
                     IndexedNodeKind::TypeDefinition,
@@ -552,11 +576,14 @@ impl NodeIndex {
                 self.v4_type_definition(&context, &controlled.value.value)?;
             }
             for (name, controlled) in &definition.values {
-                let context = WalkContext::root(NodeRoot::Value {
-                    owner: owner.clone(),
-                    module: module.clone(),
-                    name: parse_name(name)?,
-                });
+                let context = WalkContext::v4_root(
+                    NodeRoot::Value {
+                        owner: owner.clone(),
+                        module: module.clone(),
+                        name: parse_name(name)?,
+                    },
+                    self.format,
+                );
                 self.add(
                     &context,
                     IndexedNodeKind::ValueDefinition,
@@ -583,21 +610,37 @@ impl NodeIndex {
                 IndexedNodeKind::Module,
                 specification,
             )?;
+            self.v4_annotations(
+                &WalkContext::v4_root(
+                    NodeRoot::Module {
+                        owner: owner.clone(),
+                        module: module.clone(),
+                    },
+                    self.format,
+                ),
+                &specification.annotations,
+            )?;
             for (name, documented) in &specification.types {
-                let context = WalkContext::root(NodeRoot::Type {
-                    owner: owner.clone(),
-                    module: module.clone(),
-                    name: parse_name(name)?,
-                });
+                let context = WalkContext::v4_root(
+                    NodeRoot::Type {
+                        owner: owner.clone(),
+                        module: module.clone(),
+                        name: parse_name(name)?,
+                    },
+                    self.format,
+                );
                 self.add(&context, IndexedNodeKind::TypeDefinition, &documented.value)?;
                 self.v4_type_specification(&context, &documented.value)?;
             }
             for (name, documented) in &specification.values {
-                let context = WalkContext::root(NodeRoot::Value {
-                    owner: owner.clone(),
-                    module: module.clone(),
-                    name: parse_name(name)?,
-                });
+                let context = WalkContext::v4_root(
+                    NodeRoot::Value {
+                        owner: owner.clone(),
+                        module: module.clone(),
+                        name: parse_name(name)?,
+                    },
+                    self.format,
+                );
                 self.add(
                     &context,
                     IndexedNodeKind::ValueDefinition,
@@ -655,6 +698,13 @@ impl NodeIndex {
         context: &WalkContext,
         specification: &v4::TypeSpecification,
     ) -> Result<(), NodeResolutionError> {
+        let annotations = match specification {
+            v4::TypeSpecification::TypeAliasSpecification { annotations, .. }
+            | v4::TypeSpecification::OpaqueTypeSpecification { annotations, .. }
+            | v4::TypeSpecification::CustomTypeSpecification { annotations, .. }
+            | v4::TypeSpecification::DerivedTypeSpecification { annotations, .. } => annotations,
+        };
+        self.v4_annotations(context, annotations)?;
         match specification {
             v4::TypeSpecification::TypeAliasSpecification { type_expr, .. } => {
                 self.v4_type(&context.named(NodeStep::TypeExpression), type_expr)?
@@ -766,6 +816,7 @@ impl NodeIndex {
         context: &WalkContext,
         specification: &v4::ValueSpecification,
     ) -> Result<(), NodeResolutionError> {
+        self.v4_annotations(context, &specification.annotations)?;
         for (name, ty) in &specification.inputs {
             self.v4_type(
                 &context.named(NodeStep::ValueInputType(parse_name(name)?)),
@@ -778,12 +829,41 @@ impl NodeIndex {
         )
     }
 
+    fn v4_annotations(
+        &mut self,
+        context: &WalkContext,
+        annotations: &v4::Annotations,
+    ) -> Result<(), NodeResolutionError> {
+        for (index, entry) in annotations.entries.iter().enumerate() {
+            let entry_context = context.ordered(NodeStep::AnnotationEntry(index), entry)?;
+            let args = match entry {
+                v4::Annotation::Structured { args, .. }
+                | v4::Annotation::LinkedStructured { args, .. }
+                | v4::Annotation::PendingStructured { args, .. } => args,
+                _ => continue,
+            };
+            for (index, arg) in args.iter().enumerate() {
+                let value = match arg {
+                    v4::AnnotationArgument::Positional(value)
+                    | v4::AnnotationArgument::Named { value, .. } => value,
+                };
+                let arg_context =
+                    entry_context.ordered(NodeStep::AnnotationArgument(index), value)?;
+                self.v4_value(&arg_context, value)?;
+            }
+        }
+        Ok(())
+    }
+
     fn v4_value(
         &mut self,
         context: &WalkContext,
         value: &v4::Value,
     ) -> Result<(), NodeResolutionError> {
         self.add(context, IndexedNodeKind::ValueExpression, value)?;
+        if let Some(inferred) = &value.attributes().inferred_type {
+            self.v4_type(&context.named(NodeStep::InferredType), inferred)?;
+        }
         match value {
             v4::Value::Apply(_, function, argument) => {
                 self.v4_value(&context.named(NodeStep::ApplyFunction), function)?;
@@ -889,6 +969,9 @@ impl NodeIndex {
         pattern: &v4::Pattern,
     ) -> Result<(), NodeResolutionError> {
         self.add(context, IndexedNodeKind::Pattern, pattern)?;
+        if let Some(inferred) = &pattern.attributes().inferred_type {
+            self.v4_type(&context.named(NodeStep::InferredType), inferred)?;
+        }
         match pattern {
             v4::Pattern::AsPattern(_, child, _) => {
                 self.v4_pattern(&context.named(NodeStep::AsPatternChild), child)?

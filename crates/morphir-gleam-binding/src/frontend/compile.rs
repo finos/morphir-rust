@@ -487,6 +487,7 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
     let module_names = modules.keys().cloned().collect();
     let ir = IRFile {
         format_version: Default::default(),
+        metadata: None,
         distribution: Distribution::Library(LibraryContent {
             package_name: package,
             dependencies,

@@ -691,6 +691,31 @@ fn v3_format_versions_follow_the_support_table() {
     );
 }
 
+#[test]
+fn legacy_ir_suite_keeps_proposed_metadata_revision_outside_its_support_table() {
+    use morphir_core::ir::DiagnosticCode;
+
+    for path in [PathMode::Current, PathMode::Pinned] {
+        for (node, input) in [
+            (NodeKind::FormatVersion, r#""4.1.0""#),
+            (
+                NodeKind::IRFile,
+                r#"{"formatVersion":"4.1.0","distribution":{"Library":{"packageName":"example","dependencies":{},"def":{"modules":{}}}}}"#,
+            ),
+        ] {
+            match decode(&req(node, input, path)) {
+                DecodeResponse::Err { diagnostic } => {
+                    assert_eq!(
+                        diagnostic.code,
+                        DiagnosticCode::UnsupportedFormatVersionMinor
+                    );
+                }
+                other => panic!("{node:?} on {path:?}: {other:?}"),
+            }
+        }
+    }
+}
+
 /// The node kinds version 3 already read in JSON read in YAML too.
 #[test]
 fn a_v3_node_reads_and_writes_yaml() {

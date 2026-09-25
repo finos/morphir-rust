@@ -15,7 +15,8 @@
 //! What a file leaves out is as much of the contract as what it writes: a member that only repeats
 //! a default — an empty `dependencies`, a `Public` `access`, entry points on a distribution that
 //! has none — is not written, so the shape of a file does not depend on how much is in it. The
-//! reserved `$meta` is stripped on the way in and therefore never written back (decision 0014).
+//! reserved `$meta` is stripped in 4.0 trees (decision 0014). In 4.1 trees, the distribution
+//! manifest owns the document metadata; node-local metadata stays in its node file.
 
 use indexmap::IndexMap;
 use serde::ser::SerializeMap;
@@ -26,7 +27,7 @@ use super::distribution::EntryPoints;
 use super::module::{Documentation, Documented};
 use super::types::{TypeDefinition, TypeSpecification};
 use super::value::{ValueDefinition, ValueSpecification};
-use super::{FormatVersion, serde_document};
+use super::{DocumentMeta, FormatVersion, serde_document};
 use crate::naming::{ModuleName, Name, PackageName};
 
 /// The smallest `pathBudget` a tree can be laid out under (decision 0012).
@@ -168,6 +169,8 @@ pub struct DistributionManifestFile {
     /// An application's entry points. Refused on the other two kinds, and written only when an
     /// application has any.
     pub entry_points: EntryPoints,
+    /// The document graph and source records of a 4.1 tree, owned by its manifest.
+    pub metadata: Option<Box<DocumentMeta>>,
 }
 
 impl Serialize for DistributionManifestFile {
@@ -187,6 +190,14 @@ impl Serialize for DistributionManifestFile {
         }
         if self.distribution == DistributionKind::Application && !self.entry_points.is_empty() {
             map.serialize_entry("entryPoints", &self.entry_points)?;
+        }
+        if let Some(metadata) = &self.metadata {
+            if self.format_version != FormatVersion::String("4.1.0".to_owned()) {
+                return Err(serde::ser::Error::custom(
+                    "linked metadata requires formatVersion 4.1.0",
+                ));
+            }
+            map.serialize_entry("$meta", metadata)?;
         }
         map.end()
     }
@@ -317,7 +328,7 @@ impl<'de> Deserialize<'de> for ModuleManifestFile {
     /// A module manifest read as a bare node expects definitions, the way the reference's own
     /// node reader does: there is no tree around it to say which root it sits under.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        serde_document::deserialize_with(deserializer, |value, cursor| {
+        serde_document::deserialize_standalone_with(deserializer, |value, cursor| {
             serde_document::decode_module_manifest_file(value, cursor, ExpectedEntries::Definitions)
         })
     }
@@ -354,7 +365,10 @@ impl Serialize for TypeDefinitionFile {
 
 impl<'de> Deserialize<'de> for TypeDefinitionFile {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        serde_document::deserialize_with(deserializer, serde_document::decode_type_definition_file)
+        serde_document::deserialize_standalone_with(
+            deserializer,
+            serde_document::decode_type_definition_file,
+        )
     }
 }
 
@@ -375,7 +389,10 @@ impl Serialize for ValueDefinitionFile {
 
 impl<'de> Deserialize<'de> for ValueDefinitionFile {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        serde_document::deserialize_with(deserializer, serde_document::decode_value_definition_file)
+        serde_document::deserialize_standalone_with(
+            deserializer,
+            serde_document::decode_value_definition_file,
+        )
     }
 }
 

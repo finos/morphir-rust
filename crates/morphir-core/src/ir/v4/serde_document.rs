@@ -21,12 +21,16 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use super::access::{Access, AccessControlled};
-use super::annotation::{Annotation, AnnotationArgument};
+use super::annotation::{Annotation, AnnotationArgument, Annotations};
 use super::distribution::{
     ApplicationContent, Distribution, EntryPoint, EntryPointKind, EntryPoints, LibraryContent,
     SpecsContent,
 };
 use super::legacy::accept_legacy_form;
+use super::linked_metadata::{DocumentMeta, MetadataScope};
+use super::linked_metadata_project::expand_v4_single_file_graph;
+use super::linked_metadata_scan::validate_document_scopes;
+use super::linked_metadata_scan::{LinkedMetadataCarrier, StandaloneMetadata};
 use super::module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
 use super::package::{PackageDefinition, PackageSpecification};
 use super::serde_tagged::{
@@ -48,6 +52,7 @@ use super::value::{
 use super::{FormatVersion, IRFile};
 use crate::format_version::{NormalizedFormatVersion, ScalarValue, SupportTable};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
+use crate::metadata::{ContextResources, DocumentId};
 use crate::naming::{ModuleName, Name, PackageName};
 
 /// Reads the node as JSON and hands it to a cursor-carrying decoder, starting at the root.
@@ -64,6 +69,24 @@ where
 {
     let value = JsonValue::deserialize(deserializer)?;
     decode(&value, "").map_err(carry)
+}
+
+/// Decode a public fragment, then close its metadata over an empty document context.
+/// Whole-file decoding calls the internal decoders directly and closes over `$meta` instead.
+pub(super) fn deserialize_standalone_with<'de, D, T>(
+    deserializer: D,
+    decode: fn(&JsonValue, &str) -> Result<T, Diagnostic>,
+) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: StandaloneMetadata,
+{
+    let value = JsonValue::deserialize(deserializer)?;
+    let mut decoded = decode(&value, "").map_err(carry)?;
+    decoded
+        .validate_standalone()
+        .map_err(|error| carry(invalid_type("", error)))?;
+    Ok(decoded)
 }
 
 fn members_of<'a>(
@@ -238,23 +261,57 @@ fn decode_type_params(members: &Members<'_>, cursor: &str) -> Result<Vec<Name>, 
 pub(super) fn decode_annotations(
     members: &Members<'_>,
     cursor: &str,
-) -> Result<Vec<Annotation>, Diagnostic> {
+) -> Result<Annotations, Diagnostic> {
     let Some(member) = members.get("annotations") else {
-        return Ok(Vec::new());
+        return Ok(Annotations::default());
     };
     let at = member_cursor(members, "annotations", cursor);
-    let items = member
-        .value
-        .as_array()
-        .ok_or_else(|| invalid_type(&at, "annotations is an array"))?;
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| decode_annotation(item, &format!("{at}/{index}")))
-        .collect()
+    decode_annotations_value(member.value, &at)
 }
 
-fn decode_annotation(value: &JsonValue, cursor: &str) -> Result<Annotation, Diagnostic> {
+pub(super) fn decode_annotations_value(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<Annotations, Diagnostic> {
+    let (entries, metadata) = if let Some(object) = value.as_object() {
+        for key in object.keys() {
+            if !matches!(key.as_str(), "entries" | "@context" | "facts") {
+                return Err(unknown_member(&format!("{cursor}/{key}"), key));
+            }
+        }
+        let metadata = MetadataScope::parse_unresolved(object.get("@context"), object.get("facts"))
+            .map_err(|error| invalid_type(cursor, error))?;
+        (object.get("entries"), metadata)
+    } else {
+        (Some(value), MetadataScope::default())
+    };
+    let items = match entries {
+        Some(entries) => entries
+            .as_array()
+            .ok_or_else(|| invalid_type(cursor, "annotation entries must be an array"))?,
+        None => {
+            return Ok(Annotations {
+                entries: Vec::new(),
+                metadata: (!metadata.is_empty()).then(|| Box::new(metadata)),
+            });
+        }
+    };
+    let entries = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| decode_annotation(item, &format!("{cursor}/{index}"), &metadata))
+        .collect::<Result<_, _>>()?;
+    Ok(Annotations {
+        entries,
+        metadata: (!metadata.is_empty()).then(|| Box::new(metadata)),
+    })
+}
+
+fn decode_annotation(
+    value: &JsonValue,
+    cursor: &str,
+    scope: &MetadataScope,
+) -> Result<Annotation, Diagnostic> {
     match value {
         JsonValue::String(text) => {
             // The separator is the first colon after the local-name hash; the FQName's own
@@ -266,15 +323,27 @@ fn decode_annotation(value: &JsonValue, cursor: &str) -> Result<Annotation, Diag
                 Some(at) => (&text[..at], Some(text[at + 1..].to_owned())),
                 None => (text.as_str(), None),
             };
-            let name = decode_fqname(&JsonValue::String(name_text.to_owned()), cursor)?;
-            Ok(Annotation::Compact {
-                name,
-                text: free_text,
-            })
+            match decode_fqname(&JsonValue::String(name_text.to_owned()), cursor) {
+                Ok(name) => Ok(Annotation::Compact {
+                    name,
+                    text: free_text,
+                }),
+                Err(_) if free_text.is_none() => match scope.expand_key(name_text) {
+                    Ok(declaration) => Ok(Annotation::LinkedCompact {
+                        authored_name: name_text.to_owned(),
+                        declaration,
+                    }),
+                    Err(_) => Ok(Annotation::PendingCompact {
+                        authored_name: name_text.to_owned(),
+                    }),
+                },
+                Err(diagnostic) => Err(diagnostic),
+            }
         }
         JsonValue::Object(_) => {
             let members = wrapper_members("Annotation", value, cursor, &["name", "arguments"])?;
-            let name = decode_member_fqname(&members, "name", cursor)?;
+            let name_value = required(&members, "name", cursor)?;
+            let name_cursor = member_cursor(&members, "name", cursor);
             let args = match members.get("arguments") {
                 None => Vec::new(),
                 Some(member) => {
@@ -291,7 +360,23 @@ fn decode_annotation(value: &JsonValue, cursor: &str) -> Result<Annotation, Diag
                         .collect::<Result<_, _>>()?
                 }
             };
-            Ok(Annotation::Structured { name, args })
+            match decode_fqname(name_value, &name_cursor) {
+                Ok(name) => Ok(Annotation::Structured { name, args }),
+                Err(diagnostic) => {
+                    let authored_name = name_value.as_str().ok_or(diagnostic)?.to_owned();
+                    match scope.expand_key(&authored_name) {
+                        Ok(declaration) => Ok(Annotation::LinkedStructured {
+                            authored_name,
+                            declaration,
+                            args,
+                        }),
+                        Err(_) => Ok(Annotation::PendingStructured {
+                            authored_name,
+                            args,
+                        }),
+                    }
+                }
+            }
         }
         _ => Err(invalid_type(
             cursor,
@@ -462,7 +547,7 @@ pub(in crate::ir) fn decode_type_specification(
         && tag == "OpaqueTypeSpecification"
     {
         return Ok(TypeSpecification::OpaqueTypeSpecification {
-            annotations: Vec::new(),
+            annotations: Vec::new().into(),
             type_params: Vec::new(),
         });
     }
@@ -1252,8 +1337,9 @@ fn decode_entry_points(value: &JsonValue, cursor: &str) -> Result<EntryPoints, D
 /// This is the check [`decode_ir_file`] makes of a version 4 root, in its order and with its
 /// codes: an unknown member first (`unknown_member` at the member), then a missing
 /// `formatVersion` (`missing_format_version`) and a missing `distribution` (`missing_member`),
-/// both at the root. `$meta` is not reserved in a single document (distributions-0009). `what`
-/// names the document in the `invalid_type` a root that is not an object earns.
+/// both at the root. This legacy root check rejects `$meta`; the proposed 4.1.0 decoder
+/// handles it separately. `what` names the document in the `invalid_type` a root that is not an
+/// object earns.
 ///
 /// Public so a classic (version 3) reader, whose derived decoder ignores unknown members, can
 /// hold its root to the same rule before deserializing it.
@@ -1283,15 +1369,77 @@ pub fn document_root<'a>(
 
 /// Decodes a whole version 4 document.
 ///
-/// `formatVersion` comes first and `distribution` second; a document that writes them the other
-/// way round is the same document. `$meta` is reserved for the files of a document tree, not for
-/// a single document, so it is unknown here (distributions-0009).
+/// `formatVersion` comes first and `distribution` second; member order is irrelevant.
+/// The proposed 4.1.0 revision admits document-owned `$meta` at this root.
 pub(in crate::ir) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<IRFile, Diagnostic> {
-    let (format_version, distribution) = document_root(value, cursor, "a version 4 document")?;
-    Ok(IRFile {
-        format_version: decode_format_version(format_version, &format!("{cursor}/formatVersion"))?,
-        distribution: decode_distribution(distribution, &format!("{cursor}/distribution"))?,
-    })
+    let root = members_of(value, cursor, "a version 4 document")?;
+    let (written_version, distribution) = if root.contains_key("$meta") {
+        let version = root.get("formatVersion").ok_or_else(|| {
+            Diagnostic::normalization(
+                DiagnosticCode::MissingFormatVersion,
+                cursor,
+                "the root object is missing formatVersion",
+            )
+        })?;
+        let decoded = decode_format_version(version, &format!("{cursor}/formatVersion"))?;
+        if decoded != FormatVersion::String("4.1.0".to_owned()) {
+            return Err(unknown_member(&format!("{cursor}/$meta"), "$meta"));
+        }
+        for key in root.keys() {
+            if !matches!(key.as_str(), "formatVersion" | "distribution" | "$meta") {
+                return Err(unknown_member(&format!("{cursor}/{key}"), key));
+            }
+        }
+        (
+            version,
+            root.get("distribution")
+                .ok_or_else(|| missing(cursor, "distribution"))?,
+        )
+    } else {
+        document_root(value, cursor, "a version 4 document")?
+    };
+    let format_version =
+        decode_format_version(written_version, &format!("{cursor}/formatVersion"))?;
+    let metadata = root
+        .get("$meta")
+        .map(|value| {
+            DocumentMeta::parse(value)
+                .map_err(|error| invalid_type(&format!("{cursor}/$meta"), error))
+        })
+        .transpose()?
+        .map(Box::new);
+    let mut distribution = decode_distribution(distribution, &format!("{cursor}/distribution"))?;
+    if format_version != FormatVersion::String("4.1.0".to_owned())
+        && distribution.contains_linked_metadata()
+    {
+        return Err(invalid_type(
+            cursor,
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
+    validate_document_scopes(&mut distribution, metadata.as_deref())
+        .map_err(|error| invalid_type(cursor, error))?;
+    let file = IRFile {
+        format_version,
+        distribution,
+        metadata,
+    };
+    if file
+        .metadata
+        .as_ref()
+        .is_some_and(|meta| !meta.assertion_sources.is_empty())
+    {
+        // Source selectors need every carrier and the containing file before
+        // they can be matched. The datatype placeholder gives typed @json
+        // objects a stable identity here; declaration validation follows at
+        // the acquired-provider boundary.
+        let owner = DocumentId::new("$document").expect("fixed nonempty identity");
+        expand_v4_single_file_graph(&file, &owner, &ContextResources::new("."), |predicate| {
+            Some(predicate.clone())
+        })
+        .map_err(|error| invalid_type(cursor, error.to_string()))?;
+    }
+    Ok(file)
 }
 
 /// Decodes `formatVersion` through the shared format-version contract, reporting its stable
@@ -1302,7 +1450,7 @@ pub(in crate::ir) fn decode_format_version(
 ) -> Result<FormatVersion, Diagnostic> {
     let scalar =
         ScalarValue::from_json(value).map_err(|error| format_version_diagnostic(error, cursor))?;
-    let support = SupportTable::reference();
+    let support = SupportTable::linked_metadata();
     let normalized = NormalizedFormatVersion::from_scalar(&scalar, &support)
         .map_err(|error| format_version_diagnostic(error, cursor))?;
     // The contract records compatibility rather than failing on it, because a tool may want to
@@ -1386,6 +1534,19 @@ fn decode_file_format_version(
     decode_format_version(written, &format!("{cursor}/formatVersion"))
 }
 
+/// In 4.1 the manifest owns document metadata. A `$meta` on another tree file must not be
+/// silently stripped as the older tree profiles did.
+fn reject_non_manifest_meta(
+    value: &JsonValue,
+    version: &FormatVersion,
+    cursor: &str,
+) -> Result<(), Diagnostic> {
+    if *version == FormatVersion::String("4.1.0".to_owned()) && value.get("$meta").is_some() {
+        return Err(unknown_member(&format!("{cursor}/$meta"), "$meta"));
+    }
+    Ok(())
+}
+
 /// What to call a JSON value in a message, the way every reader that has to say what it found
 /// instead calls it.
 fn describe_json(value: &JsonValue) -> &'static str {
@@ -1406,6 +1567,18 @@ pub(in crate::ir) fn decode_distribution_manifest_file(
 ) -> Result<DistributionManifestFile, Diagnostic> {
     let root = root_without_meta(value, cursor, "a distribution manifest")?;
     let format_version = decode_file_format_version(&root, cursor)?;
+    let metadata = if format_version == FormatVersion::String("4.1.0".to_owned()) {
+        value
+            .get("$meta")
+            .map(|value| {
+                DocumentMeta::parse(value)
+                    .map_err(|error| invalid_type(&format!("{cursor}/$meta"), error))
+            })
+            .transpose()?
+            .map(Box::new)
+    } else {
+        None
+    };
     let members = wrapper_members_of(
         "DistributionManifestFile",
         &root,
@@ -1485,6 +1658,7 @@ pub(in crate::ir) fn decode_distribution_manifest_file(
         path_budget,
         dependencies,
         entry_points,
+        metadata,
     })
 }
 
@@ -1565,6 +1739,7 @@ pub(in crate::ir) fn decode_module_manifest_file(
 ) -> Result<ModuleManifestFile, Diagnostic> {
     let root = root_without_meta(value, cursor, "a module manifest")?;
     let format_version = decode_file_format_version(&root, cursor)?;
+    reject_non_manifest_meta(value, &format_version, cursor)?;
     let members = wrapper_members_of(
         "ModuleManifestFile",
         &root,
@@ -1635,6 +1810,14 @@ pub(in crate::ir) fn decode_module_manifest_file(
         },
         |value, cursor| decode_documented(value, cursor, decode_value_specification),
     )?;
+    if format_version != FormatVersion::String("4.1.0".to_owned())
+        && (module_entries_have_metadata(&types) || module_entries_have_metadata(&values))
+    {
+        return Err(invalid_type(
+            cursor,
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
 
     let mut listed = types.listed_names();
     listed.extend(values.listed_names());
@@ -1649,6 +1832,20 @@ pub(in crate::ir) fn decode_module_manifest_file(
         values,
         file_names,
     })
+}
+
+fn module_entries_have_metadata<D: LinkedMetadataCarrier, S: LinkedMetadataCarrier>(
+    entries: &ModuleEntries<D, S>,
+) -> bool {
+    match entries {
+        ModuleEntries::Names(_) => false,
+        ModuleEntries::Definitions(values) => values
+            .values()
+            .any(LinkedMetadataCarrier::contains_linked_metadata),
+        ModuleEntries::Specifications(values) => values
+            .values()
+            .any(LinkedMetadataCarrier::contains_linked_metadata),
+    }
 }
 
 fn decode_module_name(value: &JsonValue, cursor: &str) -> Result<ModuleName, Diagnostic> {
@@ -1827,6 +2024,17 @@ pub(in crate::ir) fn decode_type_definition_file(
         },
         |value, cursor| decode_documented(value, cursor, decode_type_specification),
     )?;
+    if format_version != FormatVersion::String("4.1.0".to_owned())
+        && match &body {
+            NodeFileBody::Def(node) => node.contains_linked_metadata(),
+            NodeFileBody::Spec(node) => node.contains_linked_metadata(),
+        }
+    {
+        return Err(invalid_type(
+            cursor,
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
     Ok(TypeDefinitionFile {
         format_version,
         name,
@@ -1850,6 +2058,17 @@ pub(in crate::ir) fn decode_value_definition_file(
         },
         |value, cursor| decode_documented(value, cursor, decode_value_specification),
     )?;
+    if format_version != FormatVersion::String("4.1.0".to_owned())
+        && match &body {
+            NodeFileBody::Def(node) => node.contains_linked_metadata(),
+            NodeFileBody::Spec(node) => node.contains_linked_metadata(),
+        }
+    {
+        return Err(invalid_type(
+            cursor,
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
     Ok(ValueDefinitionFile {
         format_version,
         name,
@@ -1870,6 +2089,7 @@ fn decode_node_file<D, S>(
 ) -> Result<(FormatVersion, Name, NodeFileBody<D, S>), Diagnostic> {
     let root = root_without_meta(value, cursor, "a node file")?;
     let format_version = decode_file_format_version(&root, cursor)?;
+    reject_non_manifest_meta(value, &format_version, cursor)?;
     let members = wrapper_members_of(
         node,
         &root,

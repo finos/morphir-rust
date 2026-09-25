@@ -1,8 +1,9 @@
 //! Ion spelling of v4 attributes.
 //!
-//! A type's attributes are members of its expanded struct: `source`, `constraints` and
-//! `extensions`. A value's or a pattern's attributes are one struct right after the S-expression
-//! head: `source`, `inferredType` and `extensions`. `source` is
+//! A type's attributes are members of its expanded struct: `source`, `constraints`,
+//! `extensions`, `@context` and `facts`. A value's or a pattern's attributes are one struct
+//! right after the S-expression head: `source`, `inferredType`, `extensions`, `@context` and
+//! `facts`. `source` is
 //! `{ startLine, startColumn, endLine, endColumn }`. `constraints` and `extensions` are JSON
 //! objects. Empty members are omitted, and empty attributes are not written at all.
 
@@ -17,12 +18,13 @@ use super::types::{read_type, write_type};
 use crate::ir_transport::TransportDiagnostic;
 use crate::ir_transport::ion::{required_field, struct_fields};
 
-const VALUE_MEMBERS: [&str; 3] = ["source", "inferredType", "extensions"];
+const VALUE_MEMBERS: [&str; 5] = ["source", "inferredType", "extensions", "@context", "facts"];
 
 pub(super) fn read_type_attributes(
     fields: &BTreeMap<&str, &Element>,
 ) -> Result<TypeAttributes, TransportDiagnostic> {
     Ok(TypeAttributes {
+        metadata: read_metadata(fields)?,
         source: fields.get("source").map(|e| read_source(e)).transpose()?,
         constraints: object(fields, "constraints")?,
         extensions: object(fields, "extensions")?,
@@ -33,6 +35,7 @@ pub(super) fn with_type_attributes(
     mut builder: ion_rs::StructBuilder,
     attributes: &TypeAttributes,
 ) -> Result<ion_rs::StructBuilder, TransportDiagnostic> {
+    builder = with_metadata(builder, &attributes.metadata)?;
     if let Some(source) = &attributes.source {
         builder = builder.with_field("source", write_source(source));
     }
@@ -51,10 +54,11 @@ pub(super) fn read_value_attributes(
     let fields = struct_fields(element, "attributes")?;
     if let Some(unknown) = fields.keys().find(|name| !VALUE_MEMBERS.contains(name)) {
         return Err(member(format!(
-            "value attributes are source, inferredType and extensions, found {unknown}"
+            "value attributes are source, inferredType, extensions, @context and facts, found {unknown}"
         )));
     }
     Ok(ValueAttributes {
+        metadata: read_metadata(&fields)?,
         source: fields.get("source").map(|e| read_source(e)).transpose()?,
         inferred_type: fields
             .get("inferredType")
@@ -72,6 +76,7 @@ pub(super) fn value_attributes(
         return Ok(None);
     }
     let mut builder = ion_rs::Struct::builder();
+    builder = with_metadata(builder, &attributes.metadata)?;
     if let Some(source) = &attributes.source {
         builder = builder.with_field("source", write_source(source));
     }
@@ -82,6 +87,36 @@ pub(super) fn value_attributes(
         builder = builder.with_field("extensions", object_to_ion(&attributes.extensions)?);
     }
     Ok(Some(Element::from(builder.build())))
+}
+
+fn read_metadata(
+    fields: &BTreeMap<&str, &Element>,
+) -> Result<morphir_core::ir::v4::MetadataScope, TransportDiagnostic> {
+    let context = fields
+        .get("@context")
+        .map(|value| super::json::from_ion(value))
+        .transpose()?;
+    let facts = fields
+        .get("facts")
+        .map(|value| super::json::from_ion(value))
+        .transpose()?;
+    morphir_core::ir::v4::MetadataScope::parse_unresolved(context.as_ref(), facts.as_ref())
+        .map_err(member)
+}
+
+fn with_metadata(
+    mut builder: ion_rs::StructBuilder,
+    metadata: &morphir_core::ir::v4::MetadataScope,
+) -> Result<ion_rs::StructBuilder, TransportDiagnostic> {
+    if let Some(context) = &metadata.context {
+        builder = builder.with_field("@context", super::json::to_ion(context.authored())?);
+    }
+    if !metadata.facts.is_empty() {
+        let value =
+            serde_json::to_value(&metadata.facts).map_err(|error| member(error.to_string()))?;
+        builder = builder.with_field("facts", super::json::to_ion(&value)?);
+    }
+    Ok(builder)
 }
 
 fn object(

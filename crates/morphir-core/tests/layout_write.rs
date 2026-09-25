@@ -59,6 +59,22 @@ fn refusal(file: &IRFile, policy: &TreePolicy) -> Diagnostic {
     write_tree(file, policy).expect_err("this tree cannot be written")
 }
 
+#[test]
+fn proposed_revision_writes_tree_files_and_4_0_refuses_document_metadata() {
+    let mut file = json_document(DOCUMENT_0006);
+    file.format_version = FormatVersion::String("4.1.0".to_owned());
+    let files = write_tree(&file, &policy(Profile::Json, 4000)).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&files[0].1).unwrap();
+    assert_eq!(manifest["formatVersion"], serde_json::json!("4.1.0"));
+
+    file.format_version = FormatVersion::Integer(4);
+    file.metadata = Some(Box::new(
+        morphir_core::ir::v4::DocumentMeta::parse(&serde_json::json!({})).unwrap(),
+    ));
+    let error = refusal(&file, &policy(Profile::Json, 4000));
+    assert_eq!(error.code, DiagnosticCode::InvalidDistributionShape);
+}
+
 fn assert_refusal(diagnostic: &Diagnostic, cursor: &str, message: &str) {
     assert_eq!(diagnostic.code, DiagnosticCode::InvalidDistributionShape);
     assert_eq!(diagnostic.stage, DiagnosticStage::Semantic);
@@ -336,6 +352,37 @@ fn module_with_types(keys: &[&str]) -> AccessControlled<ModuleDefinition> {
     }
 }
 
+#[test]
+fn direct_module_writer_refuses_4_0_node_facts() {
+    let mut module = module_with_types(&["example"]);
+    let TypeDefinition::TypeAliasDefinition { type_expr, .. } =
+        &mut module.value.types.get_mut("example").unwrap().value.value
+    else {
+        unreachable!()
+    };
+    let morphir_core::ir::v4::Type::Unit(attributes) = type_expr else {
+        unreachable!()
+    };
+    attributes.metadata = morphir_core::ir::v4::MetadataScope::parse(
+        Some(&serde_json::json!({
+            "deprecated": "morphir://ir/pkg/acme/metadata?format=4.0.0#/module/lifecycle/value/deprecated"
+        })),
+        Some(&serde_json::json!({"deprecated": true})),
+    )
+    .unwrap();
+    assert!(
+        write_definition_module(
+            Root::Pkg,
+            &package("acme"),
+            "example",
+            &module,
+            &FormatVersion::String("4.0.0".to_owned()),
+            &policy(Profile::Json, 4000),
+        )
+        .is_err()
+    );
+}
+
 fn package(name: &str) -> PackageName {
     PackageName::from_canonical_string(name).expect("a canonical package name")
 }
@@ -374,6 +421,7 @@ fn two_module_keys_escaping_to_one_directory_leave_one_entry_per_path() {
 
     let file = IRFile {
         format_version: FormatVersion::Integer(4),
+        metadata: None,
         distribution: morphir_core::ir::Distribution::Library(morphir_core::ir::LibraryContent {
             package_name: package("acme"),
             dependencies: IndexMap::new(),
@@ -526,7 +574,7 @@ fn a_specification_module_writes_no_access_and_one_module_at_a_time() {
 #[test]
 fn write_manifest_answers_the_manifest_path_and_its_bytes() {
     let file = yaml_document(DOCUMENT_0008);
-    let (path, text) = write_manifest(&file, &policy(Profile::Yaml, 4000));
+    let (path, text) = write_manifest(&file, &policy(Profile::Yaml, 4000)).unwrap();
     assert_eq!(path, TREE_0008[0].0);
     assert_eq!(text, TREE_0008[0].1);
 }
@@ -541,12 +589,19 @@ fn write_manifest_header_writes_the_manifest_without_the_distribution() {
         package: PackageName::parse("my-org/my-project"),
         dependencies: vec![PackageName::parse("morphir/SDK")],
         entry_points: EntryPoints::new(),
+        metadata: None,
     };
 
-    let (path, text) = write_manifest_header(&header, &policy(Profile::Yaml, 4000));
+    let (path, text) = write_manifest_header(&header, &policy(Profile::Yaml, 4000)).unwrap();
 
     assert_eq!(path, TREE_0008[0].0);
     assert_eq!(text, TREE_0008[0].1);
+
+    let mut invalid = header;
+    invalid.metadata = Some(Box::new(
+        morphir_core::ir::v4::DocumentMeta::parse(&serde_json::json!({})).unwrap(),
+    ));
+    assert!(write_manifest_header(&invalid, &policy(Profile::Yaml, 4000)).is_err());
 }
 
 // =============================================================================

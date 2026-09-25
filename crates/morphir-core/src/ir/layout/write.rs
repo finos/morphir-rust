@@ -41,7 +41,7 @@ use crate::ir::v4::distribution::{Distribution, EntryPoints};
 use crate::ir::v4::module::{ModuleDefinition, ModuleSpecification};
 use crate::ir::v4::package::{PackageDefinition, PackageSpecification};
 use crate::ir::v4::tree_files::DistributionKind;
-use crate::ir::v4::{FormatVersion, IRFile};
+use crate::ir::v4::{DocumentMeta, FormatVersion, IRFile, LinkedMetadataCarrier};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage};
 use crate::naming::{ModuleName, Name, PackageName};
 
@@ -67,11 +67,10 @@ struct Stem<'a, T> {
 
 /// Everything the distribution manifest says, held apart from the distribution it describes.
 ///
-/// A distribution manifest names only its package, its kind, its dependencies and its entry
-/// points — never a module — so a caller streaming a tree one module at a time can accumulate this
-/// as the modules go past and write the manifest at the end without ever holding the whole
-/// [`IRFile`]. [`write_manifest`] builds one from a complete distribution; a streaming writer
-/// builds one from the header it was handed.
+/// A distribution manifest names its package, kind, dependencies, entry points, and optional 4.1
+/// document metadata — never a module — so a caller streaming one module at a time can write the
+/// manifest at the end. [`write_manifest`] builds one from a complete distribution; a streaming
+/// writer builds one from its header, metadata event, and dependency names.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ManifestHeader {
     pub format_version: FormatVersion,
@@ -81,14 +80,18 @@ pub struct ManifestHeader {
     pub dependencies: Vec<PackageName>,
     /// An application's entry points; empty on the other two kinds.
     pub entry_points: EntryPoints,
+    /// The 4.1 document graph and its source records, owned by the manifest.
+    pub metadata: Option<Box<DocumentMeta>>,
 }
 
 /// The distribution manifest a header spells: the tree's root file, and the only one that names
 /// the whole.
 ///
-/// Total, because a manifest carries only names, a kind, a number and its entry points, none of
-/// which can fail to serialize; the fallback below is unreachable rather than a case to handle.
-pub fn write_manifest_header(header: &ManifestHeader, policy: &TreePolicy) -> (String, String) {
+/// Refuses metadata on a pre-4.1 manifest instead of publishing an invalid or empty file.
+pub fn write_manifest_header(
+    header: &ManifestHeader,
+    policy: &TreePolicy,
+) -> Result<(String, String), Diagnostic> {
     let envelope = Envelope {
         kind: header.distribution,
         package: header.package.clone(),
@@ -97,14 +100,15 @@ pub fn write_manifest_header(header: &ManifestHeader, policy: &TreePolicy) -> (S
         extra: V4Extra {
             format_version: header.format_version.clone(),
             entry_points: header.entry_points.clone(),
+            metadata: header.metadata.clone(),
         },
     };
-    let value = V4::encode_manifest(&envelope).unwrap_or(serde_json::Value::Null);
-    (MANIFEST.to_owned(), policy.profile.write(&value))
+    let value = V4::encode_manifest(&envelope)?;
+    Ok((MANIFEST.to_owned(), policy.profile.write(&value)))
 }
 
 /// The distribution manifest of a whole distribution.
-pub fn write_manifest(file: &IRFile, policy: &TreePolicy) -> (String, String) {
+pub fn write_manifest(file: &IRFile, policy: &TreePolicy) -> Result<(String, String), Diagnostic> {
     write_manifest_header(&manifest_header(file), policy)
 }
 
@@ -116,6 +120,7 @@ fn manifest_header(file: &IRFile) -> ManifestHeader {
         package: file.distribution.package_name().clone(),
         dependencies: dependency_names(&file.distribution),
         entry_points: entry_points_of(&file.distribution),
+        metadata: file.metadata.clone(),
     }
 }
 
@@ -131,6 +136,7 @@ pub fn write_definition_module(
     format_version: &FormatVersion,
     policy: &TreePolicy,
 ) -> Result<Vec<(String, String)>, Diagnostic> {
+    refuse_old_version_metadata(module, format_version)?;
     let path = module_path(root, package, module_name)?;
     let definition = &module.value;
     let header = ModuleHeader {
@@ -165,6 +171,7 @@ pub fn write_specification_module(
     format_version: &FormatVersion,
     policy: &TreePolicy,
 ) -> Result<Vec<(String, String)>, Diagnostic> {
+    refuse_old_version_metadata(module, format_version)?;
     let path = module_path(root, package, module_name)?;
     let dir = module_dir(root, package, path.as_path());
 
@@ -212,11 +219,21 @@ fn nodes<'a, T, N>(entries: &'a IndexMap<String, T>, node: fn(&'a T) -> N) -> In
 /// its `deps/` holds definitions (distributions-0010). A logical path appears exactly once, at the
 /// position it was first written and carrying the last text written to it — see [`Files`].
 ///
-/// Fails with `invalid_distribution_shape` when the path budget cannot hold the tree, or when a
-/// module specification carries annotations a tree has nowhere to put.
+/// Fails with `invalid_distribution_shape` when the path budget cannot hold the tree or when
+/// linked metadata is written under an older format version.
 pub fn write_tree(file: &IRFile, policy: &TreePolicy) -> Result<Vec<(String, String)>, Diagnostic> {
+    if file.format_version != FormatVersion::String("4.1.0".to_owned())
+        && file.has_linked_metadata()
+    {
+        return Err(Diagnostic::new(
+            DiagnosticCode::InvalidDistributionShape,
+            DiagnosticStage::Semantic,
+            "",
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
     let mut out = Files::default();
-    out.set(write_manifest(file, policy));
+    out.set(write_manifest(file, policy)?);
     let format_version = &file.format_version;
 
     match &file.distribution {
@@ -286,6 +303,21 @@ pub fn write_tree(file: &IRFile, policy: &TreePolicy) -> Result<Vec<(String, Str
     }
 
     Ok(out.into_vec())
+}
+
+fn refuse_old_version_metadata<T: LinkedMetadataCarrier>(
+    value: &T,
+    version: &FormatVersion,
+) -> Result<(), Diagnostic> {
+    if *version != FormatVersion::String("4.1.0".to_owned()) && value.contains_linked_metadata() {
+        return Err(Diagnostic::new(
+            DiagnosticCode::InvalidDistributionShape,
+            DiagnosticStage::Semantic,
+            "",
+            "linked metadata requires formatVersion 4.1.0",
+        ));
+    }
+    Ok(())
 }
 
 /// The tree as the reference accumulates it: a map keyed by logical path, iterated in the order

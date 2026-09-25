@@ -62,6 +62,30 @@ fn assert_diagnostic(diagnostic: &Diagnostic, code: DiagnosticCode, cursor: &str
     assert_eq!(diagnostic.message, message, "message");
 }
 
+#[test]
+fn tree_reader_rejects_invalid_linked_carriers_and_reads_4_1() {
+    let files = escape_tree(|files| {
+        let mut node = morphir_core::ir::yaml::read(files.get(TYPE_FILE).unwrap()).unwrap();
+        node["def"]["Public"]["TypeAliasDefinition"]["typeExp"] = serde_json::json!({
+            "Unit": {"attributes": {"@context": {"broken": {"@id": 123}}}}
+        });
+        files.insert(
+            TYPE_FILE.to_owned(),
+            morphir_core::ir::yaml::write_canonical(&node),
+        );
+    });
+    assert!(read_tree(&files, Profile::Yaml).is_err());
+
+    let mut files = common::tree(TREE_0003);
+    for text in files.values_mut() {
+        *text = text.replace("formatVersion: 4", "formatVersion: 4.1.0");
+    }
+    assert_eq!(
+        read_tree(&files, Profile::Yaml).unwrap().0.format_version,
+        morphir_core::ir::FormatVersion::String("4.1.0".to_owned())
+    );
+}
+
 /// The document a tree read to, as canonical JSON: the text form the kit compares.
 fn canonical(file: &IRFile) -> String {
     json::write_ir_file(file)

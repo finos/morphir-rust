@@ -22,6 +22,9 @@ fn main() -> Result<()> {
         ["--suite", "node-address"] => {
             morphir_mck_adapter::node_address::run(io::stdin().lock(), io::stdout())?
         }
+        ["--suite", "metadata"] => {
+            morphir_mck_adapter::metadata::run(io::stdin().lock(), io::stdout())?
+        }
         ["--suite", "package"] => {
             morphir_mck_adapter::package::run(io::stdin().lock(), io::stdout())?
         }
@@ -33,7 +36,7 @@ fn main() -> Result<()> {
         }
         ["package-mvp"] => morphir_mck_adapter::package_mvp::run(io::stdin().lock(), io::stdout())?,
         _ => anyhow::bail!(
-            "usage: mck-adapter-rust [--suite ir|package [--contract 0.1.0-draft.1|0.1.0-draft.2]] | package-mvp"
+            "usage: mck-adapter-rust [--suite ir|metadata|package [--contract 0.1.0-draft.1|0.1.0-draft.2]] | package-mvp"
         ),
     }
     Ok(())

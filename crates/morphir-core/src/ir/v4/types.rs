@@ -16,7 +16,6 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
 use super::access::AccessControlled;
-use super::annotation::Annotation;
 use super::attributes::TypeAttributes;
 use super::value::HoleReason;
 use crate::naming::{FQName, Name};
@@ -170,18 +169,18 @@ impl Field {
 pub enum TypeSpecification {
     /// Type alias specification
     TypeAliasSpecification {
-        annotations: Vec<Annotation>,
+        annotations: super::annotation::Annotations,
         type_params: Vec<Name>,
         type_expr: Type,
     },
     /// Opaque type (constructors hidden)
     OpaqueTypeSpecification {
-        annotations: Vec<Annotation>,
+        annotations: super::annotation::Annotations,
         type_params: Vec<Name>,
     },
     /// Custom type with public constructors
     CustomTypeSpecification {
-        annotations: Vec<Annotation>,
+        annotations: super::annotation::Annotations,
         type_params: Vec<Name>,
         constructors: Vec<ConstructorSpecification>,
     },
@@ -191,7 +190,7 @@ pub enum TypeSpecification {
     /// "toBaseType": … } }`. All four members are required, and the two conversions are FQNames
     /// rather than expressions.
     DerivedTypeSpecification {
-        annotations: Vec<Annotation>,
+        annotations: super::annotation::Annotations,
         type_params: Vec<Name>,
         base_type: Type,
         from_base_type: FQName,
@@ -209,32 +208,32 @@ impl Serialize for TypeSpecification {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Alias<'a> {
-            #[serde(skip_serializing_if = "<[Annotation]>::is_empty")]
-            annotations: &'a [Annotation],
+            #[serde(skip_serializing_if = "super::annotation::Annotations::is_empty")]
+            annotations: &'a super::annotation::Annotations,
             type_params: &'a [Name],
             type_exp: &'a Type,
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Opaque<'a> {
-            #[serde(skip_serializing_if = "<[Annotation]>::is_empty")]
-            annotations: &'a [Annotation],
+            #[serde(skip_serializing_if = "super::annotation::Annotations::is_empty")]
+            annotations: &'a super::annotation::Annotations,
             #[serde(skip_serializing_if = "<[Name]>::is_empty")]
             type_params: &'a [Name],
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Custom<'a> {
-            #[serde(skip_serializing_if = "<[Annotation]>::is_empty")]
-            annotations: &'a [Annotation],
+            #[serde(skip_serializing_if = "super::annotation::Annotations::is_empty")]
+            annotations: &'a super::annotation::Annotations,
             type_params: &'a [Name],
             constructors: indexmap::IndexMap<String, Vec<(&'a Name, &'a Type)>>,
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Derived<'a> {
-            #[serde(skip_serializing_if = "<[Annotation]>::is_empty")]
-            annotations: &'a [Annotation],
+            #[serde(skip_serializing_if = "super::annotation::Annotations::is_empty")]
+            annotations: &'a super::annotation::Annotations,
             type_params: &'a [Name],
             base_type: &'a Type,
             from_base_type: String,
@@ -315,7 +314,7 @@ impl<'de> Deserialize<'de> for TypeSpecification {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_type_specification,
         )
@@ -402,7 +401,7 @@ impl<'de> Deserialize<'de> for Incompleteness {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_incompleteness,
         )
@@ -534,7 +533,7 @@ impl<'de> Deserialize<'de> for TypeDefinition {
     where
         D: Deserializer<'de>,
     {
-        super::serde_document::deserialize_with(
+        super::serde_document::deserialize_standalone_with(
             deserializer,
             super::serde_document::decode_type_definition,
         )
@@ -600,7 +599,7 @@ mod tests {
     #[test]
     fn test_constructor_spec_name_roundtrips_through_canonical_map_key() {
         let spec = TypeSpecification::CustomTypeSpecification {
-            annotations: vec![],
+            annotations: Vec::new().into(),
             type_params: vec![],
             constructors: vec![ConstructorSpecification {
                 name: Name::from("GC"),

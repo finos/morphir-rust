@@ -8,6 +8,7 @@
 
 use schemars::JsonSchema;
 use serde::Deserializer;
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::format_version::{
@@ -20,6 +21,9 @@ pub mod annotation;
 pub mod attributes;
 pub mod distribution;
 pub mod legacy;
+pub mod linked_metadata;
+mod linked_metadata_project;
+pub(crate) mod linked_metadata_scan;
 pub mod literal;
 pub mod module;
 pub mod package;
@@ -41,12 +45,17 @@ pub use crate::naming::Path;
 pub use access::{Access, AccessControlled};
 
 // Re-export annotations, which specifications carry and definitions do not
-pub use annotation::{Annotation, AnnotationArgument};
+pub use annotation::{Annotation, AnnotationArgument, Annotations};
 
 // Re-export core expression types
 pub use crate::ir::decimal::{DecimalLiteral, InvalidDecimalLexeme};
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
 pub use legacy::{SpellingMode, accept_member, take_warnings, with_spelling_mode};
+pub use linked_metadata::{DocumentMeta, MetadataScope};
+pub use linked_metadata_project::{
+    DocumentGraphError, expand_document_graph, expand_v4_single_file_graph,
+};
+pub use linked_metadata_scan::LinkedMetadataCarrier;
 pub use literal::{FloatLiteral, InvalidFloatLexeme, Literal};
 pub use pattern::Pattern;
 pub use serde_v4::{TypeEncoding, with_type_encoding};
@@ -89,14 +98,40 @@ pub use value::{
 
 /// Top-level IR file structure.
 ///
-/// `formatVersion` comes first and `distribution` second; a document that writes them the other
-/// way round is the same document. `$meta` is reserved for the files of a document tree, not for
-/// a single document, so it is unknown here (distributions-0009).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// `formatVersion` comes first and `distribution` second. The optional `$meta`
+/// belongs to the document in the proposed 4.1.0 profile; a document tree stores it
+/// in its manifest.
+#[derive(Debug, Clone, PartialEq)]
 pub struct IRFile {
     pub format_version: FormatVersion,
     pub distribution: Distribution,
+    /// Document-owned 4.1.0 metadata, separate from node-local carriers.
+    pub metadata: Option<Box<DocumentMeta>>,
+}
+
+impl IRFile {
+    /// Whether any node, specification, or document carrier contains linked metadata.
+    pub fn has_linked_metadata(&self) -> bool {
+        self.metadata.is_some() || self.distribution.contains_linked_metadata()
+    }
+}
+
+impl Serialize for IRFile {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let proposed = self.format_version == FormatVersion::String("4.1.0".to_owned());
+        if !proposed && self.has_linked_metadata() {
+            return Err(serde::ser::Error::custom(
+                "linked metadata requires formatVersion 4.1.0",
+            ));
+        }
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("formatVersion", &self.format_version)?;
+        map.serialize_entry("distribution", &self.distribution)?;
+        if let Some(metadata) = &self.metadata {
+            map.serialize_entry("$meta", metadata)?;
+        }
+        map.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for IRFile {

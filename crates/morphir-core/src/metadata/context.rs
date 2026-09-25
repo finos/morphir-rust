@@ -281,6 +281,64 @@ pub fn resolve_context(
     )
 }
 
+/// Replace authored context references with their effective inline bindings
+/// using only resources the caller has already acquired and verified. This is
+/// an in-memory validation view; callers retain the original document bytes
+/// for archive identity and roundtrip.
+pub fn inline_document_contexts(
+    document: &Value,
+    resources: &ContextResources,
+    source_file: Option<&str>,
+) -> Result<Value, ContextError> {
+    let mut result = document.clone();
+    let parent = if let Some(context) = result
+        .get_mut("$meta")
+        .and_then(|meta| meta.get_mut("@context"))
+    {
+        let effective = resolve_context(None, context, resources, source_file)?;
+        *context = effective.to_inline_value();
+        effective
+    } else {
+        EffectiveContext::default()
+    };
+    inline_node_contexts(&mut result, &parent, resources, source_file)?;
+    Ok(result)
+}
+
+fn inline_node_contexts(
+    value: &mut Value,
+    parent: &EffectiveContext,
+    resources: &ContextResources,
+    source_file: Option<&str>,
+) -> Result<(), ContextError> {
+    match value {
+        Value::Object(object) => {
+            for (name, child) in object {
+                if matches!(
+                    name.as_str(),
+                    "$meta" | "@context" | "facts" | "@graph" | "assertionSources" | "extensions"
+                ) {
+                    continue;
+                }
+                if matches!(name.as_str(), "attributes" | "annotations")
+                    && let Some(context) = child.get_mut("@context")
+                {
+                    let effective = resolve_context(Some(parent), context, resources, source_file)?;
+                    *context = effective.to_inline_value();
+                }
+                inline_node_contexts(child, parent, resources, source_file)?;
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                inline_node_contexts(child, parent, resources, source_file)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum ContextBase<'a> {
     Workspace,

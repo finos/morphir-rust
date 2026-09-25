@@ -1,7 +1,9 @@
 //! Publication-time binding of metadata node identities to verified IR bytes.
 
 use super::AuthoredLibrary;
-use morphir_core::metadata::{GraphIndex, GraphMapError};
+use morphir_core::metadata::{
+    ContextResources, GraphIndex, GraphMapError, inline_document_contexts,
+};
 use morphir_core::node_address::{
     ArtifactRevision, ArtifactSelector, NodeCatalog, NodeIndex, NodeResolutionError, NodeUri,
     NodeUriError, Sha256Digest,
@@ -42,8 +44,16 @@ impl PublicationBindings {
     pub fn new(library: &AuthoredLibrary) -> Result<Self, BindingError> {
         let text =
             std::str::from_utf8(library.ir_bytes()).map_err(|_| BindingError::InvalidArchive)?;
-        let (file, _) =
-            morphir_core::ir::json::read_ir_file(text).map_err(|_| BindingError::InvalidArchive)?;
+        let authored =
+            morphir_core::ir::json::read(text).map_err(|_| BindingError::InvalidArchive)?;
+        let mut resources = ContextResources::new(".");
+        for (path, bytes) in library.context_files() {
+            resources.insert_local(path, bytes.to_vec());
+        }
+        let inline = inline_document_contexts(&authored, &resources, Some("ir.json"))
+            .map_err(|_| BindingError::InvalidArchive)?;
+        let (file, _) = morphir_core::ir::json::read_ir_file(&inline.to_string())
+            .map_err(|_| BindingError::InvalidArchive)?;
         let index = NodeIndex::v4_file(&file).map_err(|_| BindingError::InvalidArchive)?;
         let self_artifact = index
             .addresses()

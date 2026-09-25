@@ -1,5 +1,6 @@
 use morphir_core::metadata::{
-    Coercion, ContextError, ContextResources, expand_object, resolve_context,
+    Coercion, ContextError, ContextResources, expand_object, inline_document_contexts,
+    resolve_context,
 };
 use morphir_core::node_address::NodeUri;
 use serde_json::json;
@@ -37,6 +38,47 @@ fn resources() -> ContextResources {
         br#"{"@context":"./cycle-a.jsonld"}"#.to_vec(),
     );
     resources
+}
+
+#[test]
+fn verified_archive_contexts_inline_without_rewriting_fact_data() {
+    let mut resources = ContextResources::new(".");
+    resources.insert_local(
+        "contexts/lifecycle.jsonld",
+        format!(r#"{{"@context":{{"deprecated":"{LIFE}deprecated"}}}}"#).into_bytes(),
+    );
+    let document = json!({
+        "$meta":{"@context":"./contexts/lifecycle.jsonld","@graph":[
+            {"@id":"morphir://ir/pkg/acme/orders?format=4.1.0#/module/api","deprecated":true}
+        ]},
+        "node":{"attributes":{
+            "@context":{"alias":format!("{NAMING}aliases")},
+            "facts":{"alias":{"@value":{"attributes":{"@context":"literal data"}},"@type":"@json"}}
+        }}
+    });
+    let inline = inline_document_contexts(&document, &resources, Some("ir.json")).unwrap();
+    assert_eq!(
+        inline["$meta"]["@context"]["deprecated"],
+        format!("{LIFE}deprecated")
+    );
+    assert_eq!(
+        inline["node"]["attributes"]["@context"]["deprecated"],
+        format!("{LIFE}deprecated")
+    );
+    assert_eq!(
+        inline["node"]["attributes"]["@context"]["alias"],
+        format!("{NAMING}aliases")
+    );
+    assert_eq!(inline["$meta"]["@graph"], document["$meta"]["@graph"]);
+    assert_eq!(
+        inline["node"]["attributes"]["facts"],
+        document["node"]["attributes"]["facts"]
+    );
+    assert_eq!(document["$meta"]["@context"], "./contexts/lifecycle.jsonld");
+    assert!(matches!(
+        inline_document_contexts(&document, &ContextResources::new("."), Some("ir.json")),
+        Err(ContextError::ResourceUnavailable(_))
+    ));
 }
 
 #[test]

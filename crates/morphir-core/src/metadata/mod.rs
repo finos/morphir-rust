@@ -14,7 +14,7 @@ pub(crate) use context::expand_property_objects;
 pub use assertion::{Assertion, AssertionKey, AssertionSource, Carrier, DocumentId, SourceRecord};
 pub use context::{
     Coercion, ContextError, ContextResources, EffectiveContext, ExpandedKey, expand_object,
-    expand_properties, resolve_context,
+    expand_properties, inline_document_contexts, resolve_context,
 };
 pub use graph::{GraphIndex, GraphMapError};
 pub use term::{Fact, GraphName, ObjectTerm, TypedValue};

@@ -427,6 +427,92 @@ fn a_doc_string_with_both_delimiters_stays_triple_quoted_and_escapes_them() {
 }
 
 #[test]
+fn a_doc_string_with_a_mid_line_triple_quote_uses_backticks() {
+    // Fix round 2: gherkin 0.16 treats an occurrence of the delimiter anywhere in a body line as
+    // significant, not only one at the line's start, so the delimiter choice has to look for the
+    // marker anywhere in the body, not just at a line's start.
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+  ```ion
+  a line with \"\"\" in the middle
+  another line
+  ```
+";
+    let (md, source) = read_str("mid-quote.feature.md", text).unwrap();
+    let original_body = md.feature.as_ref().unwrap().scenarios[0].steps[0]
+        .argument
+        .as_ref()
+        .map(|a| match a {
+            StepArgument::DocString(d) => d.body.clone(),
+            StepArgument::Table(_) => panic!("a doc string"),
+        })
+        .unwrap();
+    assert_eq!(
+        original_body,
+        "a line with \"\"\" in the middle\nanother line\n"
+    );
+
+    let (feature_text, _map) = to_feature_text(&md, &source);
+    assert!(feature_text.contains("```ion"), "{feature_text}");
+    let (back, _) = read_str("mid-quote.feature", &feature_text).unwrap();
+    let Some(StepArgument::DocString(d)) = &back.feature.unwrap().scenarios[0].steps[0].argument
+    else {
+        panic!("a doc string")
+    };
+    assert_eq!(d.content_type.as_deref(), Some("ion"));
+    assert_eq!(d.body, original_body);
+}
+
+#[test]
+fn a_doc_string_with_mid_line_delimiters_stays_triple_quoted_and_escapes_them() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+  ```text
+  a line with \"\"\" in the middle
+  another line with ``` mid line too
+  plain
+  ```
+";
+    let (md, source) = read_str("mid-both.feature.md", text).unwrap();
+    let original_body = md.feature.as_ref().unwrap().scenarios[0].steps[0]
+        .argument
+        .as_ref()
+        .map(|a| match a {
+            StepArgument::DocString(d) => d.body.clone(),
+            StepArgument::Table(_) => panic!("a doc string"),
+        })
+        .unwrap();
+    assert_eq!(
+        original_body,
+        "a line with \"\"\" in the middle\nanother line with ``` mid line too\nplain\n"
+    );
+
+    let (feature_text, _map) = to_feature_text(&md, &source);
+    assert!(feature_text.contains("\"\"\"text"), "{feature_text}");
+    assert!(
+        feature_text.contains("a line with \\\"\\\"\\\" in the middle"),
+        "{feature_text}"
+    );
+    let (back, _) = read_str("mid-both.feature", &feature_text).unwrap();
+    let Some(StepArgument::DocString(d)) = &back.feature.unwrap().scenarios[0].steps[0].argument
+    else {
+        panic!("a doc string")
+    };
+    assert_eq!(d.content_type.as_deref(), Some("text"));
+    assert_eq!(d.body, original_body);
+}
+
+#[test]
 fn a_fence_info_string_round_trips_exactly() {
     // Important 4: FenceInfo does not preserve the order of bare words and `key=value` options,
     // so the converter writes `raw`, the fence's original info text, back verbatim.

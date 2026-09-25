@@ -25,10 +25,12 @@
 //!
 //! A table cell is escaped for the three sequences Gherkin gives special meaning inside a cell:
 //! `\`, `|` and a line break, written as `\\`, `\|` and `\n`. A step's doc string is written with
-//! `"""` unless its body has a line that starts with `"""`; then it is written with a triple
-//! backtick fence instead, unless the body also has a line that starts with a triple backtick, in
-//! which case it stays `"""` and every `"""` in the body is escaped as `\"\"\"`, which this
-//! crate's reader already unescapes back to `"""`.
+//! `"""` unless its body contains `"""` anywhere, even in the middle of a line: `gherkin` 0.16
+//! treats an occurrence of the delimiter anywhere in a body line as significant, not only one at
+//! the line's start. When the body contains `"""`, the doc string is written with a triple
+//! backtick fence instead, unless the body also contains a triple backtick anywhere, in which
+//! case it stays `"""` and every `"""` in the body is escaped as `\"\"\"`, which this crate's
+//! reader already unescapes back to `"""`, wherever it appears in a line.
 
 use crate::model::*;
 use crate::span::SourceText;
@@ -310,15 +312,13 @@ fn escape_table_cell(cell: &str) -> String {
 
 /// The delimiter to write a doc string's body with, and whether that body needs its own
 /// delimiter sequence escaped. See the module documentation for the three cases this chooses
-/// between.
+/// between. `gherkin` 0.16 treats an occurrence of the delimiter anywhere in a body line as
+/// significant, not only one at the start of the line, so this checks the body for the marker
+/// appearing anywhere, not just at a line's start.
 fn choose_doc_string_delimiter(body: &str) -> (&'static str, bool) {
-    let starts_with = |marker: &str| {
-        body.lines()
-            .any(|line| line.trim_start().starts_with(marker))
-    };
-    if !starts_with("\"\"\"") {
+    if !body.contains("\"\"\"") {
         ("\"\"\"", false)
-    } else if !starts_with("```") {
+    } else if !body.contains("```") {
         ("```", false)
     } else {
         ("\"\"\"", true)

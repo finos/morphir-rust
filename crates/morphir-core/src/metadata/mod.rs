@@ -7,6 +7,7 @@ pub mod admission;
 mod assertion;
 mod context;
 mod graph;
+mod provider;
 mod term;
 
 pub(crate) use context::expand_property_objects;
@@ -17,6 +18,7 @@ pub use context::{
     expand_properties, inline_document_contexts, resolve_context,
 };
 pub use graph::{GraphIndex, GraphMapError};
+pub use provider::ProviderDeclarationError;
 pub use term::{Fact, GraphName, ObjectTerm, TypedValue};
 
 /// A metadata model or first-increment graph-execution error.

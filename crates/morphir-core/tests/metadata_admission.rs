@@ -217,6 +217,29 @@ fn closure_rejects_duplicates_and_untyped_json_datatype_addresses() {
         PredicateClosure::new([bad]).unwrap_err(),
         AdmissionError::InvalidDatatypeDeclaration,
     );
+    let old_native = PredicateDeclaration::value(
+        uri("morphir://ir/pkg/acme/metadata?format=3.1.0#/module/lifecycle/value/deprecated"),
+        ObjectDeclaration::data(bool_type()),
+        [SubjectRole::ValueSpecification],
+        Interpretation::Descriptive,
+    );
+    assert_eq!(
+        PredicateClosure::new([old_native]).unwrap_err(),
+        AdmissionError::InvalidDeclarationRole,
+    );
+    let wrong_format = PredicateDeclaration::value(
+        target_names_predicate(),
+        ObjectDeclaration::json(
+            uri("morphir://ir/pkg/acme/metadata?format=3.1.0#/module/naming/type/target-names"),
+            target_names_type(),
+        ),
+        [SubjectRole::ValueSpecification],
+        Interpretation::Descriptive,
+    );
+    assert_eq!(
+        PredicateClosure::new([wrong_format]).unwrap_err(),
+        AdmissionError::InvalidDatatypeDeclaration,
+    );
 }
 
 #[test]

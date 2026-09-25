@@ -207,21 +207,31 @@ impl PredicateClosure {
         for declaration in declarations {
             let expected_root = match declaration.role {
                 DeclarationRole::ValueSpecification => {
-                    matches!(declaration.uri.root(), NodeRoot::Value { .. })
+                    declaration.uri.format().major() == 4
+                        && matches!(declaration.uri.root(), NodeRoot::Value { .. })
                 }
                 DeclarationRole::SidecarTypeSpecification => {
-                    matches!(declaration.uri.root(), NodeRoot::Type { .. })
+                    matches!(declaration.uri.format().major(), 3 | 4)
+                        && matches!(declaration.uri.root(), NodeRoot::Type { .. })
                         && matches!(declaration.object, ObjectDeclaration::Json { .. })
                 }
             };
             if !expected_root || !declaration.uri.steps().is_empty() {
                 return Err(AdmissionError::InvalidDeclarationRole);
             }
-            if let ObjectDeclaration::Json { datatype, .. } = &declaration.object
-                && (!matches!(datatype.root(), NodeRoot::Type { .. })
-                    || !datatype.steps().is_empty())
-            {
-                return Err(AdmissionError::InvalidDatatypeDeclaration);
+            if let ObjectDeclaration::Json { datatype, ty } = &declaration.object {
+                let type_major = match ty {
+                    DeclaredDataType::V3(_) => 3,
+                    DeclaredDataType::V4(_) => 4,
+                };
+                if !matches!(datatype.root(), NodeRoot::Type { .. })
+                    || !datatype.steps().is_empty()
+                    || datatype.format().major() != type_major
+                    || (matches!(ty, DeclaredDataType::V3(_))
+                        && declaration.role != DeclarationRole::SidecarTypeSpecification)
+                {
+                    return Err(AdmissionError::InvalidDatatypeDeclaration);
+                }
             }
             if declaration.subjects.is_empty() {
                 return Err(AdmissionError::EmptySubjectRoles);

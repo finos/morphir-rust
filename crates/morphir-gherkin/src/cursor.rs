@@ -86,12 +86,23 @@ impl Document {
         Some(current.0)
     }
 
-    /// A cursor at the document's feature.
-    pub fn cursor(&self) -> Cursor<'_> {
-        Cursor {
+    /// A cursor at the document's feature, or `None` when the document has no feature (a
+    /// comment-only `.feature` file, for example).
+    ///
+    /// ```
+    /// use morphir_gherkin::read_str;
+    ///
+    /// let (doc, _) = read_str("f.feature", "Feature: F\n").unwrap();
+    /// assert_eq!(doc.cursor().unwrap().path().to_string(), "feature");
+    ///
+    /// let (empty, _) = read_str("empty.feature", "# just a comment\n").unwrap();
+    /// assert!(empty.cursor().is_none());
+    /// ```
+    pub fn cursor(&self) -> Option<Cursor<'_>> {
+        self.feature.as_ref().map(|_| Cursor {
             doc: self,
             path: NodePath::feature(),
-        }
+        })
     }
 
     /// A cursor at the first block of the document's preamble, or `None` when the preamble is
@@ -102,6 +113,9 @@ impl Document {
     }
 }
 
+/// A position at one node of a document, with moves to its parent, children and siblings. A
+/// cursor always points at a node that exists; `Document::node` never returns `None` for its
+/// path.
 #[derive(Debug, Clone)]
 pub struct Cursor<'d> {
     doc: &'d Document,
@@ -109,10 +123,12 @@ pub struct Cursor<'d> {
 }
 
 impl<'d> Cursor<'d> {
+    /// The path of the node this cursor is at.
     pub fn path(&self) -> &NodePath {
         &self.path
     }
 
+    /// The node this cursor is at.
     pub fn node(&self) -> Node<'d> {
         self.doc
             .node(&self.path)
@@ -125,6 +141,8 @@ impl<'d> Cursor<'d> {
         matches!(self.path.segments().first(), Some(Segment::Preamble))
     }
 
+    /// A cursor at this node's parent, or `None` at the feature or at a block of the preamble
+    /// (preamble blocks have no parent node).
     pub fn parent(&self) -> Option<Cursor<'d>> {
         if self.is_preamble_block() {
             return None;
@@ -135,6 +153,7 @@ impl<'d> Cursor<'d> {
         })
     }
 
+    /// Cursors at this node's children, in source order.
     pub fn children(&self) -> Vec<Cursor<'d>> {
         children(&self.path, self.node())
             .into_iter()
@@ -158,12 +177,14 @@ impl<'d> Cursor<'d> {
         self.parent().map(|p| p.children()).unwrap_or_default()
     }
 
+    /// A cursor at the sibling right after this one, or `None` when this is the last sibling.
     pub fn next_sibling(&self) -> Option<Cursor<'d>> {
         let siblings = self.siblings();
         let at = siblings.iter().position(|s| s.path == self.path)?;
         siblings.into_iter().nth(at + 1)
     }
 
+    /// A cursor at the sibling right before this one, or `None` when this is the first sibling.
     pub fn previous_sibling(&self) -> Option<Cursor<'d>> {
         let siblings = self.siblings();
         let at = siblings.iter().position(|s| s.path == self.path)?;

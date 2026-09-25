@@ -79,7 +79,7 @@ fn a_path_finds_its_node_and_an_offset_finds_its_path() {
 #[test]
 fn the_cursor_moves_between_parent_children_and_siblings() {
     let doc = doc();
-    let cursor = doc.cursor();
+    let cursor = doc.cursor().unwrap();
     assert_eq!(cursor.path().to_string(), "feature");
     let rule = cursor
         .children()
@@ -95,6 +95,13 @@ fn the_cursor_moves_between_parent_children_and_siblings() {
     assert_eq!(second.path().to_string(), "feature/rule[0]/scenario[1]");
     assert_eq!(second.previous_sibling().unwrap().path(), first.path());
     assert_eq!(second.parent().unwrap().path(), rule.path());
+}
+
+#[test]
+fn cursor_is_none_for_a_comment_only_document() {
+    let (doc, _) = read_str("comment-only.feature", "# just a comment\n").unwrap();
+    assert!(doc.feature.is_none());
+    assert!(doc.cursor().is_none());
 }
 
 // R6: the preamble, a step's notes, and an examples block's notes are also navigable.

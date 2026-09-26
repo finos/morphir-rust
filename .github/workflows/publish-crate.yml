@@ -1,0 +1,92 @@
+# Publish one crate to crates.io from a crates/<name>/v<version> tag.
+#
+# The job signs in with the CARGO_REGISTRY_TOKEN repository secret. crates.io
+# needs a token for the first publish of a crate, because trusted publishing
+# can only be set up for a crate that already exists. Once a crate is on
+# crates.io, trusted publishing (rust-lang/crates-io-auth-action in a
+# `crates.io` environment, signed in through GitHub OIDC) replaces the token
+# for it.
+# See docs/contributors/publishing-crates.md.
+name: Publish crate
+
+on:
+  push:
+    tags:
+      - "crates/*/v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing crate tag, for example crates/morphir-config/v0.0.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-crate-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve crate tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      crate: ${{ steps.release.outputs.crate }}
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - name: Checkout existing tag
+        uses: actions/checkout@v7
+        with:
+          ref: >-
+            ${{ github.event_name == 'workflow_dispatch'
+              && format('refs/tags/{0}', inputs.tag)
+              || github.ref }}
+          fetch-depth: 0
+
+      - name: Validate tag, crate version and main ancestry
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          RELEASE_COMMIT="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          python3 .github/scripts/crate_release.py \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_COMMIT" \
+            --main-ref origin/main
+
+  publish:
+    name: Publish ${{ needs.resolve.outputs.crate }} ${{ needs.resolve.outputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: resolve
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: always
+      MISE_ENABLE_TOOLS: rust
+    steps:
+      - name: Checkout tag commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+
+      - name: Install mise
+        uses: jdx/mise-action@v4
+
+      - name: Dry-run publish
+        env:
+          CRATE: ${{ needs.resolve.outputs.crate }}
+        run: cargo publish --dry-run -p "$CRATE" --locked
+
+      - name: Publish to crates.io
+        env:
+          CRATE: ${{ needs.resolve.outputs.crate }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p "$CRATE" --locked

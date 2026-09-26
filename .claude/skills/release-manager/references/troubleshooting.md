@@ -189,7 +189,7 @@ git push origin v<version> --force
 **Solution**: You cannot unpublish GitHub releases safely (users may have downloaded). Instead:
 1. Create a new patch release with fixes
 2. Add note to the problematic release describing the issue
-3. Consider yanking from crates.io if published there
+3. A GitHub release does not publish crates. For a bad crate version, see Crate Publish Issues below
 
 ## binstall Issues
 
@@ -209,7 +209,49 @@ git push origin v<version> --force
    morphir-<version>-<target>.tgz
    morphir-<version>-<target>.zip (Windows)
    ```
-3. For crates.io: `cargo publish` separately
+3. For crates.io: crates publish through the `Publish crate` workflow, not the release workflow. See Crate Publish Issues below
+
+## Crate Publish Issues
+
+Crates go to crates.io through the `Publish crate` workflow on a
+`crates/<crate>/v<version>` tag. See `docs/contributors/publishing-crates.md`.
+
+### Resolve job fails
+
+**Symptom**: `crate release error: ...` in the "Resolve crate tag" job
+
+**Causes and fixes**:
+- `does not match`: the tag version is not the version in
+  `crates/<crate>/Cargo.toml`. Delete the tag, fix the version on `main` and
+  tag again.
+- `is not on main`: the tag points at a commit that is not on `main`. Delete
+  the tag and tag the merge commit on `main`.
+- `no crate at crates/<crate>` or `invalid crate tag`: the tag name is wrong.
+  Delete it and use `crates/<crate>/v<semver>`.
+
+Nothing is published when this job fails.
+
+### Publish job fails
+
+**Symptom**: `cargo publish` fails
+
+**Causes and fixes**:
+- `403` or `401`: the `CARGO_REGISTRY_TOKEN` secret is missing, has expired or
+  has no publish scope for the crate. Update the secret and run the workflow
+  again for the same tag (Actions tab, `workflow_dispatch`).
+- `crate version ... is already uploaded`: that version is on crates.io. A
+  version cannot be replaced. Increase the version and tag again.
+- A dependency is not on crates.io: publish the dependency first. See the
+  publish order in `docs/contributors/publishing-crates.md`.
+
+### Published crate version is bad
+
+Publish a new version with the fix. Then yank the bad version so that new
+projects do not select it:
+
+```bash
+cargo yank --version <version> <crate>
+```
 
 ## Getting Help
 

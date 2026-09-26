@@ -45,7 +45,7 @@ authors = ["FINOS <info@finos.org>"]
 license = "Apache-2.0"
 repository = "https://github.com/finos/morphir-rust"
 homepage = "https://github.com/finos/morphir-rust"
-documentation = "https://docs.rs/morphir-rust"
+documentation = "https://finos.github.io/morphir-rust/"
 keywords = ["morphir", "functional", "domain-modeling", "ir"]
 categories = ["development-tools", "parsers"]
 

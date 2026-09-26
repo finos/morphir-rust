@@ -157,6 +157,27 @@ mise run release:tag-create 0.2.0 --push
 mise run release:post-release 0.2.0
 ```
 
+## Publishing a Crate to crates.io
+
+Library crates go to crates.io on their own, not with a `v*` release. Each
+published crate has its own `0.x.y` version in `crates/<crate>/Cargo.toml`
+and its own tag, `crates/<crate>/v<version>`. The `Publish crate` workflow
+(`.github/workflows/publish-crate.yml`) runs on that tag. It checks that the
+crate version equals the tag version and that the tag commit is on `main`,
+then runs `cargo publish --dry-run` and `cargo publish` for that crate.
+
+```bash
+cargo publish --dry-run -p morphir-config --locked
+git tag -a crates/morphir-config/v0.0.1 -m "morphir-config 0.0.1" <main-commit>
+git push origin crates/morphir-config/v0.0.1
+```
+
+`mise run release:version-bump` changes only the shared workspace version.
+It does not change a published crate's version.
+
+See `docs/contributors/publishing-crates.md` for the published crates, the
+version rule, the publish order and the credentials.
+
 ## Rollback Procedure
 
 If a release has issues after tagging but before publishing:

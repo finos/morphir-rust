@@ -1,12 +1,19 @@
 [package]
 name = "morphir-config"
-version.workspace = true
+# Published on its own 0.x.y line, not the shared workspace version.
+# See docs/contributors/publishing-crates.md.
+version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/morphir-config"
+readme = "README.md"
 description = "Portable Morphir configuration parsing, merge, and environment rules"
+keywords = ["morphir", "configuration", "toml", "yaml", "config"]
+categories = ["config", "development-tools"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

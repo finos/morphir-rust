@@ -19,6 +19,7 @@ Documentation for developers contributing to Morphir Rust.
 ## Development
 
 - [Development Guide](development) - Setting up and contributing
+- [Publishing Crates](publishing-crates) - How crates go to crates.io
 
 ## Design Documents
 

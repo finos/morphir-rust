@@ -2159,15 +2159,19 @@ which publishes that one crate.
 
 ## Which crates are published
 
-| Crate | First version | Status |
-|-------|---------------|--------|
-| `morphir-config` | `0.0.1` | First crate. It proves the publish pipeline. |
+| Crate | Current version | Depends on |
+|-------|-----------------|------------|
+| `morphir-config` | `0.0.1` | no workspace crates |
+| `morphir-core` | `0.2.0` | no workspace crates |
+| `morphir-workspace` | `0.2.0` | `morphir-config` |
+| `morphir-extension-sdk` | `0.2.0` | `morphir-workspace` |
+| `morphir-projection` | `0.1.0` | `morphir-core` |
 
 The other crates in the workspace are not on crates.io. They keep the shared
 workspace version (`[workspace.package] version` in the root `Cargo.toml`).
 
 A crate that goes to crates.io leaves the shared version. Its `Cargo.toml`
-sets `version` explicitly, for example `version = "0.0.1"`.
+sets `version` explicitly, for example `version = "0.2.0"`.
 
 ## Version rule
 
@@ -2183,16 +2187,47 @@ users that the change can break them.
 
 ## Publish order
 
-A published crate can only depend on other published crates. A path
-dependency on a workspace crate must also give a `version`, and that version
-must already be on crates.io. Publish crates in this order:
+A published crate can only depend on other published crates. Every path
+dependency on a published crate also gives a `version`, anywhere in the
+workspace:
 
-1. `morphir-config`, which has no workspace dependencies.
-2. `morphir-core` and `morphir-workspace`.
-3. `morphir-common`, which depends on the crates above.
+```toml
+morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
+```
 
-Before you publish a crate that depends on another workspace crate, change
-the dependency to `{ path = "../<crate>", version = "<published version>" }`.
+A workspace build uses the path. The packaged crate depends on that version
+from crates.io, so that version must be on crates.io before the crate that
+depends on it is published. When you change the version of a published crate,
+change the `version` of every path dependency on it too.
+
+Publish the crates in tiers:
+
+- Tier 0: `morphir-config`, which is already on crates.io.
+- Tier 1: `morphir-core` and `morphir-workspace`.
+- Tier 2: `morphir-extension-sdk` and `morphir-projection`.
+
+Publish a tier only after all the crates of the tier before it are visible on
+crates.io. The crates of one tier do not depend on each other, so you can
+publish them in any order.
+
+## Packaging check in CI
+
+The `Package (published crates)` job in the CI workflow packages all the
+published crates together:
+
+```bash
+cargo package -p morphir-config -p morphir-core -p morphir-workspace \
+  -p morphir-extension-sdk -p morphir-projection --locked
+```
+
+Cargo builds each package against the packages of the workspace crates it
+depends on, not against the workspace sources. This finds a crate that would
+not build from crates.io, before its dependencies are published. The job runs
+when one of these crates, `Cargo.toml` or `Cargo.lock` changes.
+
+Some crates leave their tests out of the package with `exclude = ["/tests/"]`,
+because the tests read shared fixtures from the workspace or need a path
+dev-dependency that the package drops.
 
 ## How to publish a crate
 
@@ -2204,6 +2239,9 @@ the dependency to `{ path = "../<crate>", version = "<published version>" }`.
    ```bash
    cargo publish --dry-run -p <crate> --locked
    ```
+
+   The dry run gets the dependencies of the crate from crates.io. Before the
+   tier below is published, use the packaging check above instead.
 
 4. Merge the change to `main`.
 5. Tag the merge commit on `main` and push the tag:

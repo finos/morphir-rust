@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Experimental Morphir Library package metadata and integrity verification"
 
 [dependencies]
-morphir-core = { path = "../morphir-core" }
+morphir-core = { path = "../morphir-core", version = "0.2.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value", "arbitrary_precision"] }
 sha2 = "0.11"

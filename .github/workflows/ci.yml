@@ -51,6 +51,7 @@ jobs:
       job_lint_yaml: ${{ steps.classify.outputs.job_lint_yaml }}
       job_docs_generated: ${{ steps.classify.outputs.job_docs_generated }}
       job_test_release_workflow: ${{ steps.classify.outputs.job_test_release_workflow }}
+      job_package_crates: ${{ steps.classify.outputs.job_package_crates }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -624,6 +625,31 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  package-crates:
+    name: Package (published crates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.job_package_crates == 'true') }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install mise
+        uses: jdx/mise-action@v4
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+
+      # Packaging the crates together lets a crate build against the packages
+      # of the crates it depends on, before those versions are on crates.io.
+      - name: Package and build the published crates
+        run: cargo package -p morphir-config -p morphir-core -p morphir-workspace -p morphir-extension-sdk -p morphir-projection --locked
+
   ci-ok:
     name: CI OK
     runs-on: ubuntu-latest
@@ -647,6 +673,7 @@ jobs:
       - test-unit
       - docs
       - coverage
+      - package-crates
     steps:
       - name: Fail if classification or any needed job failed
         if: ${{ needs.changes.result != 'success' || contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}

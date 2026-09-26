@@ -12,14 +12,14 @@ description = "OpenAPI and JSON Schema backend extension for Morphir"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-morphir-core = { path = "../morphir-core" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk" }
-morphir-projection = { path = "../morphir-projection" }
+morphir-core = { path = "../morphir-core", version = "0.2.0" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.2.0" }
+morphir-projection = { path = "../morphir-projection", version = "0.1.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-morphir-projection = { path = "../morphir-projection", features = ["testing"] }
+morphir-projection = { path = "../morphir-projection", version = "0.1.0", features = ["testing"] }
 jsonschema = "0.56"
 pretty_assertions = "1.4"

@@ -12,8 +12,8 @@ description = "Rust type frontend and backend for Morphir IR v3 and v4"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-morphir-core = { path = "../morphir-core" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk" }
+morphir-core = { path = "../morphir-core", version = "0.2.0" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.2.0" }
 syn.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true

@@ -20,8 +20,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Extension SDK
-morphir-extension-sdk = { path = "../morphir-extension-sdk" }
-morphir-workspace = { path = "../morphir-workspace" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.2.0" }
+morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
 
 # WASM plugin development
 extism-pdk = "1"
@@ -39,7 +39,7 @@ ecow = "=0.2.6"
 im = "15.1"
 
 # Morphir IR (for visitors)
-morphir-core = { path = "../morphir-core" }
+morphir-core = { path = "../morphir-core", version = "0.2.0" }
 indexmap = "2.0"                                # Required for V4 IndexMap structures
 num-bigint = "0.5"                              # IntegerLiteral is arbitrary precision
 anyhow = "1.0"

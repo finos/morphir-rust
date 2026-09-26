@@ -1,23 +1,26 @@
 [package]
 name = "morphir-extension-sdk"
-version.workspace = true
+# Published on its own 0.x.y line, not the shared workspace version.
+# See docs/contributors/publishing-crates.md.
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/morphir-extension-sdk"
+readme = "README.md"
 description = "SDK for building Morphir extensions as WASM plugins"
+keywords = ["morphir", "extension", "plugin", "wasm", "sdk"]
+categories = ["development-tools", "wasm"]
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
 # Workspace dependencies
-morphir-workspace = { path = "../morphir-workspace" }
+morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
 thiserror = { workspace = true }
 url = { workspace = true }
 percent-encoding = { workspace = true }

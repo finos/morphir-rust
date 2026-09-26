@@ -1,18 +1,28 @@
 [package]
 name = "morphir-projection"
+# Published on its own 0.x.y line, not the shared workspace version.
+# See docs/contributors/publishing-crates.md.
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/morphir-projection"
+readme = "README.md"
 description = "Shared Morphir IR normalization for backend extensions"
+keywords = ["morphir", "ir", "codegen", "normalization"]
+categories = ["development-tools", "compilers"]
+# The tests need the `testing` feature through a path dev-dependency that the
+# package drops, so they stay out of the package.
+exclude = ["/tests/"]
 
 [features]
 testing = []
 
 [dependencies]
-morphir-core = { path = "../morphir-core" }
+morphir-core = { path = "../morphir-core", version = "0.2.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = { workspace = true }

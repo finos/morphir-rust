@@ -48,7 +48,16 @@ GATED_JOBS = {
     "lint-yaml": "job_lint_yaml",
     "docs-generated": "job_docs_generated",
     "test-release-workflow": "job_test_release_workflow",
+    "package-crates": "job_package_crates",
 }
+
+PUBLISHED_CRATES = (
+    "morphir-config",
+    "morphir-core",
+    "morphir-workspace",
+    "morphir-extension-sdk",
+    "morphir-projection",
+)
 
 RUST_CACHE_GROUPS = {
     "native": (
@@ -60,6 +69,7 @@ RUST_CACHE_GROUPS = {
         "workspace-wasm",
         "test-native-extension",
         "test-http-extension",
+        "package-crates",
     ),
     "wasm": ("test-extism", "example-wasm", "extension-bundle"),
     "coverage": ("coverage",),
@@ -282,6 +292,11 @@ if ($process.ExitCode -ne 0) { throw 'environment fixture subprocess failed' }
         self.assertIn("        run: mise run test:integration -- ${{ needs.changes.outputs.cargo_packages }}", self.jobs["test-unit"])
         self.assertIn("        run: cargo doc --no-deps ${{ needs.changes.outputs.cargo_packages }}", self.jobs["docs"])
         self.assertIn("          CI_PACKAGES: ${{ needs.changes.outputs.crates }}", self.jobs["coverage"])
+
+    def test_published_crates_are_packaged_together(self) -> None:
+        job = self.jobs["package-crates"]
+        packages = " ".join(f"-p {crate}" for crate in PUBLISHED_CRATES)
+        self.assertIn(f"        run: cargo package {packages} --locked\n", job)
 
     def test_every_job_is_expected(self) -> None:
         self.assertEqual({"changes", "extension-bundle", "ci-ok", *GATED_JOBS}, set(self.jobs))

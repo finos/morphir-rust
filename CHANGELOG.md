@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A `Publish crate` workflow publishes one crate to crates.io from a
+  `crates/<crate>/v<version>` tag, after it checks that the crate version
+  equals the tag version and that the tag commit is on `main`.
+  `morphir-config` leaves the shared workspace version for its own `0.0.1`
+  and is the first crate to publish. See
+  `docs/contributors/publishing-crates.md`.
 - `morphir-core` can derive predicate declarations from native V4.1 provider
   facts, requiring public values with matching output types and rejecting
   malformed declaration objects (finos/morphir#999).

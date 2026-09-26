@@ -9,6 +9,7 @@
 
 use morphir_core::format_version::SupportTable;
 use morphir_core::ir::{Diagnostic, Warning};
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -16,28 +17,27 @@ use std::collections::BTreeMap;
 /// A parsed request, tagged by its `op` on the wire.
 #[derive(Debug, Clone)]
 pub enum Request {
-    Capabilities(DriverContract),
+    Capabilities(Version),
     Decode(DecodeRequest),
     ReadTree(ReadTreeRequest),
     WriteTree(WriteTreeRequest),
     Exit,
 }
 
-/// The contract a driver requested during capabilities negotiation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DriverContract {
-    /// A version 1 driver sends no contract version in its request.
-    V1,
-    /// A version 2 driver sends `contractVersion: 2`.
-    V2,
+const V2_DRAFT: &str = "2.0.0-draft.1";
+
+fn legacy_version() -> Version {
+    Version::new(1, 0, 0)
 }
 
-impl DriverContract {
-    fn response_version(self) -> u32 {
-        match self {
-            Self::V1 => 1,
-            Self::V2 => 2,
-        }
+fn serialize_contract_version<S>(version: &Version, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if version == &legacy_version() {
+        serializer.serialize_u8(1)
+    } else {
+        serializer.serialize_str(&version.to_string())
     }
 }
 
@@ -131,10 +131,11 @@ pub enum NodeKind {
 }
 
 /// The capabilities this binding reports, without the envelope `id`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
-    pub contract_version: u32,
+    #[serde(serialize_with = "serialize_contract_version")]
+    contract_version: Version,
     pub binding: String,
     pub language: String,
     /// The canonical spelling of this binding's format-version support table,
@@ -293,14 +294,14 @@ impl Serialize for WireDiagnostic<'_> {
 
 /// Capabilities sent to an unversioned version 1 driver.
 pub fn capabilities() -> Capabilities {
-    capabilities_for(DriverContract::V1)
+    capabilities_for(legacy_version())
 }
 
 /// Capabilities for the driver's contract version. Ion is added only when
 /// this adapter can perform Ion operations for its advertised node kinds.
-pub fn capabilities_for(contract: DriverContract) -> Capabilities {
+pub(crate) fn capabilities_for(contract: Version) -> Capabilities {
     Capabilities {
-        contract_version: contract.response_version(),
+        contract_version: contract,
         binding: "morphir-rust".to_string(),
         language: "rust".to_string(),
         format_versions: SupportTable::reference().canonical(),
@@ -426,12 +427,21 @@ fn request_from_body(mut body: Map<String, Value>) -> Result<Request, String> {
             let contract_version = body.remove("contractVersion");
             reject_extra(&body)?;
             match contract_version {
-                None => Ok(Request::Capabilities(DriverContract::V1)),
-                Some(Value::Number(version)) if version.as_u64() == Some(2) => {
-                    Ok(Request::Capabilities(DriverContract::V2))
+                None => Ok(Request::Capabilities(legacy_version())),
+                Some(Value::String(version)) => {
+                    let parsed = Version::parse(&version).map_err(|error| error.to_string())?;
+                    let supported = VersionReq::parse("=2.0.0-draft.1")
+                        .expect("fixed MCK adapter contract requirement");
+                    if parsed.to_string() == version && supported.matches(&parsed) {
+                        Ok(Request::Capabilities(parsed))
+                    } else {
+                        Err(format!(
+                            "unsupported capabilities contractVersion {version}; expected {V2_DRAFT}"
+                        ))
+                    }
                 }
                 Some(version) => Err(format!(
-                    "unsupported capabilities contractVersion {version}; expected 2"
+                    "unsupported capabilities contractVersion {version}; expected {V2_DRAFT}"
                 )),
             }
         }

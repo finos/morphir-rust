@@ -7,8 +7,9 @@
 //! `capabilities` and `exit` are answered here; `decode`, `readTree` and
 //! `writeTree` all go to [`crate::testee`].
 
-use crate::protocol::{DriverContract, ProtocolDiagnostic, Request, capabilities_for, parse_line};
+use crate::protocol::{ProtocolDiagnostic, Request, capabilities_for, parse_line};
 use crate::testee::{decode, read_tree, write_tree};
+use semver::Version;
 use serde_json::{Map, Value};
 use std::io::{self, BufRead, Write};
 
@@ -49,7 +50,7 @@ pub fn run<R: BufRead, W: Write>(reader: R, mut writer: W) -> io::Result<()> {
     Ok(())
 }
 
-fn capabilities_response(id: u64, contract: DriverContract) -> Value {
+fn capabilities_response(id: u64, contract: Version) -> Value {
     let mut object = Map::new();
     object.insert("id".to_string(), Value::from(id));
     if let Value::Object(fields) =

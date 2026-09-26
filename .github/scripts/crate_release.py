@@ -49,7 +49,21 @@ def parse_tag(tag: str) -> tuple[str, str]:
         version = validate_semver(match.group("version"), "tag")
     except ReleaseError as error:
         raise CrateReleaseError(str(error)) from error
+    require_pre_1_0(version)
     return match.group("crate"), version
+
+
+def require_pre_1_0(version: str) -> None:
+    """Refuse 1.x and later: crates stay on 0.x.y until Morphir itself reaches 1.0.
+
+    See docs/contributors/publishing-crates.md. Lift this rule when Morphir 1.0.0
+    is released.
+    """
+    if not version.startswith("0."):
+        raise CrateReleaseError(
+            f"version {version} is 1.0 or above; crates stay on 0.x.y before Morphir 1.0 "
+            "(docs/contributors/publishing-crates.md)"
+        )
 
 
 def read_toml(path: Path) -> dict[str, Any]:

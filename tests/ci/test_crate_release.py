@@ -93,6 +93,16 @@ class ParseTagTests(unittest.TestCase):
             crate_release.parse_tag("crates/morphir-core/v0.1.0-alpha.2"),
         )
 
+    def test_rejects_a_version_of_1_0_or_above_before_morphir_1_0(self) -> None:
+        for tag in (
+            "crates/morphir-config/v1.0.0",
+            "crates/morphir-config/v1.2.3-beta.1",
+            "crates/morphir-config/v2.0.0",
+        ):
+            with self.subTest(tag=tag):
+                with self.assertRaisesRegex(crate_release.CrateReleaseError, "before Morphir 1.0"):
+                    crate_release.parse_tag(tag)
+
     def test_rejects_malformed_tags(self) -> None:
         for tag in (
             "v0.0.1",

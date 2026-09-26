@@ -91,6 +91,7 @@ pub struct TreeFile {
 pub enum Profile {
     Json,
     Yaml,
+    Ion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +148,25 @@ pub struct Capabilities {
     pub layouts: Vec<String>,
     pub paths: Vec<PathMode>,
     pub nodes: Vec<NodeKind>,
+    /// Per-profile subsets of the versions, nodes and layouts above. Empty
+    /// for the numeric v1 contract, which advertises JSON and YAML only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profile_limits: Vec<ProfileLimit>,
+}
+
+/// Limits one advertised profile to a subset of the top-level capabilities.
+/// An advertised profile without a limit supports the full cross product.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLimit {
+    /// The advertised profile whose claim is narrowed.
+    pub profile: Profile,
+    /// Supported IR major versions, drawn from `Capabilities::versions`.
+    pub versions: Vec<u32>,
+    /// Supported node kinds, drawn from `Capabilities::nodes`.
+    pub nodes: Vec<NodeKind>,
+    /// Supported layouts, drawn from `Capabilities::layouts`.
+    pub layouts: Vec<String>,
 }
 
 /// The answer to `decode` or `readTree`.
@@ -300,13 +320,18 @@ pub fn capabilities() -> Capabilities {
 /// Capabilities for the driver's contract version. Ion is added only when
 /// this adapter can perform Ion operations for its advertised node kinds.
 pub(crate) fn capabilities_for(contract: Version) -> Capabilities {
+    let ion = contract != legacy_version();
     Capabilities {
         contract_version: contract,
         binding: "morphir-rust".to_string(),
         language: "rust".to_string(),
         format_versions: SupportTable::reference().canonical(),
         versions: vec![3, 4],
-        profiles: vec![Profile::Json, Profile::Yaml],
+        profiles: if ion {
+            vec![Profile::Json, Profile::Yaml, Profile::Ion]
+        } else {
+            vec![Profile::Json, Profile::Yaml]
+        },
         layouts: vec!["single".to_string(), "tree".to_string()],
         paths: vec![PathMode::Current, PathMode::Pinned],
         nodes: vec![
@@ -333,6 +358,16 @@ pub(crate) fn capabilities_for(contract: Version) -> Capabilities {
             NodeKind::TypeDefinitionFile,
             NodeKind::ValueDefinitionFile,
         ],
+        profile_limits: if ion {
+            vec![ProfileLimit {
+                profile: Profile::Ion,
+                versions: vec![4],
+                nodes: vec![NodeKind::Value],
+                layouts: vec!["single".to_owned()],
+            }]
+        } else {
+            Vec::new()
+        },
     }
 }
 

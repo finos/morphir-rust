@@ -27,6 +27,7 @@ fn capabilities_match_the_stage_one_contract() {
     assert_eq!(caps["formatVersions"], "[3.0.0,3.2.0),[4.0.0,4.1.0)");
     assert_eq!(caps["versions"], serde_json::json!([3, 4]));
     assert_eq!(caps["profiles"], serde_json::json!(["json", "yaml"]));
+    assert!(caps.get("profileLimits").is_none());
     assert_eq!(caps["layouts"], serde_json::json!(["single", "tree"]));
     assert_eq!(caps["paths"], serde_json::json!(["current", "pinned"]));
     // The eighteen nodes of a single document, plus the four files a document tree is made of.
@@ -57,11 +58,20 @@ fn an_unversioned_v1_driver_gets_v1_capabilities() {
 }
 
 #[test]
-fn a_v2_driver_gets_v2_capabilities_without_unimplemented_ion() {
+fn a_v2_driver_gets_ion_only_for_supported_v4_values() {
     let response = response_to(r#"{"id":1,"op":"capabilities","contractVersion":"2.0.0-draft.1"}"#);
 
     assert_eq!(response["contractVersion"], "2.0.0-draft.1");
-    assert_eq!(response["profiles"], serde_json::json!(["json", "yaml"]));
+    assert_eq!(
+        response["profiles"],
+        serde_json::json!(["json", "yaml", "ion"])
+    );
+    assert_eq!(
+        response["profileLimits"],
+        serde_json::json!([{
+            "profile": "ion", "versions": [4], "nodes": ["Value"], "layouts": ["single"]
+        }])
+    );
 }
 
 #[test]

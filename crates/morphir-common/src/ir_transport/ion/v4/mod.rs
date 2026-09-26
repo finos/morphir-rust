@@ -27,6 +27,14 @@ use crate::ir_transport::{Stage, TransportDiagnostic};
 use types::{read_type_def, read_type_spec, write_type_def, write_type_spec};
 use values::{read_value_def, read_value_spec, write_value_def, write_value_spec};
 
+pub(super) fn read_value_fragment(element: &Element) -> Result<v4::Value, TransportDiagnostic> {
+    values::read_value(element)
+}
+
+pub(super) fn write_value_fragment(value: &v4::Value) -> Result<Element, TransportDiagnostic> {
+    values::write_value(value)
+}
+
 const RELEASE: &str = "4.0.0";
 const LINKED_RELEASE: &str = "4.1.0";
 

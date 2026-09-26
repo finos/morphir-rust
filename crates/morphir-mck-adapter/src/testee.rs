@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
+use morphir_common::ir_transport::IonCodec;
 use morphir_core::ir::classic;
 use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::serde_document;
@@ -63,6 +64,14 @@ use crate::protocol::{
 /// reserved address space in any event — a shallow document commits the pages it touches and no
 /// more.
 const DECODE_STACK_BYTES: usize = 64 * 1024 * 1024;
+
+fn unsupported_ion_operation(operation: &str) -> Diagnostic {
+    Diagnostic::normalization(
+        DiagnosticCode::UnknownNode,
+        "/",
+        format!("{operation} is not implemented by this adapter"),
+    )
+}
 
 /// Reads one node and answers with its canonical spelling or the diagnostic that refused it.
 ///
@@ -129,6 +138,11 @@ pub fn read_tree(req: &ReadTreeRequest) -> DecodeResponse {
 }
 
 fn read_tree_here(req: &ReadTreeRequest) -> DecodeResponse {
+    if req.profile == Profile::Ion {
+        return DecodeResponse::Err {
+            diagnostic: unsupported_ion_operation("Ion document-tree reading"),
+        };
+    }
     // Not a statement about the document: this binding's document trees are version 3 and 4
     // layouts only, so an off-capabilities version answers `protocol_error` the way an
     // off-capabilities decode request does.
@@ -207,6 +221,11 @@ pub fn write_tree(req: &WriteTreeRequest) -> WriteTreeResponse {
 }
 
 fn write_tree_here(req: &WriteTreeRequest) -> WriteTreeResponse {
+    if req.policy.profile == Profile::Ion {
+        return WriteTreeResponse::Err {
+            diagnostic: unsupported_ion_operation("Ion document-tree writing"),
+        };
+    }
     if !matches!(req.version, 3 | 4) {
         return WriteTreeResponse::Refused {
             diagnostic: ProtocolDiagnostic::new(format!(
@@ -269,6 +288,7 @@ fn read_whole_classic_distribution(
             let value = morphir_core::ir::yaml::read(text)?;
             serde_json::from_value(value).map_err(|error| recover(&error))
         }
+        Profile::Ion => Err(unsupported_ion_operation("v3 Ion distribution reading")),
     }
 }
 
@@ -288,6 +308,7 @@ fn write_classic_canonical(
     Ok(match profile {
         Profile::Json => format!("{}\n", write_canonical(&value)),
         Profile::Yaml => morphir_core::ir::yaml::write_canonical(&value),
+        Profile::Ion => return Err(unsupported_ion_operation("v3 Ion writing")),
     })
 }
 
@@ -385,6 +406,7 @@ fn read_whole_ir_file(profile: Profile, text: &str) -> Result<(IRFile, Vec<Warni
     match profile {
         Profile::Json => morphir_core::ir::json::read_ir_file(text).map_err(|error| error.0),
         Profile::Yaml => morphir_core::ir::yaml::read_ir_file(text).map_err(|error| error.0),
+        Profile::Ion => Err(unsupported_ion_operation("Ion distribution reading")),
     }
 }
 
@@ -393,6 +415,7 @@ fn layout_profile(profile: Profile) -> morphir_core::ir::layout::Profile {
     match profile {
         Profile::Json => morphir_core::ir::layout::Profile::Json,
         Profile::Yaml => morphir_core::ir::layout::Profile::Yaml,
+        Profile::Ion => unreachable!("Ion tree operations are handled before JSON/YAML layout"),
     }
 }
 
@@ -401,10 +424,23 @@ fn profile_key(profile: Profile) -> &'static str {
     match profile {
         Profile::Json => "json",
         Profile::Yaml => "yaml",
+        Profile::Ion => "ion",
     }
 }
 
 fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
+    if req.profile == Profile::Ion {
+        return if req.version == 4 && req.node == NodeKind::Value {
+            IonCodec::new()
+                .decode_v4_value_fragment(&req.input)
+                .map(|value| (Node::Value(value), Vec::new()))
+                .map_err(|error| {
+                    Diagnostic::normalization(DiagnosticCode::InvalidType, "/", error.to_string())
+                })
+        } else {
+            Err(unsupported_ion_operation("this Ion node and version"))
+        };
+    }
     let value = match req.profile {
         // morphir-core's reader settles the repeated-member and nesting-ceiling rules before the
         // text becomes a value: `serde_json::Value` folds a repeated member onto the last one
@@ -414,6 +450,7 @@ fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
         // ceiling are already its answers, in the kit's codes and with the kit's cursors; there
         // is no separate probe.
         Profile::Yaml => morphir_core::ir::yaml::read(&req.input)?,
+        Profile::Ion => unreachable!("Ion is handled above"),
     };
     if req.version == 3 {
         return read_v3(req, &value).map(|node| (node, Vec::new()));
@@ -544,6 +581,7 @@ fn read_v3(req: &DecodeRequest, value: &Json) -> Result<Node, Diagnostic> {
         let read = match req.profile {
             Profile::Json => serde_json::from_str::<T>(&req.input),
             Profile::Yaml => T::deserialize(value),
+            Profile::Ion => unreachable!("Ion is handled before v3 JSON/YAML reading"),
         };
         read.map(wrap).map_err(|error| recover(&error))
     }
@@ -1029,11 +1067,28 @@ impl Node {
     /// Both profiles write the same value tree — the node's compact serialisation — so a case's
     /// two canonical fences are two spellings of one answer rather than two answers.
     fn write(&self, profile: Profile) -> Result<String, Diagnostic> {
+        if profile == Profile::Ion {
+            return match self {
+                Node::Value(value) => {
+                    IonCodec::new()
+                        .encode_v4_value_fragment(value)
+                        .map_err(|error| {
+                            Diagnostic::normalization(
+                                DiagnosticCode::InvalidType,
+                                "/",
+                                error.to_string(),
+                            )
+                        })
+                }
+                _ => Err(unsupported_ion_operation("this Ion node")),
+            };
+        }
         let value = self.value()?;
         Ok(match profile {
             Profile::Json => format!("{}\n", write_canonical(&value)),
             // The YAML writer ends its output with the newline itself.
             Profile::Yaml => morphir_core::ir::yaml::write_canonical(&value),
+            Profile::Ion => unreachable!("Ion is handled above"),
         })
     }
 

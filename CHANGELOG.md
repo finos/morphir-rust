@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `morphir-config` leaves the shared workspace version for its own `0.0.1`
   and is the first crate to publish. See
   `docs/contributors/publishing-crates.md`.
+- `morphir-core`, `morphir-workspace` and `morphir-extension-sdk` (`0.2.0`)
+  and `morphir-projection` (`0.1.0`) are ready for crates.io. Each sets its
+  own version and has a README, keywords and categories, and every path
+  dependency on a published crate also gives a version. A new CI job packages
+  the five published crates together with `cargo package --locked`. The
+  publishing guide lists the published crates and the order to publish them
+  in.
 - `morphir-core` can derive predicate declarations from native V4.1 provider
   facts, requiring public values with matching output types and rejecting
   malformed declaration objects (finos/morphir#999).

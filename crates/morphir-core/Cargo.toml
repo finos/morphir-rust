@@ -9,10 +9,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/morphir-core"
+readme = "README.md"
 description = "Morphir core model definitions and utilities"
+keywords = ["morphir", "ir", "domain-modeling", "functional", "finos"]
+categories = ["development-tools", "data-structures", "encoding"]
+# The tests read shared fixtures from the workspace, so they stay out of the package.
+exclude = ["/tests/"]
 
 [lib]
 name = "morphir_core"

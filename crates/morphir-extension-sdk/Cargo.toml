@@ -9,10 +9,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/morphir-extension-sdk"
+readme = "README.md"
 description = "SDK for building Morphir extensions as WASM plugins"
+keywords = ["morphir", "extension", "plugin", "wasm", "sdk"]
+categories = ["development-tools", "wasm"]
 
 [lib]
 crate-type = ["rlib"]

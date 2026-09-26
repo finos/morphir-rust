@@ -8,7 +8,15 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/morphir-projection"
+readme = "README.md"
 description = "Shared Morphir IR normalization for backend extensions"
+keywords = ["morphir", "ir", "codegen", "normalization"]
+categories = ["development-tools", "compilers"]
+# The tests need the `testing` feature through a path dev-dependency that the
+# package drops, so they stay out of the package.
+exclude = ["/tests/"]
 
 [features]
 testing = []

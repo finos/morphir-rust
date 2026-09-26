@@ -68,6 +68,41 @@ impl IonCodec {
         }
     }
 
+    /// Read one standalone v4 value expression in the same spelling used
+    /// inside a distribution. The MCK adapter uses this for node cases.
+    pub fn decode_v4_value_fragment(
+        &self,
+        text: &str,
+    ) -> Result<morphir_core::ir::v4::Value, TransportDiagnostic> {
+        let values = Element::read_all(text.as_bytes()).map_err(|error| {
+            Self::error(
+                "morphir::ir::ion::invalid_syntax",
+                Stage::Syntax,
+                error.to_string(),
+            )
+        })?;
+        if values.len() != 1 {
+            return Err(Self::error(
+                "morphir::ir::ion::unexpected_value",
+                Stage::Normalization,
+                "a value fragment has exactly one Ion element",
+            ));
+        }
+        v4::read_value_fragment(values.get(0).expect("one element"))
+    }
+
+    /// Write one standalone v4 value expression with canonical Ion spacing.
+    pub fn encode_v4_value_fragment(
+        &self,
+        value: &morphir_core::ir::v4::Value,
+    ) -> Result<String, TransportDiagnostic> {
+        ion_text(
+            ion_rs::Sequence::builder()
+                .push(v4::write_value_fragment(value)?)
+                .build(),
+        )
+    }
+
     fn error(code: &'static str, stage: Stage, message: impl Into<String>) -> TransportDiagnostic {
         TransportDiagnostic::error(code, stage, IrCursor::root(), message)
     }

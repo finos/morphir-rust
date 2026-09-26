@@ -20,6 +20,27 @@ fn req(node: NodeKind, input: &str, path: PathMode) -> DecodeRequest {
 }
 
 #[test]
+fn v4_ion_reference_uses_the_real_ion_codec() {
+    let input = "(\n  ref\n  'morphir/SDK:basics#add'\n)\n";
+    let request = DecodeRequest {
+        profile: Profile::Ion,
+        ..req(NodeKind::Value, input, PathMode::Current)
+    };
+    match decode(&request) {
+        DecodeResponse::Ok {
+            canonical,
+            warnings,
+            kind,
+        } => {
+            assert_eq!(canonical["ion"], input);
+            assert!(warnings.is_empty());
+            assert_eq!(kind, "Reference");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn a_type_variable_shorthand_decodes_to_itself() {
     match decode(&req(NodeKind::Type, "\"a\"", PathMode::Current)) {
         DecodeResponse::Ok {
@@ -536,6 +557,7 @@ fn answered(request: &DecodeRequest) -> (String, String) {
             let key = match request.profile {
                 Profile::Json => "json",
                 Profile::Yaml => "yaml",
+                Profile::Ion => "ion",
             };
             (kind, canonical[key].clone())
         }

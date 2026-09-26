@@ -115,6 +115,18 @@ paths = [".mise/tasks/test/extism"]
 crates = ["morphir-ext-example"]
 paths = [".mise/tasks/build/wasm", ".mise/tasks/check/lint/wasm"]
 
+[jobs.package-crates]
+# The crates published to crates.io. A change to one of them, or to a crate
+# they depend on, must still package and build against registry versions.
+# Cargo.toml and Cargo.lock are global paths, so they turn this job on too.
+crates = [
+  "morphir-config",
+  "morphir-core",
+  "morphir-workspace",
+  "morphir-extension-sdk",
+  "morphir-projection",
+]
+
 [jobs.lint-shell]
 paths = ["**/*.sh", ".mise/tasks/**", ".shellcheckrc", ".mise/tasks/check/lint/shell"]
 

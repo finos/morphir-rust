@@ -96,6 +96,30 @@ class ImpactConsistencyTests(unittest.TestCase):
                     self.assertTrue(plan.rust)
                     self.assertFalse(plan.jobs["test-extism"])
 
+    @unittest.skipUnless(shutil.which("cargo"), "cargo is not installed")
+    def test_published_crates_and_their_dependencies_route_to_packaging(self) -> None:
+        workspace = graph.load_workspace(REPOSITORY_ROOT)
+        cases = [
+            ("crates/morphir-config/src/lib.rs", True),
+            ("crates/morphir-core/Cargo.toml", True),
+            ("crates/morphir-workspace/src/lib.rs", True),
+            ("crates/morphir-extension-sdk/README.md", True),
+            ("crates/morphir-projection/src/lib.rs", True),
+            ("crates/morphir-host/src/lib.rs", False),
+            ("crates/morphir-daemon/src/lib.rs", False),
+            ("README.md", False),
+        ]
+        for path, expected in cases:
+            with self.subTest(path=path):
+                plan = classify.plan_changes([path], self.impact, workspace, self.extensions)
+                self.assertFalse(plan.all)
+                self.assertEqual(expected, plan.jobs["package-crates"])
+        for path in ("Cargo.toml", "Cargo.lock"):
+            with self.subTest(path=path):
+                plan = classify.plan_changes([path], self.impact, workspace, self.extensions)
+                self.assertTrue(plan.all)
+                self.assertTrue(plan.jobs["package-crates"])
+
     def test_rust_guest_tests_are_owned_by_the_bundle_task(self) -> None:
         task = REPOSITORY_ROOT / ".mise/tasks/extension/artifact/rust"
         self.assertTrue(task.is_file())

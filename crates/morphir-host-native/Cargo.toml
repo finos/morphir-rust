@@ -10,11 +10,11 @@ description = "Native channels for the Morphir extension host: processes, Extism
 
 [dependencies]
 morphir-common = { path = "../morphir-common" }
-morphir-core = { path = "../morphir-core" }
+morphir-core = { path = "../morphir-core", version = "0.2.0" }
 morphir-distribution = { path = "../morphir-distribution" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.2.0" }
 morphir-host = { path = "../morphir-host" }
-morphir-workspace = { path = "../morphir-workspace" }
+morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
 async-trait = "0.1"
 base64 = "0.23"
 extism = "1"
@@ -37,7 +37,7 @@ http = ["dep:jsonrpsee"]
 jsonrpsee = { version = "0.26", features = ["server", "macros"] }
 morphir-avro-extension = { path = "../morphir-avro-extension" }
 morphir-host = { path = "../morphir-host", features = ["testing"] }
-morphir-projection = { path = "../morphir-projection", features = ["testing"] }
+morphir-projection = { path = "../morphir-projection", version = "0.1.0", features = ["testing"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 wat = "1"
 

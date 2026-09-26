@@ -14,8 +14,8 @@ description = "Workspace, configuration, and extension discovery for tools that 
 
 [dependencies]
 morphir-common = { path = "../morphir-common" }
-morphir-config = { path = "../morphir-config" }
-morphir-workspace = { path = "../morphir-workspace" }
+morphir-config = { path = "../morphir-config", version = "0.0.1" }
+morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
 cap-std = { workspace = true }
 same-file = { workspace = true }
 anyhow = { workspace = true }

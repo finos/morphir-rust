@@ -39,7 +39,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 morphir-common = { path = "../morphir-common" }
 morphir-devkit = { path = "../morphir-devkit" }
 morphir-host = { path = "../morphir-host" }
-morphir-workspace = { path = "../morphir-workspace" }
+morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
 
 [dev-dependencies]
 tempfile = "3"

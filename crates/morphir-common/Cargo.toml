@@ -17,15 +17,15 @@ cap-std = { workspace = true }
 cap-fs-ext = { workspace = true }
 same-file = { workspace = true }
 thiserror = { workspace = true }
-morphir-config = { path = "../morphir-config" }
+morphir-config = { path = "../morphir-config", version = "0.0.1" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 stacker = { workspace = true }
 secrecy = "0.10.3"
 toml = "1.0"
 dirs = "7"
-morphir-core = { path = "../morphir-core" }
-morphir-workspace = { path = "../morphir-workspace" }
+morphir-core = { path = "../morphir-core", version = "0.2.0" }
+morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
 glob = "0.3"
 indexmap = { version = "2", features = ["serde"] }
 ion-rs = "1.0.1"

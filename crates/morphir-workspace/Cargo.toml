@@ -1,6 +1,8 @@
 [package]
 name = "morphir-workspace"
-version.workspace = true
+# Published on its own 0.x.y line, not the shared workspace version.
+# See docs/contributors/publishing-crates.md.
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -9,7 +11,7 @@ repository.workspace = true
 description = "Portable, root-confined Morphir workspace discovery"
 
 [dependencies]
-morphir-config = { path = "../morphir-config" }
+morphir-config = { path = "../morphir-config", version = "0.0.1" }
 globset = "0.4"
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -1,5 +1,7 @@
 [package]
 name = "morphir-projection"
+# Published on its own 0.x.y line, not the shared workspace version.
+# See docs/contributors/publishing-crates.md.
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +14,7 @@ description = "Shared Morphir IR normalization for backend extensions"
 testing = []
 
 [dependencies]
-morphir-core = { path = "../morphir-core" }
+morphir-core = { path = "../morphir-core", version = "0.2.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = { workspace = true }

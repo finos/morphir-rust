@@ -48,6 +48,34 @@ fn capabilities_match_the_stage_one_contract() {
     }
 }
 
+#[test]
+fn an_unversioned_v1_driver_gets_v1_capabilities() {
+    let response = response_to(r#"{"id":1,"op":"capabilities"}"#);
+
+    assert_eq!(response["contractVersion"], 1);
+    assert_eq!(response["profiles"], serde_json::json!(["json", "yaml"]));
+}
+
+#[test]
+fn a_v2_driver_gets_v2_capabilities_without_unimplemented_ion() {
+    let response = response_to(r#"{"id":1,"op":"capabilities","contractVersion":2}"#);
+
+    assert_eq!(response["contractVersion"], 2);
+    assert_eq!(response["profiles"], serde_json::json!(["json", "yaml"]));
+}
+
+#[test]
+fn capabilities_refuse_an_unknown_contract_version_or_field() {
+    for line in [
+        r#"{"id":1,"op":"capabilities","contractVersion":1}"#,
+        r#"{"id":1,"op":"capabilities","contractVersion":3}"#,
+        r#"{"id":1,"op":"capabilities","contractVersion":null}"#,
+        r#"{"id":1,"op":"capabilities","contractVersion":2,"extra":true}"#,
+    ] {
+        assert_protocol_error(&response_to(line), Some(1));
+    }
+}
+
 /// `protocol.schema.json` requires `formatVersions` in the capabilities reply,
 /// and the driver reads it as this binding's support table: the canonical
 /// spelling of `SupportTable::reference()`. The member follows `language` on

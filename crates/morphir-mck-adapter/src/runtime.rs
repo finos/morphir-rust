@@ -1,5 +1,5 @@
 //! The JSON-lines framing loop for the Morphir Compatibility Kit's adapter
-//! protocol (`protocol.schema.json` contract version 1; see
+//! protocol (`protocol.schema.json` contract versions 1 and 2; see
 //! `protocol.example.json` for a worked exchange). [`run`] is generic over
 //! its reader and writer so it can be driven from `main.rs` against real
 //! stdin/stdout, or from a test against an in-memory buffer.
@@ -7,7 +7,7 @@
 //! `capabilities` and `exit` are answered here; `decode`, `readTree` and
 //! `writeTree` all go to [`crate::testee`].
 
-use crate::protocol::{ProtocolDiagnostic, Request, capabilities, parse_line};
+use crate::protocol::{DriverContract, ProtocolDiagnostic, Request, capabilities_for, parse_line};
 use crate::testee::{decode, read_tree, write_tree};
 use serde_json::{Map, Value};
 use std::io::{self, BufRead, Write};
@@ -27,8 +27,8 @@ pub fn run<R: BufRead, W: Write>(reader: R, mut writer: W) -> io::Result<()> {
         }
 
         match parse_line(&line) {
-            Ok((id, Request::Capabilities)) => {
-                write_line(&mut writer, capabilities_response(id))?;
+            Ok((id, Request::Capabilities(contract))) => {
+                write_line(&mut writer, capabilities_response(id, contract))?;
             }
             Ok((_, Request::Exit)) => break,
             Ok((id, Request::Decode(request))) => {
@@ -49,11 +49,11 @@ pub fn run<R: BufRead, W: Write>(reader: R, mut writer: W) -> io::Result<()> {
     Ok(())
 }
 
-fn capabilities_response(id: u64) -> Value {
+fn capabilities_response(id: u64, contract: DriverContract) -> Value {
     let mut object = Map::new();
     object.insert("id".to_string(), Value::from(id));
     if let Value::Object(fields) =
-        serde_json::to_value(capabilities()).expect("capabilities serialize")
+        serde_json::to_value(capabilities_for(contract)).expect("capabilities serialize")
     {
         object.extend(fields);
     }

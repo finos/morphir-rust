@@ -61,6 +61,18 @@ fn a_literal_carries_its_payload_directly_under_its_tag() {
 }
 
 #[test]
+fn expanded_literals_ignore_unknown_members() {
+    assert_eq!(
+        lit(json!({ "FloatLiteral": { "future": true, "value": 4.0 } })).unwrap(),
+        Literal::float(4.0)
+    );
+    assert_eq!(
+        lit(json!({ "IntegerLiteral": { "future": true, "value": 42 } })).unwrap(),
+        Literal::Integer(42.into())
+    );
+}
+
+#[test]
 fn a_float_is_written_so_it_reads_back_as_a_float() {
     // A whole-numbered float must not be written as an integer, or a reader would decode it as
     // an IntegerLiteral.

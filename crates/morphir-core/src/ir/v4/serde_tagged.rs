@@ -849,10 +849,11 @@ fn decode_literal_wrapper(
     }
 }
 
-/// A literal's value is written directly, or wrapped in a lone `value` member.
+/// A scalar literal's value is written directly or under `value`; unknown
+/// expanded members do not change the value. Document literals bypass this.
 fn compact_or_expanded(payload: &JsonValue) -> &JsonValue {
     match payload {
-        JsonValue::Object(members) if members.len() == 1 => members.get("value").unwrap_or(payload),
+        JsonValue::Object(members) => members.get("value").unwrap_or(payload),
         _ => payload,
     }
 }

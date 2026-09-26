@@ -219,6 +219,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `ProcessChild::read_within`, or a `ProcessChannel`.
 
 ### Fixed
+- V4 scalar literal readers accept an expanded `value` alongside unknown
+  members, so forward-compatible FloatLiteral and IntegerLiteral objects decode
+  without changing compact or DocumentLiteral behavior (finos/morphir#946).
 - Installed extensions retain frontend `multiDocument` and `fragments` from
   draft.1 and draft.2 capability claims. Provider resolution exposes those flags,
   and session negotiation requires them to match the supplied claims. Version-1

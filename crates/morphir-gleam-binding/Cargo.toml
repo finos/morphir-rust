@@ -33,7 +33,7 @@ base64 = "0.22"
 rmp-serde = "1.3"
 
 # Parser dependencies
-gleam-core = { git = "https://github.com/gleam-lang/gleam.git", rev = "4a83802ca33a8a96227a1b332768725f232f9779" }
+gleam-core = { git = "https://github.com/gleam-lang/gleam.git", rev = "79c0cdd334365612e8712ab5a5c37cf4c461dd81" }
 # Match the upstream release lockfile; gleam-core's broad bound also admits incompatible 0.3.
 ecow = "=0.2.6"
 im = "15.1"

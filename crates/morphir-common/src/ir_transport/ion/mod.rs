@@ -70,6 +70,15 @@ impl IonCodec {
 
     /// Read one standalone v4 value expression in the same spelling used
     /// inside a distribution. The MCK adapter uses this for node cases.
+    ///
+    /// ```
+    /// use morphir_common::ir_transport::IonCodec;
+    ///
+    /// let ion = "(\n  ref\n  'morphir/SDK:basics#add'\n)\n";
+    /// let codec = IonCodec::new();
+    /// let value = codec.decode_v4_value_fragment(ion).unwrap();
+    /// assert_eq!(codec.encode_v4_value_fragment(&value).unwrap(), ion);
+    /// ```
     pub fn decode_v4_value_fragment(
         &self,
         text: &str,

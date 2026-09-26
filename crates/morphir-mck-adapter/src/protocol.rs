@@ -148,16 +148,24 @@ pub struct Capabilities {
     pub layouts: Vec<String>,
     pub paths: Vec<PathMode>,
     pub nodes: Vec<NodeKind>,
+    /// Per-profile subsets of the versions, nodes and layouts above. Empty
+    /// for the numeric v1 contract, which advertises JSON and YAML only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub profile_limits: Vec<ProfileLimit>,
 }
 
+/// Limits one advertised profile to a subset of the top-level capabilities.
+/// An advertised profile without a limit supports the full cross product.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileLimit {
+    /// The advertised profile whose claim is narrowed.
     pub profile: Profile,
+    /// Supported IR major versions, drawn from `Capabilities::versions`.
     pub versions: Vec<u32>,
+    /// Supported node kinds, drawn from `Capabilities::nodes`.
     pub nodes: Vec<NodeKind>,
+    /// Supported layouts, drawn from `Capabilities::layouts`.
     pub layouts: Vec<String>,
 }
 

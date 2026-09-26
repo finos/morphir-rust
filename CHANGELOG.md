@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Byte-exact Ion writer coverage for v3 definition member order and v4
+  application entry-point symbol quoting, ahead of using Ion as the MCK
+  reference encoding (finos/morphir#946).
 - A `Publish crate` workflow publishes one crate to crates.io from a
   `crates/<crate>/v<version>` tag, after it checks that the crate version
   equals the tag version and that the tag commit is on `main`.

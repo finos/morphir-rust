@@ -853,6 +853,63 @@ fn a_v3_library_datagram_keeps_its_bytes() {
 }
 
 #[test]
+fn a_v3_alias_datagram_has_canonical_member_order() {
+    let original = decode(&IonCodec::new(), V3_ALIAS_ION, &v3(FormatId::ion())).unwrap();
+    let ion = encode(&IonCodec::new(), original, &v3(FormatId::ion())).unwrap();
+
+    assert_eq!(
+        ion,
+        concat!(
+            "morphir::{\n",
+            "  ionVersion: \"0.1.0-draft.1\",\n",
+            "  formatVersion: \"3.0.0\",\n",
+            "  kind: library,\n",
+            "  packageName: \"example\",\n",
+            "}\n",
+            "public::def::module::{\n",
+            "  name: \"eligibility\",\n",
+            "}\n",
+            "public::def::alias::type::{\n",
+            "  module: \"eligibility\",\n",
+            "  name: \"decision\",\n",
+            "  typeExp: \"morphir/SDK:basics#bool\",\n",
+            "}\n",
+            "morphir_footer::{\n}\n",
+        )
+    );
+}
+
+#[test]
+fn a_v4_application_quotes_non_identifier_entry_point_names() {
+    let input = concat!(
+        "morphir::{ formatVersion: \"4.0.0\", kind: application, packageName: \"example\", ",
+        "entryPoints: { 'start here': { target: \"example:main#run\", kind: main } } }\n",
+        "morphir_footer::{}",
+    );
+    let original = decode(&IonCodec::new(), input, &v4_ion()).unwrap();
+    let ion = encode(&IonCodec::new(), original, &v4_ion()).unwrap();
+
+    assert_eq!(
+        ion,
+        concat!(
+            "morphir::{\n",
+            "  ionVersion: \"0.1.0-draft.1\",\n",
+            "  formatVersion: \"4.0.0\",\n",
+            "  kind: application,\n",
+            "  packageName: \"example\",\n",
+            "  entryPoints: {\n",
+            "    'start here': {\n",
+            "      target: \"example:main#run\",\n",
+            "      kind: main,\n",
+            "    },\n",
+            "  },\n",
+            "}\n",
+            "morphir_footer::{\n}\n",
+        )
+    );
+}
+
+#[test]
 fn a_v3_specs_datagram_refuses_a_module_definition() {
     for definition in [
         r#"public::def::module::{ name: "basics" }"#,

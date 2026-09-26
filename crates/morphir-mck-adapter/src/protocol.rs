@@ -432,7 +432,10 @@ fn request_from_body(mut body: Map<String, Value>) -> Result<Request, String> {
                     let parsed = Version::parse(&version).map_err(|error| error.to_string())?;
                     let supported = VersionReq::parse("=2.0.0-draft.1")
                         .expect("fixed MCK adapter contract requirement");
-                    if parsed.to_string() == version && supported.matches(&parsed) {
+                    if parsed.to_string() == version
+                        && parsed.build.is_empty()
+                        && supported.matches(&parsed)
+                    {
                         Ok(Request::Capabilities(parsed))
                     } else {
                         Err(format!(

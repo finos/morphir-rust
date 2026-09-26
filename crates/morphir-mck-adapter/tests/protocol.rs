@@ -71,6 +71,7 @@ fn capabilities_refuse_an_unknown_contract_version_or_field() {
         r#"{"id":1,"op":"capabilities","contractVersion":2}"#,
         r#"{"id":1,"op":"capabilities","contractVersion":3}"#,
         r#"{"id":1,"op":"capabilities","contractVersion":"2.0.0-draft.2"}"#,
+        r#"{"id":1,"op":"capabilities","contractVersion":"2.0.0-draft.1+build.123"}"#,
         r#"{"id":1,"op":"capabilities","contractVersion":"v2.0.0-draft.1"}"#,
         r#"{"id":1,"op":"capabilities","contractVersion":null}"#,
         r#"{"id":1,"op":"capabilities","contractVersion":"2.0.0-draft.1","extra":true}"#,

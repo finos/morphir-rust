@@ -17,6 +17,7 @@ name = "mck-adapter-rust"
 path = "src/main.rs"
 
 [dependencies]
+semver = "1"
 morphir-core = { path = "../morphir-core", version = "0.2.0" }
 morphir-common = { path = "../morphir-common" }
 morphir-package = { path = "../morphir-package" }

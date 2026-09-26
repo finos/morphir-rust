@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `morphir-mck-adapter` answers a versioned MCK capabilities request with
-  contract version 2 while preserving the unversioned version 1 exchange.
+  exact contract version `2.0.0-draft.1` while preserving the unversioned
+  request and numeric response of the version 1 exchange.
   It advertises Ion only once its Ion operations are implemented
   (finos/morphir#946).
 - Byte-exact Ion writer coverage for v3 definition member order and v4

@@ -1,5 +1,5 @@
 //! Wire types and line framing for the Morphir Compatibility Kit's adapter
-//! protocol, contract version 1.
+//! protocol, contract versions 1 and 2.
 //!
 //! The normative source is `spec/ir/mck/protocol.schema.json` in the parent
 //! repository (see `protocol.example.json` alongside it for a worked
@@ -16,11 +16,29 @@ use std::collections::BTreeMap;
 /// A parsed request, tagged by its `op` on the wire.
 #[derive(Debug, Clone)]
 pub enum Request {
-    Capabilities,
+    Capabilities(DriverContract),
     Decode(DecodeRequest),
     ReadTree(ReadTreeRequest),
     WriteTree(WriteTreeRequest),
     Exit,
+}
+
+/// The contract a driver requested during capabilities negotiation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverContract {
+    /// A version 1 driver sends no contract version in its request.
+    V1,
+    /// A version 2 driver sends `contractVersion: 2`.
+    V2,
+}
+
+impl DriverContract {
+    fn response_version(self) -> u32 {
+        match self {
+            Self::V1 => 1,
+            Self::V2 => 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,8 +130,7 @@ pub enum NodeKind {
     ValueDefinitionFile,
 }
 
-/// The stage-one capabilities this binding reports, without the envelope
-/// `id` (the caller adds that; see [`capabilities`]).
+/// The capabilities this binding reports, without the envelope `id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
@@ -274,14 +291,16 @@ impl Serialize for WireDiagnostic<'_> {
     }
 }
 
-/// The stage-one capabilities this binding reports, per `protocol.schema.json`
-/// contract version 1 and the worked exchange in `protocol.example.json`: IR
-/// versions 3 and 4 with this reader's support table as `formatVersions`,
-/// the `json` and `yaml` profiles, the `single` layout, both path
-/// modes, and every node kind the kit names.
+/// Capabilities sent to an unversioned version 1 driver.
 pub fn capabilities() -> Capabilities {
+    capabilities_for(DriverContract::V1)
+}
+
+/// Capabilities for the driver's contract version. Ion is added only when
+/// this adapter can perform Ion operations for its advertised node kinds.
+pub fn capabilities_for(contract: DriverContract) -> Capabilities {
     Capabilities {
-        contract_version: 1,
+        contract_version: contract.response_version(),
         binding: "morphir-rust".to_string(),
         language: "rust".to_string(),
         format_versions: SupportTable::reference().canonical(),
@@ -404,8 +423,17 @@ fn request_from_body(mut body: Map<String, Value>) -> Result<Request, String> {
 
     match op.as_str() {
         "capabilities" => {
+            let contract_version = body.remove("contractVersion");
             reject_extra(&body)?;
-            Ok(Request::Capabilities)
+            match contract_version {
+                None => Ok(Request::Capabilities(DriverContract::V1)),
+                Some(Value::Number(version)) if version.as_u64() == Some(2) => {
+                    Ok(Request::Capabilities(DriverContract::V2))
+                }
+                Some(version) => Err(format!(
+                    "unsupported capabilities contractVersion {version}; expected 2"
+                )),
+            }
         }
         "exit" => {
             reject_extra(&body)?;
@@ -424,8 +452,7 @@ fn request_from_body(mut body: Map<String, Value>) -> Result<Request, String> {
     }
 }
 
-/// `capabilities` and `exit` carry no fields beyond `id` and `op`; anything
-/// left over is unknown, matching the schema's `additionalProperties: false`.
+/// Reject fields left after operation-specific members have been removed.
 fn reject_extra(body: &Map<String, Value>) -> Result<(), String> {
     match body.keys().next() {
         None => Ok(()),

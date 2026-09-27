@@ -129,6 +129,7 @@ const COMPLETE_EXAMPLE: &str =
     include_str!("../../morphir-core/tests/fixtures/ir/v4/complete-example.json");
 const V4_LIBRARY: &str =
     include_str!("../../morphir-core/tests/fixtures/ir/v4/v4-library-distribution.json");
+const MCK_COMPOSITE: &str = include_str!("fixtures/ion/mck-composite-v4.json");
 const GREETING: &str =
     include_str!("../../morphir-core/tests/fixtures/ir/classic/greeting-example.json");
 
@@ -156,6 +157,11 @@ fn assert_v4_round_trip(root: VfsPath, fixture: &str) {
 #[test]
 fn the_complete_v4_example_round_trips_through_an_ion_tree() {
     assert_v4_round_trip(memory_root(), COMPLETE_EXAMPLE);
+}
+
+#[test]
+fn the_composite_mck_v4_fixture_round_trips_through_an_ion_tree() {
+    assert_v4_round_trip(memory_root(), MCK_COMPOSITE);
 }
 
 #[test]

@@ -1,0 +1,74 @@
+{
+  "formatVersion": "4.0.0",
+  "distribution": {
+    "Library": {
+      "packageName": "example",
+      "dependencies": {
+        "dep/pkg": {
+          "modules": {
+            "m": {
+              "annotations": ["my-org/project:annotations#stable"],
+              "types": {},
+              "values": {}
+            }
+          }
+        }
+      },
+      "def": {
+        "modules": {
+          "m": {
+            "Public": {
+              "types": {},
+              "values": {
+                "native": {
+                  "Public": {
+                    "NativeBody": {
+                      "inputTypes": {"a": "morphir/SDK:basics#int"},
+                      "outputType": "morphir/SDK:basics#int",
+                      "nativeInfo": {"hint": {"Arithmetic": {}}}
+                    }
+                  }
+                },
+                "hole": {
+                  "Public": {
+                    "ExpressionBody": {
+                      "inputTypes": {},
+                      "outputType": "morphir/SDK:basics#int",
+                      "body": {
+                        "Hole": {
+                          "reason": {
+                            "UnresolvedReference": {
+                              "target": "my-org/project:module#deleted"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "document": {
+                  "Public": {
+                    "ExpressionBody": {
+                      "inputTypes": {},
+                      "outputType": "morphir/SDK:basics#int",
+                      "body": {
+                        "Literal": {
+                          "DocumentLiteral": {
+                            "name": "Alice",
+                            "age": 30,
+                            "tags": ["admin", "user"],
+                            "metadata": null
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

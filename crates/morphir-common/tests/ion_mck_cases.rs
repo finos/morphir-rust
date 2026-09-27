@@ -194,7 +194,7 @@ fn every_canonical_mck_node_round_trips_through_ion() {
             failures.push(failure);
         }
     }
-    assert!(ran > 70, "only {ran} cases ran");
+    assert_eq!(ran, 82, "the frozen MCK node inventory changed");
     assert!(
         failures.is_empty(),
         "{} of {ran} cases failed:\n{}",
@@ -249,7 +249,7 @@ fn every_canonical_mck_node_round_trips_through_an_ion_tree() {
             failures.push(failure);
         }
     }
-    assert!(ran > 70, "only {ran} cases ran");
+    assert_eq!(ran, 82, "the frozen MCK node inventory changed");
     assert!(
         failures.is_empty(),
         "{} of {ran} cases failed:\n{}",

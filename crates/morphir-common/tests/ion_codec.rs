@@ -389,16 +389,20 @@ fn an_empty_v3_library_round_trips_through_ion() {
 
 #[test]
 fn v4_library_fixtures_round_trip_through_ion() {
-    for fixture in [
-        "../../morphir-core/tests/fixtures/ir/v4/v4-library-distribution.json",
-        "../../morphir-core/tests/fixtures/ir/v4/complete-example.json",
+    for (fixture, json) in [
+        (
+            "v4-library-distribution.json",
+            include_str!("../../morphir-core/tests/fixtures/ir/v4/v4-library-distribution.json"),
+        ),
+        (
+            "complete-example.json",
+            include_str!("../../morphir-core/tests/fixtures/ir/v4/complete-example.json"),
+        ),
+        (
+            "mck-composite-v4.json",
+            include_str!("fixtures/ion/mck-composite-v4.json"),
+        ),
     ] {
-        let json = match fixture {
-            path if path.ends_with("v4-library-distribution.json") => {
-                include_str!("../../morphir-core/tests/fixtures/ir/v4/v4-library-distribution.json")
-            }
-            _ => include_str!("../../morphir-core/tests/fixtures/ir/v4/complete-example.json"),
-        };
         let json_options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json());
         let ion_options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::ion());
         let original = decode(&JsonCodec::new(), json, &json_options)
@@ -460,6 +464,30 @@ fn refusal(input: &str) -> String {
 }
 
 #[test]
+fn an_unknown_ion_version_is_refused() {
+    let text = V4_HEADER.replace("0.1.0-draft.1", "0.1.0-draft.99");
+    let text = format!("{text}morphir_footer::{{}}");
+
+    assert!(refusal(&text).contains("unsupported_version"));
+}
+
+#[test]
+fn a_v4_native_body_in_a_v3_document_is_refused() {
+    let text = format!(
+        "{}\npublic::def::module::{{ name: \"m\", values: [ public::def::native::value::{{ name: \"n\", outputType: \"morphir/SDK:basics#int\" }} ] }}\nmorphir_footer::{{}}",
+        V4_HEADER.replace("4.0.0", "3.0.0")
+    );
+    let error = decode(&IonCodec::new(), &text, &v3(FormatId::ion())).unwrap_err();
+
+    let diagnostic = format!("{error:?}");
+    assert!(diagnostic.contains("unexpected_value"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("public::def::native::value"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
 fn a_v4_module_defined_twice_is_refused() {
     let text = format!(
         "{V4_HEADER}
@@ -480,6 +508,23 @@ public::def::module::{{
   types: [
     public::def::alias::type::{{ name: \"score\", typeExp: \"morphir/SDK:basics#int\" }},
     public::def::alias::type::{{ name: \"score\", typeExp: \"morphir/SDK:basics#int\" }},
+  ],
+}}
+morphir_footer::{{}}"
+    );
+
+    assert!(refusal(&text).contains("duplicate_name"));
+}
+
+#[test]
+fn a_v4_value_defined_twice_in_a_module_is_refused() {
+    let text = format!(
+        "{V4_HEADER}
+public::def::module::{{
+  name: \"eligibility\",
+  values: [
+    public::def::value::{{ name: \"score\", outputType: \"morphir/SDK:basics#int\", body: 1 }},
+    public::def::value::{{ name: \"score\", outputType: \"morphir/SDK:basics#int\", body: 2 }},
   ],
 }}
 morphir_footer::{{}}"
@@ -735,7 +780,7 @@ fn a_document_refuses_ion_values_json_has_no_place_for() {
 fn a_document_is_not_a_pattern() {
     let text = v4_value("(lambda (document { a: 1 }) 1)");
 
-    assert!(decode(&IonCodec::new(), &text, &v4_ion()).is_err());
+    assert!(refusal(&text).contains("a document literal cannot be a pattern"));
 }
 
 #[test]

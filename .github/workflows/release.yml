@@ -69,7 +69,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install mise tools
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@v5
 
       - name: Install WASM target
         run: rustup target add wasm32-unknown-unknown

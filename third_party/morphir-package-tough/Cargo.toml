@@ -164,7 +164,7 @@ features = ["arbitrary_precision", "raw_value"]
 version = "1"
 
 [dependencies.snafu]
-version = "0.8"
+version = "0.9"
 features = ["futures"]
 
 [dependencies.tempfile]
@@ -186,10 +186,10 @@ version = "0.7"
 features = ["io"]
 
 [dependencies.typed-path]
-version = "0.9"
+version = "0.12"
 
 [dependencies.untrusted]
-version = "0.7.1"
+version = "0.9.0"
 
 [dependencies.url]
 version = "2"

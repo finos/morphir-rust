@@ -1,5 +1,33 @@
 # Morphir package
 
+`local_registry::mvp::restore_snapshot` returns the original bytes retained by a
+successful fresh exact-lock restore. Its immutable `RestoredSnapshot` contains
+the complete graph, the exact policy/full-lock digests, original manifest bytes,
+and each Library's native payload and authenticated context resources. Each
+retained file has a validated bundle-relative path, exact bytes and raw SHA-256
+digest. Native payload revisions are distinct from normalized manifest and
+package-content identities.
+
+The snapshot becomes available only after whole-graph verification, publication
+and successful trust-backend finalization. It never reconstructs the result by
+reading published paths. The existing `restore` API and serialized
+`RestoreReport` remain available with their existing publication semantics.
+Snapshot `Debug` output includes lengths and identities, not raw manifests,
+payloads or context documents.
+
+This is an in-process API under the existing `local-library-mvp` profile and
+`0.1.0-draft.1` revision. It does not establish a process protocol, binary Ion
+envelope, native-to-core projection, hardened filesystem assurance or a
+production naming-provider release. No serialization/import constructor grants
+fresh authority to saved bytes. Each later consumption operation must restore
+again. Applications that need another semantic codec must explicitly qualify
+their conversion from the retained native bytes.
+
+Registry release paths and IR package names are separate identities. An
+authority-qualified release such as `example.com/metadata/provider@1.0.0` can
+contain the IR package `acme/metadata`. Both identities must be checked at their
+respective boundaries; a bare IR name is not a registry package path.
+
 `morphir-package` implements the experimental Library integrity contract
 `0.1.0-draft.1` and the bounded `flat-library` resolution operation from
 `0.1.0-draft.2`. Applications can use it independently of the Compatibility Kit.

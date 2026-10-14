@@ -27,6 +27,10 @@ impl LibraryInput {
     pub fn new(manifest: String, files: Vec<(String, Vec<u8>)>) -> Self {
         Self { manifest, files }
     }
+
+    pub(crate) fn into_parts(self) -> (String, Vec<(String, Vec<u8>)>) {
+        (self.manifest, self.files)
+    }
 }
 
 /// A closed set whose declarations, bytes, IR payloads and graph agree.

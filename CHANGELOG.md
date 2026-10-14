@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `morphir-package` exposes an immutable in-process `restore_snapshot` result
+  retaining the exact verified native Library and context bytes after a fresh
+  exact-lock restore completes. Existing restore reports remain unchanged.
+  Snapshots are not persisted authorization or a shared process protocol.
 - `morphir-mck-adapter` answers a versioned MCK capabilities request with
   exact contract version `2.0.0-draft.1` while preserving the unversioned
   request and numeric response of the version 1 exchange.

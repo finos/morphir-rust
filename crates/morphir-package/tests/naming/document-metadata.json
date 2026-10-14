@@ -1,0 +1,11 @@
+{
+    "@context": "./contexts/schema.jsonld",
+    "@graph": [
+      {
+        "@id": "morphir://ir/pkg/morphir/naming?format=4.1.0#/module/naming/value/target-names",
+        "subject-role": "ValueDefinition",
+        "object-form": "data",
+        "interpreter": "target-name-language-ids"
+      }
+    ]
+  }

@@ -1,0 +1,78 @@
+{
+  "formatVersion": "4.1.0",
+  "distribution": {
+    "Library": {
+      "packageName": "morphir/naming",
+      "dependencies": {},
+      "def": {
+        "modules": {
+          "naming": {
+            "Public": {
+              "types": {},
+              "values": {
+                "target-names": {
+                  "Public": {
+                    "ExpressionBody": {
+                      "inputTypes": {},
+                      "outputType": {
+                        "Record": {
+                          "fields": {
+                            "frontend": {
+                              "Reference": {
+                                "fqname": "morphir/SDK:dict#dict",
+                                "args": [
+                                  "morphir/SDK:string#string",
+                                  "morphir/SDK:string#string"
+                                ]
+                              }
+                            },
+                            "backend": {
+                              "Reference": {
+                                "fqname": "morphir/SDK:dict#dict",
+                                "args": [
+                                  "morphir/SDK:string#string",
+                                  "morphir/SDK:string#string"
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "body": {
+                        "Record": {
+                          "fields": {
+                            "frontend": {
+                              "Reference": {
+                                "fqname": "morphir/SDK:dict#empty"
+                              }
+                            },
+                            "backend": {
+                              "Reference": {
+                                "fqname": "morphir/SDK:dict#empty"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$meta": {
+    "@context": "./contexts/schema.jsonld",
+    "@graph": [
+      {
+        "@id": "morphir://ir/pkg/morphir/naming?format=4.1.0#/module/naming/value/target-names",
+        "subject-role": "ValueDefinition",
+        "object-form": "data",
+        "interpreter": "target-name-language-ids"
+      }
+    ]
+  }
+}

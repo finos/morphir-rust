@@ -28,6 +28,24 @@ authority-qualified release such as `example.com/metadata/provider@1.0.0` can
 contain the IR package `acme/metadata`. Both identities must be checked at their
 respective boundaries; a bare IR name is not a registry package path.
 
+`provider_snapshot::project_library` derives a separately identified v4.0 core
+view from a retained native 4.1 Library. Its codec is
+`v4.1-document-metadata-to-v4.0/1`: original document metadata stays in its exact
+JSON body, and the native revision remains the original payload's digest.
+The converter reparses the derived core and checks typed distribution equality.
+It rejects node-local linked metadata and nonlexical parameter maps, including
+nested definitions, instead of silently discarding facts or changing argument
+order. These refusals require another qualified projection profile.
+
+The signed test-only naming release in
+`tests/naming` publishes
+`example.com/morphir/naming@1.0.0`, containing native IR package `morphir/naming`.
+Its own native facts declare the public `target-names` value with the closed
+`frontend`/`backend` record of `Dict String String`. The frozen native, context,
+metadata and core files are interoperability fixtures; known test signing keys
+must never become production defaults. Regenerate into a new directory with
+`cargo run -p morphir-package --example provider-snapshot-fixture -- <new-dir>`.
+
 `morphir-package` implements the experimental Library integrity contract
 `0.1.0-draft.1` and the bounded `flat-library` resolution operation from
 `0.1.0-draft.2`. Applications can use it independently of the Compatibility Kit.

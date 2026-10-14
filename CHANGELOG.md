@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A checked native 4.1 document-metadata projection for snapshot consumers,
+  retaining the native payload digest and refusing unsupported node metadata
+  or parameter ordering. A signed test naming release and frozen core/context
+  fixtures qualify the first consumer profile.
 - `morphir-package` exposes an immutable in-process `restore_snapshot` result
   retaining the exact verified native Library and context bytes after a fresh
   exact-lock restore completes. Existing restore reports remain unchanged.

@@ -240,7 +240,10 @@ async fn execute(
         profile: PROFILE,
         profile_version: PROFILE_VERSION,
         graph,
-        packages,
+        packages: packages
+            .into_iter()
+            .map(|library| library.package)
+            .collect(),
     })
 }
 

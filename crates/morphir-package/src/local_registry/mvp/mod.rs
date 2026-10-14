@@ -10,10 +10,12 @@ mod refresh;
 pub use refresh::{RefreshReport, RefreshRequest, refresh};
 mod resolve;
 pub use resolve::{ResolveReport, ResolveRequest, UpdateRequest, resolve, update};
+mod snapshot;
 mod store;
 mod verify;
 use super::*;
 use serde::Serialize;
+pub use snapshot::{RestoredSnapshot, SnapshotFile, SnapshotLibrary, restore_snapshot};
 use std::path::Path;
 /// Distinct prerelease capability; this is not provider qualification.
 pub const PROFILE: &str = "local-library-mvp";
@@ -177,52 +179,7 @@ async fn restore_at(
     request: RestoreRequest<'_>,
     now: jiff::Timestamp,
 ) -> Result<RestoreReport, Error> {
-    let policy = policy(request.policy)?;
-    let lock = decode_library_lock(request.lock)?;
-    require(
-        lock.registries().len() == 1,
-        "MVP requires exactly one lock registry",
-    )?;
-    files::absent(request.output)?;
-    let registry = files::directory(request.registry)?;
-    let backend = store::Backend::begin(
-        request.state,
-        &policy.repositories()[0],
-        now,
-        request.policy.len() + request.lock.len(),
-    )?;
-    let fresh = fresh::authenticate(&backend, &registry, &policy.repositories()[0]).await?;
-    fresh.check_lock_pins(&lock)?;
-    let parent = request
-        .output
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let stage = tempfile::Builder::new()
-        .prefix(".morphir-restore-")
-        .tempdir_in(parent)?;
-    let packages = verify::graph(
-        &backend,
-        &registry,
-        &policy,
-        &lock,
-        fresh.targets(),
-        stage.path(),
-        verify::Selection::ExactLocked,
-    )?;
-    backend.accept_operation_time()?;
-    // The provider contract requires callers to coordinate writers to the output root.
-    files::absent(request.output)?;
-    files::promote(stage.path(), request.output)?;
-    if let Err(error) = backend.finish() {
-        let _ = std::fs::remove_dir_all(request.output);
-        return Err(error);
-    }
-    Ok(RestoreReport {
-        profile: PROFILE,
-        profile_version: PROFILE_VERSION,
-        packages,
-    })
+    Ok(snapshot::restore_at(request, now).await?.into_report())
 }
 
 #[cfg(test)]

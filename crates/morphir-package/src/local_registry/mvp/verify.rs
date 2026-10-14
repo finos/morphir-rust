@@ -87,6 +87,11 @@ pub(super) fn target(
     }
     Ok(bytes)
 }
+/// Retained input paired with the release verified against its locked node.
+pub(super) struct VerifiedLibrary {
+    pub package: RestoredPackage,
+    pub input: LibraryInput,
+}
 pub(super) fn graph(
     backend: &Backend,
     registry: &Path,
@@ -95,7 +100,7 @@ pub(super) fn graph(
     targets: &Value,
     stage: &Path,
     selection: Selection<'_>,
-) -> Result<Vec<RestoredPackage>, Error> {
+) -> Result<Vec<VerifiedLibrary>, Error> {
     let schemas = PackageSchemas::compile(
         &serde_json::from_str(include_str!("schemas/library-manifest.schema.json"))?,
         &serde_json::from_str(include_str!("schemas/lock-core.schema.json"))?,
@@ -266,7 +271,11 @@ pub(super) fn graph(
     }
     let lock_core = json!({"formatVersion":"0.1.0-draft.1","kind":"LibraryLockCore","root":index(graph.root())?,"nodes":nodes});
     VerifiedLibrarySet::verify(&schemas, &serde_json::to_string(&lock_core)?, &libraries)?;
-    Ok(packages)
+    Ok(packages
+        .into_iter()
+        .zip(libraries)
+        .map(|(package, input)| VerifiedLibrary { package, input })
+        .collect())
 }
 #[cfg(test)]
 mod tests {

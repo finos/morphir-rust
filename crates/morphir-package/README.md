@@ -38,7 +38,7 @@ nested definitions, instead of silently discarding facts or changing argument
 order. These refusals require another qualified projection profile.
 
 The signed test-only naming release in
-`tests/local_registry/naming-snapshot-fixture` publishes
+`tests/naming` publishes
 `example.com/morphir/naming@1.0.0`, containing native IR package `morphir/naming`.
 Its own native facts declare the public `target-names` value with the closed
 `frontend`/`backend` record of `Dict String String`. The frozen native, context,

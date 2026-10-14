@@ -169,8 +169,7 @@ async fn nonlexical_parameters_are_refused_instead_of_reordered() {
 #[tokio::test]
 async fn frozen_signed_naming_corpus_retains_its_native_revision_and_projection() {
     use std::{fs, path::Path};
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/local_registry/naming-snapshot-fixture");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/naming");
     let directory = tempfile::tempdir().unwrap();
     let policy = fs::read(fixture.join("trust-policy.json")).unwrap();
     let lock = fs::read(fixture.join("morphir.lock")).unwrap();

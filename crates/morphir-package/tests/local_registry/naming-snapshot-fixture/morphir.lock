@@ -1,0 +1,92 @@
+{
+  "acquisitions": [
+    {
+      "record": {
+        "digest": "sha256:328e70cd32e10f63d11e397e25219ca7f442224fa0cc970ee7007b917e7c669c",
+        "path": "records/provider-1.0.0.json"
+      },
+      "registry": "local",
+      "release": {
+        "packagePath": "example.com/morphir/naming",
+        "version": "1.0.0"
+      },
+      "source": {
+        "kind": "registry-directory",
+        "path": "bundles/239c301288eacfc5461e999c63e1c87e48e28262f8e21b5c67b8ae68c6352ac4"
+      },
+      "statement": "statement-0"
+    }
+  ],
+  "evidence": [
+    {
+      "digest": "sha256:70b78ded5986c442ea3f43013f2a6036015aab7de933fbbb7fd8a7d3234955bc",
+      "id": "root",
+      "kind": "tuf-root",
+      "path": "metadata/1.root.json",
+      "registry": "local"
+    },
+    {
+      "digest": "sha256:c647e0d4637c801b5d0f8b998d411f54d2b51cf5c68453979c376f726e8f34f8",
+      "id": "snapshot",
+      "kind": "tuf-snapshot",
+      "path": "metadata/1.snapshot.json",
+      "registry": "local"
+    },
+    {
+      "digest": "sha256:38d977adb0112ae93624388a3fa55e2b6fc7d046a99f51125dfa558a6617f5c8",
+      "id": "statement-0",
+      "kind": "release-statement",
+      "path": "statements/239c301288eacfc5461e999c63e1c87e48e28262f8e21b5c67b8ae68c6352ac4/release.json",
+      "registry": "local"
+    },
+    {
+      "digest": "sha256:1c2777a96daaece05807773dc040136d58afaedfe5d18a211a76c75313ee51a8",
+      "id": "targets",
+      "kind": "tuf-targets",
+      "path": "metadata/1.targets.json",
+      "registry": "local"
+    },
+    {
+      "digest": "sha256:29089b92c07c857b544b2002d62264902099161522c4d8d9ea7f6f235a63e5c7",
+      "id": "timestamp",
+      "kind": "tuf-timestamp",
+      "path": "metadata/1.timestamp.json",
+      "registry": "local"
+    }
+  ],
+  "formatVersion": "0.1.0-draft.3",
+  "graph": {
+    "nodes": [
+      {
+        "bindings": [],
+        "contentDigest": "sha256:239c301288eacfc5461e999c63e1c87e48e28262f8e21b5c67b8ae68c6352ac4",
+        "irPackageName": "morphir/naming",
+        "manifestDigest": "sha256:6cb0bc82444be09c334f602975c2edd4798cfba84e05e5b3e2cd5afeec42d302",
+        "release": {
+          "packagePath": "example.com/morphir/naming",
+          "version": "1.0.0"
+        }
+      }
+    ],
+    "root": {
+      "packagePath": "example.com/morphir/naming",
+      "version": "1.0.0"
+    }
+  },
+  "kind": "LibraryLock",
+  "registries": [
+    {
+      "id": "local",
+      "snapshot": "snapshot"
+    }
+  ],
+  "resolution": {
+    "policy": "flat-library:0.1.0-draft.2",
+    "profile": "local-library",
+    "requiredCapabilities": [
+      "dsse-ed25519",
+      "local-directory",
+      "tuf-1.0.36"
+    ]
+  }
+}

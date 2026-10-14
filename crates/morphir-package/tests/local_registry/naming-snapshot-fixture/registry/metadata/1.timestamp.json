@@ -1,0 +1,2 @@
+
+ {"signatures":[{"keyid":"c1e3566d2143da273b4904ad552a906ce4b6130510f8eceba62d908d8bac8d4e","sig":"8279dd93e6c5a11ac98b84fdc080bb0fbaf9c5ac3e187924786bd2d2beb3e5762f0f6ca70fb8479a24f07f7052d1bfab0b934242094a837a336d6e606e5e830a"}],"signed":{"_type":"timestamp","expires":"2100-01-01T00:00:00Z","meta":{"snapshot.json":{"hashes":{"sha256":"c647e0d4637c801b5d0f8b998d411f54d2b51cf5c68453979c376f726e8f34f8"},"length":470,"version":1}},"spec_version":"1.0.36","version":1}}

@@ -40,9 +40,44 @@ fn target(root: &Path, path: &str, bytes: &[u8]) -> serde_json::Value {
 }
 
 pub async fn a_signed_provider() -> SignedProvider {
+    a_signed_provider_with(|_| {}).await
+}
+
+pub async fn a_signed_provider_with(mutate: impl FnOnce(&mut serde_json::Value)) -> SignedProvider {
+    a_signed_provider_at("example.com/metadata/provider", mutate).await
+}
+
+pub async fn a_signed_naming_provider() -> SignedProvider {
+    a_signed_provider_at("example.com/morphir/naming", |native| {
+        let string_dict = json!({"Reference": {
+            "fqname": "morphir/SDK:dict#dict",
+            "args": ["morphir/SDK:string#string", "morphir/SDK:string#string"]
+        }});
+        let empty = json!({"Reference": {"fqname": "morphir/SDK:dict#empty"}});
+        native["distribution"]["Library"]["packageName"] = json!("morphir/naming");
+        native["distribution"]["Library"]["def"]["modules"] = json!({"naming": {"Public": {
+            "types": {},
+            "values": {"target-names": {"Public": {"ExpressionBody": {
+                "inputTypes": {},
+                "outputType": {"Record": {"fields": {"frontend": string_dict, "backend": string_dict}}},
+                "body": {"Record": {"fields": {"frontend": empty, "backend": empty}}}
+            }}}}
+        }}});
+        native["$meta"]["@graph"] = json!([{
+            "@id": "morphir://ir/pkg/morphir/naming?format=4.1.0#/module/naming/value/target-names",
+            "subject-role": "ValueDefinition", "object-form": "data",
+            "interpreter": "target-name-language-ids"
+        }]);
+    }).await
+}
+
+async fn a_signed_provider_at(
+    package_path: &str,
+    mutate: impl FnOnce(&mut serde_json::Value),
+) -> SignedProvider {
     let directory = tempfile::tempdir().unwrap();
     let registry = directory.path().join("registry");
-    let native = serde_json::to_vec_pretty(&json!({
+    let mut document = json!({
         "formatVersion": "4.1.0",
         "distribution": {"Library": {
             "packageName": "acme/metadata", "dependencies": {},
@@ -58,12 +93,20 @@ pub async fn a_signed_provider() -> SignedProvider {
             "subject-role": ["ValueSpecification", "ValueDefinition"],
             "object-form": "data", "interpreter": "descriptive"
         }]}
-    }))
-    .unwrap();
+    });
+    mutate(&mut document);
+    let exports: serde_json::Map<String, serde_json::Value> =
+        document["distribution"]["Library"]["def"]["modules"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|name| (name.clone(), json!(name)))
+            .collect();
+    let native = serde_json::to_vec_pretty(&document).unwrap();
     let library = AuthoredLibrary::create_with_contexts(
         &serde_json::to_vec(&json!({
-            "packagePath": "example.com/metadata/provider", "version": "1.0.0",
-            "dependencies": {}, "exports": {"lifecycle": "lifecycle"}
+            "packagePath": package_path, "version": "1.0.0",
+            "dependencies": {}, "exports": exports
         }))
         .unwrap(),
         &native,
@@ -135,7 +178,7 @@ pub async fn a_signed_provider() -> SignedProvider {
     mvp::resolve(ResolveRequest {
         policy: &policy,
         root: ReleaseId::new(
-            PackagePath::parse("example.com/metadata/provider").unwrap(),
+            PackagePath::parse(package_path).unwrap(),
             StableVersion::parse("1.0.0").unwrap(),
         ),
         registry: &registry,

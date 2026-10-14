@@ -11,6 +11,7 @@ use std::{
 };
 
 #[path = "local_registry/snapshot_mothers.rs"]
+#[allow(dead_code)]
 mod signed_provider;
 #[path = "local_registry/tuf_mothers.rs"]
 #[allow(dead_code)]

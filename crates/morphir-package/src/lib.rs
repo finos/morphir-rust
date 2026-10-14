@@ -10,6 +10,7 @@ pub mod digest;
 pub mod library;
 pub mod local_registry;
 pub mod metadata;
+pub mod provider_snapshot;
 pub mod resolution;
 pub mod schema;
 pub mod strict_json;

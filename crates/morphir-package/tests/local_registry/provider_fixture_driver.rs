@@ -51,7 +51,7 @@ impl TestDriver {
         assert!(!self.destination().join("test-state").exists());
     }
     /// Restore through the real executable using newly initialized test trust.
-    pub fn assert_fresh_authentication(&self) {
+    pub fn assert_fresh_authentication(&self) -> Element {
         assert!(self.result.as_ref().unwrap().is_ok());
         let destination = self.destination();
         let bytes = Element::from(
@@ -108,6 +108,67 @@ impl TestDriver {
             library.get("native").unwrap().as_blob().unwrap(),
             fs::read(destination.join("native.json")).unwrap()
         );
+        response
+    }
+    /// Export an explicitly selected signed variant with fresh destination trust.
+    pub async fn export_variant(&mut self, variant: &str) {
+        let args = vec![
+            self.destination().into_os_string(),
+            "--provision-test-trust".into(),
+            "--variant".into(),
+            variant.into(),
+        ];
+        self.result = Some(fixture::run(args).await.map_err(|e| e.to_string()));
+    }
+    /// Independently inspect freshly authenticated native declarations and contexts.
+    pub fn assert_variant(&self, variant: &str) {
+        let response = self.assert_fresh_authentication();
+        let native: serde_json::Value =
+            serde_json::from_slice(&fs::read(self.destination().join("native.json")).unwrap())
+                .unwrap();
+        let declaration = &native["$meta"]["@graph"][0];
+        match variant {
+            "wrong-type" => assert_eq!(
+                native["distribution"]["Library"]["def"]["modules"]["naming"]["Public"]["values"]["target-names"]
+                    ["Public"]["ExpressionBody"]["outputType"],
+                "morphir/SDK:basics#bool"
+            ),
+            "wrong-subject-role" => assert_eq!(declaration["subject-role"], "ValueSpecification"),
+            "wrong-object-form" => assert_eq!(declaration["object-form"], "iri"),
+            "wrong-interpreter" => assert_eq!(declaration["interpreter"], "descriptive"),
+            "ambiguous-contexts" => {
+                let library = response
+                    .as_struct()
+                    .unwrap()
+                    .get("libraries")
+                    .unwrap()
+                    .as_list()
+                    .unwrap()
+                    .elements()
+                    .next()
+                    .unwrap()
+                    .as_struct()
+                    .unwrap();
+                let contexts: Vec<_> = library
+                    .get("contexts")
+                    .unwrap()
+                    .as_list()
+                    .unwrap()
+                    .elements()
+                    .map(|v| v.as_struct().unwrap())
+                    .collect();
+                assert_eq!(contexts.len(), 2);
+                assert_eq!(contexts[0].get("sha256"), contexts[1].get("sha256"));
+                assert_eq!(contexts[0].get("bytes"), contexts[1].get("bytes"));
+                let mut paths: Vec<_> = contexts
+                    .iter()
+                    .map(|c| c.get("path").unwrap().as_string().unwrap())
+                    .collect();
+                paths.sort();
+                assert_eq!(paths, ["contexts/alias.jsonld", "contexts/schema.jsonld"]);
+            }
+            _ => panic!("unknown expected variant"),
+        }
     }
     /// Retain all exported bytes before a refused repeated invocation.
     pub fn remember_existing(&mut self) {

@@ -56,6 +56,14 @@ async fn unknown(world: &mut FixtureWorld) {
 fn no_destination(world: &mut FixtureWorld) {
     world.driver().assert_no_destination();
 }
+#[when(expr = "I export the signed {string} variant with fresh test trust")]
+async fn export_variant(world: &mut FixtureWorld, variant: String) {
+    world.driver().export_variant(&variant).await;
+}
+#[then(expr = "the shared service freshly authenticates the {string} fixture bytes and inventory")]
+fn variant_authenticated(world: &mut FixtureWorld, variant: String) {
+    world.driver().assert_variant(&variant);
+}
 #[tokio::main]
 async fn main() {
     FixtureWorld::cucumber()

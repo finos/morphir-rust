@@ -37,6 +37,9 @@ impl ExportRequest {
         let destination = args
             .next()
             .ok_or("supply a new output directory for TEST-ONLY fixtures")?;
+        if destination.as_encoded_bytes().starts_with(b"--") {
+            return Err("supply the new output directory before --provision-test-trust");
+        }
         let trust = match args.next() {
             None => TestTrust::Omit,
             Some(flag) if flag == "--provision-test-trust" => TestTrust::InitializeFresh,
@@ -187,6 +190,8 @@ mod tests {
         assert_eq!(explicit.destination, PathBuf::from("new-output"));
         for args in [
             vec![],
+            vec!["--provision-test-trust"],
+            vec!["--implicit-trust", "new-output"],
             vec!["new-output", "--automatic-trust"],
             vec![
                 "new-output",

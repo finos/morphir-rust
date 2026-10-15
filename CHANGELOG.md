@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Signed provider test fixtures support explicit semantic incompatibility and
+  ambiguous-context variants. Real-service acceptance verifies their signed
+  bytes and inventory; consumer admission remains a separate check.
 - The signed provider fixture example can explicitly initialize fresh test-only
   destination trust with `--provision-test-trust`. Default exports remain
   artifacts-only; existing destinations and unsupported arguments refuse.

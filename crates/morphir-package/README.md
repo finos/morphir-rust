@@ -62,6 +62,16 @@ incomplete export is not repaired automatically: inspect it and choose a fresh
 test destination. No engine or production host invokes this example, and its
 known test keys must never become production trust defaults.
 
+The optional `--variant <name>` selects signed fixture content. `compatible` is
+the default. `wrong-type`, `wrong-subject-role`, `wrong-object-form` and
+`wrong-interpreter` change declarations before signing, so authentication can
+succeed while a consumer refuses admission. `ambiguous-contexts` signs identical
+context bytes at `contexts/schema.jsonld` and `contexts/alias.jsonld`. Consumers
+must refuse ambiguous digest-only selection and can resolve each path relative
+to its admitted inventory base. This option and `--provision-test-trust` may
+appear in either order after the destination. Unknown variants, missing values
+and repeated options refuse before output is created.
+
 ## One-shot snapshot service
 
 Build with `cargo build --locked -p morphir-package --bin morphir-provider-snapshot`.

@@ -47,8 +47,49 @@ pub async fn a_signed_provider_with(mutate: impl FnOnce(&mut serde_json::Value))
     a_signed_provider_at("example.com/metadata/provider", mutate).await
 }
 
+/// Signed test cases separate authentication from consumer admission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NamingVariant {
+    /// Accepted naming declaration and one context.
+    #[default]
+    Compatible,
+    /// A well-formed Boolean value instead of the naming record.
+    WrongType,
+    /// A schema role unsupported by the naming interpreter.
+    WrongSubjectRole,
+    /// An IRI object declaration instead of literal data.
+    WrongObjectForm,
+    /// A descriptive interpreter instead of target naming.
+    WrongInterpreter,
+    /// Equal context bytes retained at two distinct inventory paths.
+    AmbiguousContexts,
+}
+impl NamingVariant {
+    /// Parse only documented test fixture variants.
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "compatible" => Ok(Self::Compatible),
+            "wrong-type" => Ok(Self::WrongType),
+            "wrong-subject-role" => Ok(Self::WrongSubjectRole),
+            "wrong-object-form" => Ok(Self::WrongObjectForm),
+            "wrong-interpreter" => Ok(Self::WrongInterpreter),
+            "ambiguous-contexts" => Ok(Self::AmbiguousContexts),
+            _ => Err("unknown signed fixture variant"),
+        }
+    }
+}
+
 pub async fn a_signed_naming_provider() -> SignedProvider {
-    a_signed_provider_at("example.com/morphir/naming", |native| {
+    a_signed_naming_variant(NamingVariant::Compatible).await
+}
+
+/// Sign a selected naming declaration and its complete context inventory.
+pub async fn a_signed_naming_variant(variant: NamingVariant) -> SignedProvider {
+    let mut contexts = vec![("contexts/schema.jsonld".into(), CONTEXT.to_vec())];
+    if variant == NamingVariant::AmbiguousContexts {
+        contexts.push(("contexts/alias.jsonld".into(), CONTEXT.to_vec()));
+    }
+    a_signed_provider_at_with_contexts("example.com/morphir/naming", |native| {
         let string_dict = json!({"Reference": {
             "fqname": "morphir/SDK:dict#dict",
             "args": ["morphir/SDK:string#string", "morphir/SDK:string#string"]
@@ -68,12 +109,36 @@ pub async fn a_signed_naming_provider() -> SignedProvider {
             "subject-role": "ValueDefinition", "object-form": "data",
             "interpreter": "target-name-language-ids"
         }]);
-    }).await
+        match variant {
+            NamingVariant::Compatible | NamingVariant::AmbiguousContexts => {},
+            NamingVariant::WrongType => {
+                let value = &mut native["distribution"]["Library"]["def"]["modules"]["naming"]["Public"]["values"]["target-names"]["Public"]["ExpressionBody"];
+                value["outputType"] = json!("morphir/SDK:basics#bool");
+                value["body"] = json!({"Literal": {"BoolLiteral": true}});
+            },
+            NamingVariant::WrongSubjectRole => native["$meta"]["@graph"][0]["subject-role"] = json!("ValueSpecification"),
+            NamingVariant::WrongObjectForm => native["$meta"]["@graph"][0]["object-form"] = json!("iri"),
+            NamingVariant::WrongInterpreter => native["$meta"]["@graph"][0]["interpreter"] = json!("descriptive"),
+        }
+    }, contexts).await
 }
 
 async fn a_signed_provider_at(
     package_path: &str,
     mutate: impl FnOnce(&mut serde_json::Value),
+) -> SignedProvider {
+    a_signed_provider_at_with_contexts(
+        package_path,
+        mutate,
+        vec![("contexts/schema.jsonld".into(), CONTEXT.to_vec())],
+    )
+    .await
+}
+
+async fn a_signed_provider_at_with_contexts(
+    package_path: &str,
+    mutate: impl FnOnce(&mut serde_json::Value),
+    contexts: Vec<(String, Vec<u8>)>,
 ) -> SignedProvider {
     let directory = tempfile::tempdir().unwrap();
     let registry = directory.path().join("registry");
@@ -110,7 +175,7 @@ async fn a_signed_provider_at(
         }))
         .unwrap(),
         &native,
-        vec![("contexts/schema.jsonld".into(), CONTEXT.to_vec())],
+        contexts.clone(),
     )
     .unwrap();
     let publisher = LocalSigningKey::from_seed([21; 32]);
@@ -125,11 +190,9 @@ async fn a_signed_provider_at(
         library.manifest_bytes(),
     );
     write(&registry, &format!("{bundle}/ir.json"), library.ir_bytes());
-    write(
-        &registry,
-        &format!("{bundle}/contexts/schema.jsonld"),
-        CONTEXT,
-    );
+    for (path, bytes) in contexts {
+        write(&registry, &format!("{bundle}/{path}"), &bytes);
+    }
 
     let mut targets = tuf::targets_body(1);
     let record_path = "records/provider-1.0.0.json";

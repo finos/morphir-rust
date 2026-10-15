@@ -3,6 +3,9 @@
 //! Add `--provision-test-trust` after the new destination to initialize fresh,
 //! destination-local test trust for real service qualification. Production hosts
 //! must never call this example or install its test keys as trust defaults.
+//! `--variant` selects signed semantic incompatibilities or duplicate context
+//! bytes at distinct inventory paths. These are authenticated test artifacts,
+//! not declarations that a consumer must admit.
 #[path = "../tests/local_registry/snapshot_mothers.rs"]
 #[allow(dead_code)]
 mod mothers;
@@ -30,6 +33,7 @@ enum TestTrust {
 struct ExportRequest {
     destination: PathBuf,
     trust: TestTrust,
+    variant: mothers::NamingVariant,
 }
 impl ExportRequest {
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, &'static str> {
@@ -40,17 +44,24 @@ impl ExportRequest {
         if destination.as_encoded_bytes().starts_with(b"--") {
             return Err("supply the new output directory before --provision-test-trust");
         }
-        let trust = match args.next() {
-            None => TestTrust::Omit,
-            Some(flag) if flag == "--provision-test-trust" => TestTrust::InitializeFresh,
-            Some(_) => return Err("the only optional argument is --provision-test-trust"),
-        };
-        if args.next().is_some() {
-            return Err("unexpected extra fixture arguments");
+        let mut trust = TestTrust::Omit;
+        let mut variant = None;
+        while let Some(flag) = args.next() {
+            if flag == "--provision-test-trust" && trust == TestTrust::Omit {
+                trust = TestTrust::InitializeFresh;
+            } else if flag == "--variant" && variant.is_none() {
+                let value = args.next().ok_or("--variant requires a value")?;
+                variant = Some(mothers::NamingVariant::parse(
+                    value.to_str().ok_or("non-UTF-8 variant")?,
+                )?);
+            } else {
+                return Err("unknown or repeated fixture option");
+            }
         }
         Ok(Self {
             destination: destination.into(),
             trust,
+            variant: variant.unwrap_or_default(),
         })
     }
 }
@@ -81,7 +92,7 @@ pub(crate) async fn run(
     let export = ExportRequest::parse(args)?;
     let destination = export.destination.as_path();
     fs::create_dir(destination)?;
-    let provider = mothers::a_signed_naming_provider().await;
+    let provider = mothers::a_signed_naming_variant(export.variant).await;
     let snapshot = mvp::restore_snapshot(RestoreRequest {
         policy: &provider.policy,
         lock: &provider.lock,
@@ -102,8 +113,15 @@ pub(crate) async fn run(
     )?;
     fs::write(destination.join("trust-policy.json"), &provider.policy)?;
     fs::write(destination.join("morphir.lock"), &provider.lock)?;
-    fs::create_dir(destination.join("contexts"))?;
-    fs::write(destination.join("contexts/schema.jsonld"), mothers::CONTEXT)?;
+    copy_tree(
+        &provider
+            .directory
+            .path()
+            .join("registry")
+            .join(&provider.bundle)
+            .join("contexts"),
+        &destination.join("contexts"),
+    )?;
     copy_tree(
         &provider.directory.path().join("registry"),
         &destination.join("registry"),
@@ -176,7 +194,7 @@ pub(crate) async fn run(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn explicit_test_trust_is_the_only_optional_mode() {
+    fn fixture_options_are_explicit_and_validated_before_export() {
         use super::{ExportRequest, TestTrust};
         use std::{ffi::OsString, path::PathBuf};
         let artifact = ExportRequest::parse([OsString::from("new-output")]).unwrap();
@@ -189,6 +207,24 @@ mod tests {
         assert_eq!(explicit.trust, TestTrust::InitializeFresh);
         assert_eq!(explicit.destination, PathBuf::from("new-output"));
         for args in [
+            vec![
+                "new-output",
+                "--variant",
+                "wrong-type",
+                "--provision-test-trust",
+            ],
+            vec![
+                "new-output",
+                "--provision-test-trust",
+                "--variant",
+                "wrong-type",
+            ],
+        ] {
+            let parsed = ExportRequest::parse(args.into_iter().map(OsString::from)).unwrap();
+            assert_eq!(parsed.variant, super::mothers::NamingVariant::WrongType);
+            assert_eq!(parsed.trust, TestTrust::InitializeFresh);
+        }
+        for args in [
             vec![],
             vec!["--provision-test-trust"],
             vec!["--implicit-trust", "new-output"],
@@ -199,6 +235,15 @@ mod tests {
                 "--provision-test-trust",
             ],
             vec!["new-output", "--provision-test-trust", "extra"],
+            vec!["new-output", "--variant"],
+            vec!["new-output", "--variant", "unknown"],
+            vec![
+                "new-output",
+                "--variant",
+                "compatible",
+                "--variant",
+                "wrong-type",
+            ],
         ] {
             assert!(ExportRequest::parse(args.into_iter().map(OsString::from)).is_err());
         }

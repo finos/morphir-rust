@@ -20,3 +20,16 @@ Feature: Explicit signed test fixture trust provisioning
     Given a new signed provider fixture destination
     When I request an unknown trust option
     Then the export refuses without creating the destination
+
+  Scenario Outline: Authenticate signed semantic and context variants without granting admission
+    Given a new signed provider fixture destination
+    When I export the signed "<variant>" variant with fresh test trust
+    Then the shared service freshly authenticates the "<variant>" fixture bytes and inventory
+
+    Examples:
+      | variant            |
+      | wrong-type         |
+      | wrong-subject-role |
+      | wrong-object-form  |
+      | wrong-interpreter  |
+      | ambiguous-contexts |

@@ -46,6 +46,22 @@ metadata and core files are interoperability fixtures; known test signing keys
 must never become production defaults. Regenerate into a new directory with
 `cargo run -p morphir-package --example provider-snapshot-fixture -- <new-dir>`.
 
+The default exports no destination trust database. Installed signed-provider tests
+can explicitly request fresh test-only trust with:
+
+```shell
+cargo run -p morphir-package --example provider-snapshot-fixture -- \
+  <new-dir> --provision-test-trust
+```
+
+This initializes `<new-dir>/test-state` from the exported test policy and root,
+so the real one-shot service can freshly authenticate the exported registry.
+The destination must not exist. Re-export refuses before changing existing files
+or trust state; unknown or repeated options refuse before creating output. An
+incomplete export is not repaired automatically: inspect it and choose a fresh
+test destination. No engine or production host invokes this example, and its
+known test keys must never become production trust defaults.
+
 ## One-shot snapshot service
 
 Build with `cargo build --locked -p morphir-package --bin morphir-provider-snapshot`.

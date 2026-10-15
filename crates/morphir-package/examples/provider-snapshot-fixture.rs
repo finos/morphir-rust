@@ -1,5 +1,8 @@
 //! Emit explicit test-only signing artifacts and projection interoperability files.
-//! No private trust database is exported; the known signing seeds are test keys.
+//! By default no private trust database is exported. Known signing seeds are test keys.
+//! Add `--provision-test-trust` after the new destination to initialize fresh,
+//! destination-local test trust for real service qualification. Production hosts
+//! must never call this example or install its test keys as trust defaults.
 #[path = "../tests/local_registry/snapshot_mothers.rs"]
 #[allow(dead_code)]
 mod mothers;
@@ -11,7 +14,43 @@ use morphir_package::{
     local_registry::mvp::{self, RestoreRequest},
     provider_snapshot::project_library,
 };
-use std::{fs, path::Path};
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug, PartialEq, Eq)]
+enum TestTrust {
+    Omit,
+    InitializeFresh,
+}
+
+#[derive(Debug)]
+struct ExportRequest {
+    destination: PathBuf,
+    trust: TestTrust,
+}
+impl ExportRequest {
+    fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, &'static str> {
+        let mut args = args.into_iter();
+        let destination = args
+            .next()
+            .ok_or("supply a new output directory for TEST-ONLY fixtures")?;
+        let trust = match args.next() {
+            None => TestTrust::Omit,
+            Some(flag) if flag == "--provision-test-trust" => TestTrust::InitializeFresh,
+            Some(_) => return Err("the only optional argument is --provision-test-trust"),
+        };
+        if args.next().is_some() {
+            return Err("unexpected extra fixture arguments");
+        }
+        Ok(Self {
+            destination: destination.into(),
+            trust,
+        })
+    }
+}
 
 fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir(destination)?;
@@ -29,10 +68,15 @@ fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let destination = std::env::args_os()
-        .nth(1)
-        .ok_or("supply a new output directory for TEST-ONLY fixtures")?;
-    let destination = Path::new(&destination);
+    run(std::env::args_os().skip(1)).await
+}
+
+/// Export a new caller-selected directory of signed test-only artifacts.
+pub(crate) async fn run(
+    args: impl IntoIterator<Item = OsString>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let export = ExportRequest::parse(args)?;
+    let destination = export.destination.as_path();
     fs::create_dir(destination)?;
     let provider = mothers::a_signed_naming_provider().await;
     let snapshot = mvp::restore_snapshot(RestoreRequest {
@@ -106,9 +150,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         destination.join("capabilities.ionb"),
         morphir_package::provider_snapshot::service::serve_request(&probe).await?,
     )?;
+    let trust_note = match export.trust {
+        TestTrust::Omit => "No destination trust database was initialized.\n",
+        TestTrust::InitializeFresh => {
+            mvp::initialize(mvp::InitializeRequest {
+                policy: &provider.policy,
+                root: &fs::read(destination.join("registry/metadata/1.root.json"))?,
+                state: &destination.join("test-state"),
+            })?;
+            "Fresh test-state was initialized by explicit --provision-test-trust. Never use this test trust in production.\n"
+        }
+    };
     fs::write(
         destination.join("README.md"),
-        "# Test-only signed naming provider\n\nKnown test keys sign this local fixture. Never install them as production trust defaults.\nNative IR: morphir/naming 4.1.0. Publisher release: example.com/morphir/naming@1.0.0.\nThe native payload revision is its raw SHA-256, separate from the derived core view.\n",
+        format!(
+            "# Test-only signed naming provider\n\nKnown test keys sign this local fixture. Never install them as production trust defaults.\nNative IR: morphir/naming 4.1.0. Publisher release: example.com/morphir/naming@1.0.0.\nThe native payload revision is its raw SHA-256, separate from the derived core view.\n{trust_note}"
+        ),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn explicit_test_trust_is_the_only_optional_mode() {
+        use super::{ExportRequest, TestTrust};
+        use std::{ffi::OsString, path::PathBuf};
+        let artifact = ExportRequest::parse([OsString::from("new-output")]).unwrap();
+        assert_eq!(artifact.trust, TestTrust::Omit);
+        let explicit = ExportRequest::parse([
+            OsString::from("new-output"),
+            OsString::from("--provision-test-trust"),
+        ])
+        .unwrap();
+        assert_eq!(explicit.trust, TestTrust::InitializeFresh);
+        assert_eq!(explicit.destination, PathBuf::from("new-output"));
+        for args in [
+            vec![],
+            vec!["new-output", "--automatic-trust"],
+            vec![
+                "new-output",
+                "--provision-test-trust",
+                "--provision-test-trust",
+            ],
+            vec!["new-output", "--provision-test-trust", "extra"],
+        ] {
+            assert!(ExportRequest::parse(args.into_iter().map(OsString::from)).is_err());
+        }
+    }
 }

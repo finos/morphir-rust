@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The signed provider fixture example can explicitly initialize fresh test-only
+  destination trust with `--provision-test-trust`. Default exports remain
+  artifacts-only; existing destinations and unsupported arguments refuse.
 - `morphir-provider-snapshot` provides a bounded one-shot binary Ion 1.0
   service around fresh exact-lock restore, returning retained original graph
   bytes and the checked root projection. Capability probes have no restore

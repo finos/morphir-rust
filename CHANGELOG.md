@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `morphir-provider-snapshot` provides a bounded one-shot binary Ion 1.0
+  service around fresh exact-lock restore, returning retained original graph
+  bytes and the checked root projection. Capability probes have no restore
+  effects; the caller still owns grants, executable qualification and process
+  supervision. This is the portable local-library MVP, not a hardened profile.
 - A checked native 4.1 document-metadata projection for snapshot consumers,
   retaining the native payload digest and refusing unsupported node metadata
   or parameter ordering. A signed test naming release and frozen core/context

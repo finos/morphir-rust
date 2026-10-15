@@ -8,6 +8,8 @@ repository.workspace = true
 description = "Experimental Morphir Library package metadata and integrity verification"
 
 [dependencies]
+ion-rs = { version = "1.0.1", features = ["experimental-reader-writer"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 morphir-core = { path = "../morphir-core", version = "0.2.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value", "arbitrary_precision"] }
@@ -31,7 +33,6 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 tempfile = "3"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 cucumber = "0.23"
 
 [[test]]
@@ -53,4 +54,8 @@ harness = false
 
 [[test]]
 name = "local_registry_update_acceptance"
+harness = false
+
+[[test]]
+name = "provider_snapshot_service_acceptance"
 harness = false

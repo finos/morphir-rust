@@ -4708,6 +4708,7 @@ dependencies = [
  "ed25519-zebra",
  "fs2",
  "futures",
+ "ion-rs",
  "jiff",
  "jsonschema",
  "libc",

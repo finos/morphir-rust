@@ -61,6 +61,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &provider.directory.path().join("registry"),
         &destination.join("registry"),
     )?;
+    let request = ion_rs::Element::from(
+        ion_rs::Struct::builder()
+            .with_field("invocation", "test-operation")
+            .with_field("projectScope", "a".repeat(64))
+            .with_field("release", "example.com/morphir/naming@1.0.0")
+            .with_field("assurance", "portable")
+            .with_field(
+                "registry",
+                provider.directory.path().join("registry").to_str().unwrap(),
+            )
+            .with_field(
+                "state",
+                provider.directory.path().join("trust").to_str().unwrap(),
+            )
+            .with_field(
+                "output",
+                provider
+                    .directory
+                    .path()
+                    .join("service-output")
+                    .to_str()
+                    .unwrap(),
+            )
+            .with_field("policy", ion_rs::Blob::from(provider.policy.clone()))
+            .with_field("lock", ion_rs::Blob::from(provider.lock.clone()))
+            .build(),
+    )
+    .with_annotations(["morphir_provider_snapshot_request_v1"])
+    .encode_as(ion_rs::v1_0::Binary)?;
+    fs::write(
+        destination.join("snapshot.ionb"),
+        morphir_package::provider_snapshot::service::serve_request(&request).await?,
+    )?;
+    let probe = ion_rs::Element::from(
+        ion_rs::Struct::builder()
+            .with_field("invocation", "test-operation")
+            .with_field("projectScope", "a".repeat(64))
+            .build(),
+    )
+    .with_annotations(["morphir_provider_capabilities_request_v1"])
+    .encode_as(ion_rs::v1_0::Binary)?;
+    fs::write(
+        destination.join("capabilities.ionb"),
+        morphir_package::provider_snapshot::service::serve_request(&probe).await?,
+    )?;
     fs::write(
         destination.join("README.md"),
         "# Test-only signed naming provider\n\nKnown test keys sign this local fixture. Never install them as production trust defaults.\nNative IR: morphir/naming 4.1.0. Publisher release: example.com/morphir/naming@1.0.0.\nThe native payload revision is its raw SHA-256, separate from the derived core view.\n",

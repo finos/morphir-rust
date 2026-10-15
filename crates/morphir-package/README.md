@@ -46,6 +46,59 @@ metadata and core files are interoperability fixtures; known test signing keys
 must never become production defaults. Regenerate into a new directory with
 `cargo run -p morphir-package --example provider-snapshot-fixture -- <new-dir>`.
 
+## One-shot snapshot service
+
+Build with `cargo build --locked -p morphir-package --bin morphir-provider-snapshot`.
+The executable accepts no arguments. Write one Ion 1.0 binary request to stdin,
+close stdin, and receive one binary response on stdout. The binary version marker
+is mandatory; text Ion and multiple application values are refused. Failure
+returns nonzero, empty stdout and one bounded diagnostic code on stderr.
+
+The protocol identity is `morphir-package/provider-snapshot/0.1.0-draft.1`. It
+identifies a wire contract, not the executable. The host must independently grant
+and qualify the executable, policy/lock reads, registry and already provisioned
+state roots. It owns deadlines, cancellation, process-tree quiescence and scratch
+disposal. Nothing installs a service or initializes trust automatically.
+
+All structs are closed, with unique fields and exactly the declared top-level
+annotation. Nested request fields have no annotations. Correlation fields are
+`invocation`, a nonempty ASCII alphanumeric/underscore/hyphen string up to 128
+bytes, and `projectScope`, a lowercase 64-digit raw SHA-256 string.
+
+| Request annotation | Fields besides correlation |
+| --- | --- |
+| `morphir_provider_capabilities_request_v1` | None, effect-free |
+| `morphir_provider_snapshot_request_v1` | `release` canonical authority-qualified stable release, `assurance` string `portable`, absolute `registry`/`state`/`output` path strings, nonempty `policy`/`lock` blobs |
+
+`output` must be absent with an existing parent under the shared restore contract.
+The full lock must name exactly the requested root before restore begins. Every
+snapshot call freshly replays authentication. Trust observations can advance even
+if later projection/export fails; a caller must not roll those observations back.
+
+Both response annotations replace `request` with `response`. They repeat
+correlation and add strings `service`, `profile`, `profileVersion`, `codec`.
+The accepted profile/revision are `local-library-mvp` / `0.1.0-draft.1`, with
+codec `v4.1-document-metadata-to-v4.0/1`. Capabilities add integer limits
+`maxRequestBytes` 4194304, `maxResponseBytes` 16777216, `maxLibraries` 128,
+`maxContexts` 256 per Library and `maxTotalContexts` 1024 across the graph.
+Snapshot responses instead add:
+
+| Field | Meaning |
+| --- | --- |
+| `release` | Exact requested root release |
+| `policySha256`, `lockSha256` | Exact input byte hashes as `sha256:<64 lowercase hex>` |
+| `core` | Blob containing the checked root v4.0 JSON view |
+| `metadata` | Blob of original root `$meta` JSON, or `null.blob` when absent |
+| `libraries` | Complete retained graph, each a closed struct of `release`, `manifest` blob, `nativePath` string, `revision` native raw hash, `native` blob and `contexts` list |
+
+Each context is a closed struct of bundle-relative `path`, `sha256` raw-byte
+identity and `bytes` blob. No files are reread to construct these exports. The
+checked codec applies to the root only; dependency native payloads remain exact.
+Requests are capped at 4 MiB and complete responses at 16 MiB. Oversize results
+refuse without emitting a partial response. Saved frames never grant fresh
+authority. The frozen binary test responses in `tests/naming` also qualify the
+MoonBit consumer; their known fixture keys must not become production defaults.
+
 `morphir-package` implements the experimental Library integrity contract
 `0.1.0-draft.1` and the bounded `flat-library` resolution operation from
 `0.1.0-draft.2`. Applications can use it independently of the Compatibility Kit.

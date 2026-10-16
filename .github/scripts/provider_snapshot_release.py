@@ -246,16 +246,16 @@ def extract(assets: Path, version: str, target: str, output: Path) -> None:
 
 
 def parse_rustc(text: str) -> dict[str, str]:
-    """Parse `rustc -vV` into its release line and key fields."""
+    """Parse `rustc -vV` into its version line and its `key: value` fields."""
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines or not lines[0].startswith("rustc "):
         raise ProviderReleaseError("rustc version output must start with 'rustc '")
-    result = {"release": lines[0]}
+    result = {"version": lines[0]}
     for line in lines[1:]:
         key, separator, value = line.partition(": ")
-        if separator:
+        if separator and key.strip() != "version":
             result[key.strip()] = value.strip()
-    for key in ("commit-hash", "host"):
+    for key in ("release", "commit-hash", "host"):
         if key not in result:
             raise ProviderReleaseError(f"rustc version output has no {key}")
     return result

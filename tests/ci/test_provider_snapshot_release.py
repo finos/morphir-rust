@@ -32,7 +32,9 @@ def rustc_output(host: str) -> str:
         "rustc 1.98.1 (0123456789 2026-09-01)\n"
         "binary: rustc\n"
         "commit-hash: 0123456789abcdef\n"
+        "commit-date: 2026-09-01\n"
         f"host: {host}\n"
+        "release: 1.98.1\n"
         "LLVM version: 21.1.0\n"
     )
 
@@ -158,6 +160,8 @@ class DescriptorTests(unittest.TestCase):
         for artifact in descriptor["artifacts"]:
             self.assertEqual("release", artifact["buildMode"])
             self.assertEqual(artifact["target"], artifact["rustc"]["host"])
+            self.assertEqual("rustc 1.98.1 (0123456789 2026-09-01)", artifact["rustc"]["version"])
+            self.assertEqual("1.98.1", artifact["rustc"]["release"])
             self.assertRegex(artifact["sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(artifact["executableSha256"], r"^[0-9a-f]{64}$")
         for target in release.TARGETS:

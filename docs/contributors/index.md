@@ -20,6 +20,7 @@ Documentation for developers contributing to Morphir Rust.
 
 - [Development Guide](development) - Setting up and contributing
 - [Publishing Crates](publishing-crates) - How crates go to crates.io
+- [Provider Snapshot Releases](provider-snapshot-releases) - Native provider snapshot service and test fixture assets
 
 ## Design Documents
 

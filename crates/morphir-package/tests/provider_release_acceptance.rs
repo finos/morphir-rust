@@ -1,6 +1,7 @@
 //! Qualify packaged release executables. Not run by default `cargo test`: select it
 //! with `--test provider_release_acceptance` and set `MORPHIR_PROVIDER_RELEASE_SERVICE`
-//! and `MORPHIR_PROVIDER_RELEASE_FIXTURE` to the extracted executables.
+//! and `MORPHIR_PROVIDER_RELEASE_FIXTURE` to the extracted executables. With neither
+//! variable set it qualifies nothing; with only one set it fails.
 use cucumber::{World, given, then, when};
 #[path = "local_registry/release_driver.rs"]
 mod driver;
@@ -66,6 +67,18 @@ fn refused(world: &mut ReleaseWorld) {
 }
 #[tokio::main]
 async fn main() {
+    let selected = [driver::SERVICE_VARIABLE, driver::FIXTURE_VARIABLE]
+        .map(|variable| std::env::var_os(variable).is_some());
+    if selected == [false, false] {
+        // `cargo test --test '*'` also selects this target. Without packaged
+        // executables there is nothing to qualify; release workflows set both.
+        eprintln!(
+            "provider_release_acceptance: no packaged executables selected; set {} and {}",
+            driver::SERVICE_VARIABLE,
+            driver::FIXTURE_VARIABLE
+        );
+        return;
+    }
     ReleaseWorld::cucumber()
         .with_default_cli()
         .fail_on_skipped()

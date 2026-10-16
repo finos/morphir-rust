@@ -265,6 +265,15 @@ class DefinitionTests(unittest.TestCase):
             manifest,
         )
 
+    def test_every_qualification_selects_both_packaged_executables(self) -> None:
+        workflow = PROVIDER_WORKFLOW.read_text(encoding="utf-8")
+        steps = workflow.split("--test provider_release_acceptance")[:-1]
+        self.assertEqual(2, len(steps))
+        for step in steps:
+            command = step.rsplit("run: |", 1)[1]
+            self.assertIn("MORPHIR_PROVIDER_RELEASE_SERVICE=", command)
+            self.assertIn("MORPHIR_PROVIDER_RELEASE_FIXTURE=", command)
+
     def test_only_qualified_bytes_are_attested_and_uploaded(self) -> None:
         workflow = PROVIDER_WORKFLOW.read_text(encoding="utf-8")
         build = workflow.split("  build:\n", 1)[1].split("\n  publish:\n", 1)[0]

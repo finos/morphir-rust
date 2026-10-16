@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A `provider-snapshot/v<version>` tag publishes the native
+  `morphir-provider-snapshot` service and the separate TEST-ONLY
+  `provider-snapshot-fixture` exporter for `x86_64-unknown-linux-gnu` and
+  `aarch64-apple-darwin`. Each release has SHA-256 files, a descriptor with
+  the source commit, build mode, compiler and archive and executable digests,
+  and build provenance attestations. Packaged and downloaded executables pass
+  the opt-in `provider_release_acceptance` test with fresh test trust per
+  scenario.
 - Signed provider test fixtures support explicit semantic incompatibility and
   ambiguous-context variants. Real-service acceptance verifies their signed
   bytes and inventory; consumer admission remains a separate check.

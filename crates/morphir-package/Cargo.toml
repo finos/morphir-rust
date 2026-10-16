@@ -63,3 +63,10 @@ harness = false
 [[test]]
 name = "provider_fixture_acceptance"
 harness = false
+
+# Qualifies packaged release executables named by environment variables.
+# Default `cargo test` skips it; release workflows select it with `--test`.
+[[test]]
+name = "provider_release_acceptance"
+harness = false
+test = false

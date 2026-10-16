@@ -1,0 +1,317 @@
+# Publish native provider snapshot tools from a provider-snapshot/v<version> tag.
+#
+# Each target builds the production `morphir-provider-snapshot` service and the
+# test-only `provider-snapshot-fixture` exporter as separate archives. The
+# packaged executables pass installed qualification before they are attested
+# or uploaded. After publication, every target downloads the release again,
+# verifies checksums, the descriptor and the attestations, and qualifies the
+# downloaded executables. See docs/contributors/provider-snapshot-releases.md.
+name: Release provider snapshot tools
+
+on:
+  push:
+    tags:
+      - "provider-snapshot/v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag, for example provider-snapshot/v0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-provider-snapshot-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  MISE_ENABLE_TOOLS: rust
+
+jobs:
+  resolve:
+    name: Resolve provider snapshot tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - name: Checkout existing tag
+        uses: actions/checkout@v7
+        with:
+          ref: >-
+            ${{ github.event_name == 'workflow_dispatch'
+              && format('refs/tags/{0}', inputs.tag)
+              || github.ref }}
+          fetch-depth: 0
+
+      - name: Validate tag, package version and main ancestry
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          RELEASE_COMMIT="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          python3 .github/scripts/provider_snapshot_release.py resolve \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_COMMIT" \
+            --main-ref origin/main
+
+  build:
+    name: Build and qualify ${{ matrix.target }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      COMMIT: ${{ needs.resolve.outputs.commit }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout tag commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # No dependency cache: release executables are built from a clean target.
+      - name: Install Rust through mise
+        uses: jdx/mise-action@v4
+
+      - name: Build release executables
+        run: |
+          rustc -vV > "${RUNNER_TEMP}/rustc.txt"
+          cat "${RUNNER_TEMP}/rustc.txt"
+          cargo build --locked --release -p morphir-package \
+            --bin morphir-provider-snapshot \
+            --example provider-snapshot-fixture \
+            --target "$TARGET"
+
+      - name: Package separate service and test fixture archives
+        run: |
+          python3 .github/scripts/provider_snapshot_release.py package \
+            --release-dir "target/${TARGET}/release" \
+            --version "$VERSION" \
+            --target "$TARGET" \
+            --output release-assets
+
+      - name: Extract packaged executables
+        run: |
+          python3 .github/scripts/provider_snapshot_release.py extract \
+            --assets release-assets \
+            --version "$VERSION" \
+            --target "$TARGET" \
+            --output "${RUNNER_TEMP}/packaged"
+
+      - name: Qualify packaged executables
+        run: |
+          MORPHIR_PROVIDER_RELEASE_SERVICE="${RUNNER_TEMP}/packaged/morphir-provider-snapshot" \
+          MORPHIR_PROVIDER_RELEASE_FIXTURE="${RUNNER_TEMP}/packaged/provider-snapshot-fixture" \
+          MORPHIR_PROVIDER_RELEASE_EVIDENCE="${RUNNER_TEMP}/evidence" \
+            cargo test --locked --release -p morphir-package \
+              --target "$TARGET" --test provider_release_acceptance
+
+      - name: Describe qualified archives
+        run: |
+          python3 .github/scripts/provider_snapshot_release.py describe \
+            --assets release-assets \
+            --version "$VERSION" \
+            --commit "$COMMIT" \
+            --target "$TARGET" \
+            --rustc "${RUNNER_TEMP}/rustc.txt" \
+            --evidence "${RUNNER_TEMP}/evidence"
+          cat release-assets/*.provenance.json
+
+      - name: Attest qualified archives and executables
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release-assets/*.tgz
+            ${{ runner.temp }}/packaged/morphir-provider-snapshot
+            ${{ runner.temp }}/packaged/provider-snapshot-fixture
+
+      - name: Upload qualified assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: provider-snapshot-${{ matrix.target }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish provider snapshot release
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      COMMIT: ${{ needs.resolve.outputs.commit }}
+    steps:
+      - name: Checkout tag commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          fetch-depth: 0
+
+      - name: Download qualified assets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: provider-snapshot-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Assemble release descriptor
+        run: |
+          python3 .github/scripts/provider_snapshot_release.py assemble \
+            --assets release-assets \
+            --tag "$TAG" \
+            --version "$VERSION" \
+            --commit "$COMMIT"
+          rm release-assets/*.provenance.json
+          cat "release-assets/morphir-provider-snapshot-${VERSION}.release.json"
+
+      - name: Attest release descriptor
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release-assets/*.release.json
+
+      - name: Create prerelease and upload only new assets
+        run: |
+          verify_remote_tag_commit() {
+            git fetch --force --no-tags origin "refs/tags/$TAG"
+            actual="$(git rev-parse --verify 'FETCH_HEAD^{commit}')"
+            if [ "$actual" != "$COMMIT" ]; then
+              echo "tag moved from $COMMIT to $actual" >&2
+              exit 1
+            fi
+          }
+          verify_remote_tag_commit
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            {
+              echo "Native morphir-provider-snapshot service and the separate"
+              echo "TEST-ONLY provider-snapshot-fixture exporter, built from"
+              echo "${COMMIT}."
+              echo
+              echo "Verify the .sha256 files, the descriptor"
+              echo "morphir-provider-snapshot-${VERSION}.release.json and"
+              echo "\`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`."
+              echo "Never install the fixture or its test keys as production trust."
+            } > "${RUNNER_TEMP}/notes.md"
+            gh release create "$TAG" \
+              --verify-tag \
+              --prerelease \
+              --latest=false \
+              --title "Provider snapshot tools ${VERSION}" \
+              --notes-file "${RUNNER_TEMP}/notes.md"
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[].name' > "${RUNNER_TEMP}/existing.txt"
+          mkdir -p "${RUNNER_TEMP}/existing"
+          for asset in release-assets/*; do
+            name="$(basename "$asset")"
+            if grep -Fxq "$name" "${RUNNER_TEMP}/existing.txt"; then
+              gh release download "$TAG" --pattern "$name" --dir "${RUNNER_TEMP}/existing"
+              if ! cmp -s "$asset" "${RUNNER_TEMP}/existing/$name"; then
+                echo "published asset has different bytes: $name" >&2
+                exit 1
+              fi
+            else
+              verify_remote_tag_commit
+              gh release upload "$TAG" "$asset"
+            fi
+          done
+
+  verify:
+    name: Verify downloaded ${{ matrix.target }} release
+    needs: [resolve, publish]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      COMMIT: ${{ needs.resolve.outputs.commit }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout tag commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Rust through mise
+        uses: jdx/mise-action@v4
+
+      - name: Download published assets
+        run: |
+          mkdir "${RUNNER_TEMP}/downloaded"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "*-${VERSION}-${TARGET}.tgz" \
+            --pattern "*-${VERSION}-${TARGET}.tgz.sha256" \
+            --pattern "morphir-provider-snapshot-${VERSION}.release.json" \
+            --dir "${RUNNER_TEMP}/downloaded"
+
+      - name: Verify checksums, descriptor and attestations
+        run: |
+          python3 .github/scripts/provider_snapshot_release.py verify \
+            --assets "${RUNNER_TEMP}/downloaded" \
+            --tag "$TAG" \
+            --version "$VERSION" \
+            --commit "$COMMIT" \
+            --target "$TARGET"
+          for subject in "${RUNNER_TEMP}"/downloaded/*.tgz \
+            "${RUNNER_TEMP}/downloaded/morphir-provider-snapshot-${VERSION}.release.json"; do
+            gh attestation verify "$subject" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release-provider-snapshot.yml"
+          done
+          python3 .github/scripts/provider_snapshot_release.py extract \
+            --assets "${RUNNER_TEMP}/downloaded" \
+            --version "$VERSION" \
+            --target "$TARGET" \
+            --output "${RUNNER_TEMP}/installed"
+
+      - name: Qualify downloaded executables
+        run: |
+          MORPHIR_PROVIDER_RELEASE_SERVICE="${RUNNER_TEMP}/installed/morphir-provider-snapshot" \
+          MORPHIR_PROVIDER_RELEASE_FIXTURE="${RUNNER_TEMP}/installed/provider-snapshot-fixture" \
+            cargo test --locked --release -p morphir-package \
+              --target "$TARGET" --test provider_release_acceptance

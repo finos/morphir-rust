@@ -9,7 +9,9 @@ pub(crate) fn versions(capabilities: &ExtensionCapabilities) -> Vec<String> {
     if capabilities
         .model_transport
         .as_ref()
-        .is_some_and(|support| !support.tuples.is_empty())
+        .is_some_and(|support| {
+            !support.tuples.is_empty() && NegotiatedModelTransport::select(support, support).is_ok()
+        })
     {
         versions.insert(0, MODEL_MEP_VERSION.to_owned());
     }
@@ -53,4 +55,33 @@ pub(crate) fn initialize(
         extension: info.clone(),
         capabilities,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_reader_claim_never_advertises_the_model_draft() {
+        let capabilities = ExtensionCapabilities {
+            model_transport: Some(ModelTransportSupport {
+                tuples: vec![ModelTransportTuple {
+                    operation: ModelOperation::GenerateModel,
+                    profile: "future-model".into(),
+                    codec: ModelCodec::MorphirJson,
+                    envelope_version: MODEL_ENVELOPE_VERSION.into(),
+                    ir_version: "4.0.0".into(),
+                }],
+                limits: ModelTransportLimits {
+                    max_encoded_bytes: 1024,
+                    max_decoded_bytes: 768,
+                    max_depth: 32,
+                    max_nodes: 128,
+                },
+                guarantees: vec![],
+            }),
+            ..Default::default()
+        };
+        assert_eq!(versions(&capabilities), vec!["0.1"]);
+    }
 }

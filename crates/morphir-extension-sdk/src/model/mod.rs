@@ -10,6 +10,7 @@ mod negotiation;
 pub use negotiation::*;
 
 mod admission;
+#[cfg(not(target_arch = "wasm32"))]
 mod ion;
 mod json;
 mod operation;

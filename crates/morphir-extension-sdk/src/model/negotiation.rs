@@ -1,6 +1,6 @@
 //! Pure bilateral admission for complete MorphirModel transport tuples.
 
-use super::wire::{ModelTransportLimits, ModelTransportSupport};
+use super::wire::{ModelCodec, ModelTransportLimits, ModelTransportSupport};
 use semver::Version;
 use std::collections::HashSet;
 
@@ -50,8 +50,10 @@ impl NegotiatedModelTransport {
         host: &ModelTransportSupport,
         guest: &ModelTransportSupport,
     ) -> Result<Self, ModelNegotiationError> {
+        // A remote host may offer additional native codecs; the local guest
+        // must advertise only readers available on its own target.
         validate(host)?;
-        validate(guest)?;
+        validate_available(guest)?;
         Ok(Self {
             support: ModelTransportSupport {
                 tuples: host
@@ -111,7 +113,7 @@ impl NegotiatedModelTransport {
         let Some(selected) = selected else {
             return Ok(None);
         };
-        validate(selected)?;
+        validate_available(selected)?;
         let Some(host) = host else {
             return if selected.tuples.is_empty() {
                 Ok(None)
@@ -192,6 +194,18 @@ fn validate(support: &ModelTransportSupport) -> Result<(), ModelNegotiationError
         {
             return Err(InvalidSupport("irVersion"));
         }
+        // Negotiated support must name an implemented reader. A syntactically
+        // valid future profile/version is not a capability this SDK implements.
+        let profile_available = matches!(
+            (tuple.profile.as_str(), tuple.codec),
+            ("morphir-ir", ModelCodec::MorphirJson) | ("morphir-model", ModelCodec::IonBinary)
+        );
+        if !profile_available {
+            return Err(InvalidSupport("unsupported profile/codec"));
+        }
+        if !matches!(release.major, 3 | 4) {
+            return Err(InvalidSupport("unsupported IR version"));
+        }
         if !tuples.insert(tuple) {
             return Err(InvalidSupport("duplicate tuple"));
         }
@@ -201,6 +215,21 @@ fn validate(support: &ModelTransportSupport) -> Result<(), ModelNegotiationError
         if guarantee.trim().is_empty() || !guarantees.insert(guarantee) {
             return Err(InvalidSupport("guarantees"));
         }
+    }
+    Ok(())
+}
+
+fn validate_available(support: &ModelTransportSupport) -> Result<(), ModelNegotiationError> {
+    validate(support)?;
+    if cfg!(target_arch = "wasm32")
+        && support
+            .tuples
+            .iter()
+            .any(|tuple| tuple.codec == ModelCodec::IonBinary)
+    {
+        return Err(ModelNegotiationError::InvalidSupport(
+            "reader unavailable on this target",
+        ));
     }
     Ok(())
 }

@@ -23,7 +23,8 @@ complete supported tuples and implementing `Frontend::compile_model` or
 to implementing that operation; the trait defaults refuse it.
 
 A tuple selects one operation, profile, codec, envelope version, and IR version.
-The handshake intersects complete tuples, takes the smaller resource limits,
+The handshake rejects profile/codec/version combinations unsupported by the
+compiled readers, intersects complete tuples, takes the smaller resource limits,
 and freezes the resulting session. It does not combine independent codec and
 version lists. Rich methods are independent of legacy `compile` and `generate`
 flags, so a provider can support either contract or both. Legacy JSON calls
@@ -47,7 +48,11 @@ length, SHA-256, critical member paths, and aggregate payload/depth/node limits.
 It returns an immutable `RetainedModel` with the exact original bytes. Ion
 annotations, numeric precision, unknown payload fields and their order survive
 without transcoding. The JSON reader retains exact numeric lexemes and rejects
-duplicate keys. External Ion shared symbol catalogs are not resolved.
+duplicate keys. External Ion shared symbol catalogs are not resolved. The ion-rs
+reader is currently native-only because its mandatory Chrono dependency enables browser
+imports. Non-browser WASM MEP guests negotiate `morphir-ir` with `morphir-json`;
+Ion model tuples are refused there until a suitable reader is qualified. This
+restriction is explicit and never transcodes an Ion request into JSON.
 
 Admission checks profile structure, not full semantic IR correctness. Consumers
 must run their own IR/type checks before operations that require them. Ion system

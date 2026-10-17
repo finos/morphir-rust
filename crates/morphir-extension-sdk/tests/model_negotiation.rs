@@ -52,8 +52,10 @@ fn crossed_tuples_do_not_form_a_cartesian_product() {
     let host = an_offer();
     for mutate in [
         |t: &mut ModelTransportTuple| t.operation = ModelOperation::CompileModel,
-        |t: &mut ModelTransportTuple| t.profile = "morphir-ir".into(),
-        |t: &mut ModelTransportTuple| t.codec = ModelCodec::MorphirJson,
+        |t: &mut ModelTransportTuple| {
+            t.profile = "morphir-ir".into();
+            t.codec = ModelCodec::MorphirJson;
+        },
         |t: &mut ModelTransportTuple| t.ir_version = "4.1.0".into(),
     ] {
         let mut guest = an_offer();
@@ -172,5 +174,44 @@ fn selected_support_cannot_raise_any_bound_or_guarantee() {
             )
             .is_err()
         );
+    }
+}
+
+#[test]
+fn negotiation_refuses_tuples_the_readers_cannot_admit() {
+    for (profile, codec, version) in [
+        ("future-profile", ModelCodec::IonBinary, "4.0.0"),
+        ("morphir-model", ModelCodec::MorphirJson, "4.0.0"),
+        ("morphir-ir", ModelCodec::IonBinary, "4.0.0"),
+        ("morphir-model", ModelCodec::IonBinary, "5.0.0"),
+    ] {
+        let mut offer = an_offer();
+        offer.tuples[0].profile = profile.into();
+        offer.tuples[0].codec = codec;
+        offer.tuples[0].ir_version = version.into();
+        assert!(
+            NegotiatedModelTransport::select(&offer, &offer).is_err(),
+            "{profile} {codec:?} {version}"
+        );
+        assert!(
+            NegotiatedModelTransport::from_selection(MODEL_MEP_VERSION, Some(&offer), Some(&offer))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn implemented_profile_codec_pairs_accept_supported_ir_majors() {
+    for (profile, codec) in [
+        ("morphir-model", ModelCodec::IonBinary),
+        ("morphir-ir", ModelCodec::MorphirJson),
+    ] {
+        for version in ["3.0.0", "3.1.0", "4.0.0", "4.1.0"] {
+            let mut offer = an_offer();
+            offer.tuples[0].profile = profile.into();
+            offer.tuples[0].codec = codec;
+            offer.tuples[0].ir_version = version.into();
+            assert!(NegotiatedModelTransport::select(&offer, &offer).is_ok());
+        }
     }
 }

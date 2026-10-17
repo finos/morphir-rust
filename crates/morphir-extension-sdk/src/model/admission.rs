@@ -135,7 +135,10 @@ impl<'a> Budget<'a> {
         }
         match payload.codec {
             ModelCodec::IonBinary => {
-                super::ion::inspect_ion(&bytes, profile, self.limits, &mut self.nodes)?
+                #[cfg(not(target_arch = "wasm32"))]
+                super::ion::inspect_ion(&bytes, profile, self.limits, &mut self.nodes)?;
+                #[cfg(target_arch = "wasm32")]
+                return Err(ModelAdmissionError::new("unsupported_codec"));
             }
             ModelCodec::MorphirJson => {
                 super::json::inspect_json(&bytes, profile, self.limits, &mut self.nodes)?

@@ -238,7 +238,7 @@ version = "=0.40.2"
 features = ["bundled"]
 
 [dev-dependencies.ed25519-zebra]
-version = "4.2"
+version = "5.0"
 default-features = false
 features = ["std"]
 

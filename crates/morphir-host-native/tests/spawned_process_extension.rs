@@ -7,7 +7,12 @@
 
 mod support;
 
+use base64::Engine as _;
+use morphir_extension_sdk::model::{
+    GenerateModelRequest, MODEL_MEP_VERSION, ModelTransportSupport,
+};
 use morphir_extension_sdk::{GenerateRequest, protocol::methods};
+use morphir_host::HostError;
 use morphir_host::{CallError, ChannelState, Session};
 use morphir_host_native::process::ProcessLaunch;
 use serde_json::json;
@@ -50,6 +55,68 @@ fn a_distribution_with_one_value() -> serde_json::Value {
             }]
         }]
     })
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
+async fn retains_exact_ion_models_through_a_real_child_process() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../morphir-extension-sdk/tests/fixtures/model_transport/model-transport.cases.json"
+    ))
+    .unwrap();
+    let reference = corpus["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "model-0001")
+        .unwrap();
+    let offer: ModelTransportSupport =
+        serde_json::from_value(reference["hostOffer"]["modelTransport"].clone()).unwrap();
+    let mut request: GenerateModelRequest =
+        serde_json::from_value(reference["request"]["params"].clone()).unwrap();
+    request.target = "json".into();
+    let original = request.model.payload.clone();
+    let process = SharedProcess::spawn(native_launch().env("MEP_FIXTURE_MODEL", "1")).await;
+    let config = host_config("model-process-test", "0.1.0").with_model_transport(offer);
+    let mut session = Session::open(process.connection().await, &config)
+        .await
+        .unwrap();
+    assert_eq!(session.negotiated().protocol_version(), MODEL_MEP_VERSION);
+
+    let result = session.generate_model(request.clone()).await.unwrap();
+    assert!(result.success);
+    assert_eq!(result.artifacts.len(), 1);
+    assert!(result.artifacts[0].binary);
+    assert_eq!(result.artifacts[0].content, original.content);
+    let observed = base64::engine::general_purpose::STANDARD
+        .decode(&result.artifacts[0].content)
+        .unwrap();
+    assert_eq!(
+        observed,
+        include_bytes!(
+            "../../morphir-extension-sdk/tests/fixtures/model_transport/fixtures/rich-model.ionb"
+        )
+    );
+
+    request.model.payload.sha256 = "0".repeat(64);
+    assert!(matches!(
+        session.generate_model(request).await,
+        Err(CallError::Rejected(HostError::Rejected(_)))
+    ));
+    assert!(process.is_running().await);
+    let legacy = session
+        .generate(GenerateRequest {
+            ir: a_distribution_with_one_value(),
+            target: "json".into(),
+            options: Default::default(),
+        })
+        .await
+        .unwrap();
+    assert!(legacy.success);
+    assert_eq!(legacy.artifacts[0].path, "observed-ir.json");
+    session.close().await.unwrap();
+    assert!(!process.is_running().await);
+    assert!(process.stdout_is_exhausted().await);
 }
 
 #[tokio::test]

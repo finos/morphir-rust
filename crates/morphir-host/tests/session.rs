@@ -529,3 +529,31 @@ mod gating {
         assert_eq!(log.ids(), [1, 2, 3]);
     }
 }
+
+#[tokio::test]
+async fn legacy_session_refuses_rich_methods_before_sending_them() {
+    for method in [
+        "morphir.frontend.compileModel",
+        "morphir.backend.generateModel",
+    ] {
+        let channel = MemoryChannel::new()
+            .respond(ok(1, frontend_initialize_result("guest")))
+            .respond(ok(2, json!({})));
+        let log = channel.log();
+        let connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+        let mut session = Session::open(connection, &config()).await.unwrap();
+        let result = session
+            .call::<_, serde_json::Value>(method, json!({}))
+            .await;
+        assert!(
+            matches!(result, Err(CallError::Rejected(_))),
+            "{method} must be refused before transport"
+        );
+        assert_eq!(log.methods(), [methods::INITIALIZE]);
+        session.close().await.unwrap();
+        assert_eq!(
+            log.methods(),
+            [methods::INITIALIZE, methods::SHUTDOWN, methods::EXIT]
+        );
+    }
+}

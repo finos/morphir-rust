@@ -1,5 +1,9 @@
 //! A native MEP backend used to prove the spawned-process host adapter.
 
+use morphir_extension_sdk::model::{
+    GenerateModelRequest, MODEL_ENVELOPE_VERSION, ModelCodec, ModelOperation, ModelTransportLimits,
+    ModelTransportSupport, ModelTransportTuple,
+};
 use morphir_extension_sdk::protocol::{ExtensionRequest, methods};
 use morphir_extension_sdk::{
     Artifact, Backend, BackendCapability, Diagnostic, DiagnosticSeverity, Extension,
@@ -30,6 +34,22 @@ impl Extension for NativeBackend {
 
     fn capabilities() -> ExtensionCapabilities {
         ExtensionCapabilities {
+            model_transport: std::env::var_os("MEP_FIXTURE_MODEL").map(|_| ModelTransportSupport {
+                tuples: vec![ModelTransportTuple {
+                    operation: ModelOperation::GenerateModel,
+                    profile: "morphir-model".into(),
+                    codec: ModelCodec::IonBinary,
+                    envelope_version: MODEL_ENVELOPE_VERSION.into(),
+                    ir_version: "4.0.0".into(),
+                }],
+                limits: ModelTransportLimits {
+                    max_encoded_bytes: 8192,
+                    max_decoded_bytes: 4096,
+                    max_depth: 64,
+                    max_nodes: 256,
+                },
+                guarantees: vec![],
+            }),
             backend: Some(BackendCapability {
                 targets: vec!["json".into()],
                 ir_versions: vec!["3".into(), "4".into()],
@@ -41,6 +61,18 @@ impl Extension for NativeBackend {
 }
 
 impl Backend for NativeBackend {
+    fn generate_model(&self, request: GenerateModelRequest) -> Result<GenerateResult> {
+        Ok(GenerateResult {
+            success: true,
+            artifacts: vec![Artifact {
+                path: "observed-model.ionb".into(),
+                content: request.model.payload.content,
+                binary: true,
+            }],
+            diagnostics: vec![],
+        })
+    }
+
     fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
         if std::env::var_os("MEP_FIXTURE_HANG_GENERATE").is_some() {
             std::thread::sleep(std::time::Duration::from_secs(30));
@@ -95,6 +127,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut writer = stdout.lock();
     let mut awaiting_exit = false;
     let mut describe_fixture = describe::DescribeFixture::from_environment();
+    let session = morphir_extension_sdk::__ProtocolSession::new();
 
     loop {
         let Some(body) = read_frame(&mut reader)? else {
@@ -141,11 +174,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         let request: ExtensionRequest = serde_json::from_slice(&body)?;
         let shutdown = request.method == methods::SHUTDOWN;
-        let mut response = morphir_extension_sdk::__dispatch_request::<NativeBackend>(
-            &request,
-            &[morphir_extension_sdk::__dispatch_backend::<NativeBackend>],
-            &[ExtensionType::Backend],
-        );
+        let mut response = session.dispatch(&request, || {
+            morphir_extension_sdk::__dispatch_request::<NativeBackend>(
+                &request,
+                &[morphir_extension_sdk::__dispatch_backend::<NativeBackend>],
+                &[ExtensionType::Backend],
+            )
+        });
         if std::env::var_os("MEP_FIXTURE_INVALID_ENVELOPE").is_some() {
             response.jsonrpc = "1.0".into();
         }

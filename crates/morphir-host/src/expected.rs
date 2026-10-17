@@ -8,6 +8,7 @@
 //! backend exemption.
 
 use crate::{HostError, Negotiated, SessionChecks};
+use morphir_extension_sdk::model::{MODEL_MEP_VERSION, NegotiatedModelTransport};
 use morphir_extension_sdk::protocol::InitializeResult;
 use morphir_extension_sdk::{
     BackendCapability, ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability,
@@ -324,6 +325,39 @@ fn backend_differences(
     }
 }
 
+/// Compare static claims with the selected session, including model omission in legacy.
+fn capabilities_agree(
+    protocol: &str,
+    declared: &ExtensionCapabilities,
+    selected: &ExtensionCapabilities,
+) -> bool {
+    if protocol != MODEL_MEP_VERSION {
+        // A model-capable guest removes its rich advertisement when selecting
+        // legacy MEP. Every other discovered capability remains locked exactly.
+        if protocol == "0.1" && selected.model_transport.is_none() {
+            let mut comparable = selected.clone();
+            comparable.model_transport = declared.model_transport.clone();
+            return comparable == *declared;
+        }
+        return selected == declared;
+    }
+    if selected.model_transport.is_some() && declared.model_transport.is_none() {
+        return false;
+    }
+    if NegotiatedModelTransport::from_selection(
+        protocol,
+        declared.model_transport.as_ref(),
+        selected.model_transport.as_ref(),
+    )
+    .is_err()
+    {
+        return false;
+    }
+    let mut comparable = selected.clone();
+    comparable.model_transport = declared.model_transport.clone();
+    comparable == *declared
+}
+
 /// Check a guest's `morphir.initialize` answer against what the host expects of it.
 pub fn validate_negotiation(
     expected: ExpectedExtension,
@@ -372,7 +406,13 @@ pub fn validate_negotiation(
         // that differ: "frontend capabilities disagreed with discovery" alone
         // leaves a reader comparing two structures by hand.
         let mismatch = match discovered {
-            CapabilityExpectation::Exact(discovered) if result.capabilities != discovered => {
+            CapabilityExpectation::Exact(discovered)
+                if !capabilities_agree(
+                    &result.protocol_version,
+                    &discovered,
+                    &result.capabilities,
+                ) =>
+            {
                 let backend = backend_differences(
                     result.capabilities.backend.as_ref(),
                     discovered.backend.as_ref(),

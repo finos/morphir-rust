@@ -3,6 +3,9 @@
 use crate::envelope::{EnvelopeError, validate_envelope};
 use crate::{HostError, Negotiated};
 use morphir_extension_sdk::ExtensionType;
+use morphir_extension_sdk::model::{
+    NegotiatedModelTransport, validate_model_invocation, validate_model_result,
+};
 use morphir_extension_sdk::protocol::{
     ExtensionRequest, ExtensionResponse, InitializeParams, InitializeResult, error_codes, methods,
 };
@@ -133,6 +136,8 @@ pub enum Action<E> {
     Completed(Value),
     /// The call did not succeed, and the session is still ready.
     Rejected(E),
+    /// The response failed operation checks. Close in order without retrying.
+    InvalidResult(E),
     /// The session broke. Abort the transport.
     Failed(E),
     /// The guest acknowledged shutdown. Terminate the transport.
@@ -150,12 +155,13 @@ enum Purpose {
 struct Pending {
     id: u64,
     purpose: Purpose,
+    model_call: Option<(String, Value)>,
 }
 
 #[derive(Debug)]
 enum State {
     Loaded,
-    Initializing { offered: Vec<String> },
+    Initializing { offered: InitializeParams },
     Ready,
     ShuttingDown,
     Stopped,
@@ -223,7 +229,7 @@ impl<C: SessionChecks> SessionCore<C> {
             self.state = State::Failed;
             return Action::Failed(error);
         }
-        let offered = params.protocol_versions.clone();
+        let offered = params.clone();
         match self.request(methods::INITIALIZE, params, Purpose::Initialize) {
             Ok(request) => {
                 self.state = State::Initializing { offered };
@@ -277,6 +283,23 @@ impl<C: SessionChecks> SessionCore<C> {
                 .into(),
             );
         }
+        if matches!(
+            method.as_str(),
+            methods::COMPILE_MODEL | methods::GENERATE_MODEL
+        ) {
+            let Some(transport) = negotiated.model_transport() else {
+                return Action::Rejected(
+                    HostError::Rejected("Model transport was not admitted".into()).into(),
+                );
+            };
+            if let Err(error) =
+                validate_model_invocation(transport, negotiated.capabilities(), &method, &params)
+            {
+                return Action::Rejected(
+                    HostError::Rejected(format!("Model invocation refused: {error}")).into(),
+                );
+            }
+        }
         match self.request(&method, params, Purpose::Call) {
             Ok(request) => Action::Send(request),
             Err(error) => Action::Rejected(error),
@@ -316,7 +339,26 @@ impl<C: SessionChecks> SessionCore<C> {
         match pending.purpose {
             Purpose::Initialize => self.initialized(outcome),
             Purpose::Call => match outcome {
-                Ok(value) => Action::Completed(value),
+                Ok(value) => {
+                    if let Some((method, params)) = pending.model_call {
+                        let transport = self
+                            .negotiated
+                            .as_ref()
+                            .and_then(Negotiated::model_transport);
+                        let admitted = transport
+                            .ok_or_else(|| "Model transport was not admitted".to_owned())
+                            .and_then(|transport| {
+                                validate_model_result(transport, &method, &params, &value)
+                                    .map_err(|error| error.to_string())
+                            });
+                        if let Err(error) = admitted {
+                            return Action::InvalidResult(
+                                HostError::Invalid(format!("Invalid model result: {error}")).into(),
+                            );
+                        }
+                    }
+                    Action::Completed(value)
+                }
                 Err(EnvelopeError::Rpc(error)) => Action::Rejected(error.into()),
                 Err(EnvelopeError::Invalid(error)) => {
                     self.state = State::Failed;
@@ -357,9 +399,30 @@ impl<C: SessionChecks> SessionCore<C> {
             Ok(result) => result,
             Err(error) => return Action::Failed(HostError::Json(error).into()),
         };
-        match self.checks.negotiate(&offered, result) {
+        if !offered.protocol_versions.contains(&result.protocol_version) {
+            return Action::Failed(
+                HostError::VersionNotOffered {
+                    selected: result.protocol_version,
+                    offered: offered.protocol_versions,
+                }
+                .into(),
+            );
+        }
+        let transport = match NegotiatedModelTransport::from_selection(
+            &result.protocol_version,
+            offered.model_transport.as_ref(),
+            result.capabilities.model_transport.as_ref(),
+        ) {
+            Ok(transport) => transport,
+            Err(error) => {
+                return Action::Failed(
+                    HostError::Invalid(format!("Invalid model negotiation: {error}")).into(),
+                );
+            }
+        };
+        match self.checks.negotiate(&offered.protocol_versions, result) {
             Ok(negotiated) => {
-                self.negotiated = Some(negotiated);
+                self.negotiated = Some(negotiated.with_model_transport(transport));
                 self.state = State::Ready;
                 Action::Ready
             }
@@ -382,7 +445,13 @@ impl<C: SessionChecks> SessionCore<C> {
         let request = ExtensionRequest::new(method, params, id)
             .map_err(|error| C::Error::from(HostError::Json(error)))?;
         self.next_id = next;
-        self.pending = Some(Pending { id, purpose });
+        let model_call = matches!(method, methods::COMPILE_MODEL | methods::GENERATE_MODEL)
+            .then(|| (method.to_owned(), request.params.clone()));
+        self.pending = Some(Pending {
+            id,
+            purpose,
+            model_call,
+        });
         Ok(request)
     }
 
@@ -414,6 +483,7 @@ mod tests {
     fn params() -> InitializeParams {
         InitializeParams {
             protocol_versions: vec!["0.1".into()],
+            model_transport: None,
             host: PeerInfo {
                 kind: PeerKind::Unspecified,
                 name: "test".into(),

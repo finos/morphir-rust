@@ -98,6 +98,7 @@ impl NativeRoles {
 /// Capability values that belong to no single role.
 #[derive(Clone)]
 struct CommonCapabilities {
+    model_transport: Option<crate::model::ModelTransportSupport>,
     streaming: bool,
     incremental: bool,
     cancellation: bool,
@@ -117,6 +118,7 @@ fn project_capabilities(roles: &NativeRoles, common: &CommonCapabilities) -> Ext
         frontend: roles.frontend.as_ref().map(|role| role.capability.clone()),
         backend: roles.backend.as_ref().map(|role| role.capability.clone()),
         workspace: roles.workspace.as_ref().map(|role| role.capability.clone()),
+        model_transport: common.model_transport.clone(),
         streaming: common.streaming,
         incremental: common.incremental,
         cancellation: common.cancellation,
@@ -467,6 +469,7 @@ where
         };
 
         let common = CommonCapabilities {
+            model_transport: capabilities.model_transport.clone(),
             streaming: capabilities.streaming,
             incremental: capabilities.incremental,
             cancellation: capabilities.cancellation,
@@ -494,14 +497,49 @@ where
     }
 }
 
+fn has_model_operation(
+    capabilities: &ExtensionCapabilities,
+    operation: crate::model::ModelOperation,
+) -> bool {
+    capabilities
+        .model_transport
+        .as_ref()
+        .is_some_and(|support| {
+            support
+                .tuples
+                .iter()
+                .any(|tuple| tuple.operation == operation)
+        })
+}
+
 fn validate_capabilities(
     info: &ExtensionInfo,
     capabilities: &ExtensionCapabilities,
     declared_types: &[ExtensionType],
 ) -> Result<()> {
+    if let Some(support) = &capabilities.model_transport {
+        crate::model::NegotiatedModelTransport::select(support, support)
+            .map_err(|_| ExtensionError::InitFailed("Invalid model transport support".into()))?;
+        for tuple in &support.tuples {
+            let kind = match tuple.operation {
+                crate::model::ModelOperation::CompileModel => ExtensionType::Frontend,
+                crate::model::ModelOperation::GenerateModel => ExtensionType::Backend,
+            };
+            if !declared_types.contains(&kind) {
+                return Err(ExtensionError::InitFailed(
+                    "Model operation has no registered native role".into(),
+                ));
+            }
+        }
+    }
     let has_frontend_handle = declared_types.contains(&ExtensionType::Frontend);
     match (has_frontend_handle, capabilities.frontend.as_ref()) {
-        (true, Some(frontend)) if frontend.compile => {}
+        (true, Some(frontend))
+            if frontend.compile
+                || has_model_operation(
+                    capabilities,
+                    crate::model::ModelOperation::CompileModel,
+                ) => {}
         (true, _) => {
             return Err(ExtensionError::UnsupportedCapability {
                 extension: info.id.clone(),
@@ -518,7 +556,12 @@ fn validate_capabilities(
 
     let has_backend_handle = declared_types.contains(&ExtensionType::Backend);
     match (has_backend_handle, capabilities.backend.as_ref()) {
-        (true, Some(backend)) if backend.generate => {}
+        (true, Some(backend))
+            if backend.generate
+                || has_model_operation(
+                    capabilities,
+                    crate::model::ModelOperation::GenerateModel,
+                ) => {}
         (true, _) => {
             return Err(ExtensionError::UnsupportedCapability {
                 extension: info.id.clone(),
@@ -683,6 +726,7 @@ mod tests {
 
         fn capabilities() -> ExtensionCapabilities {
             ExtensionCapabilities {
+                model_transport: None,
                 frontend: Some(FrontendCapability {
                     languages: vec![LanguageCapability {
                         id: "recording".into(),
@@ -1415,6 +1459,7 @@ mod tests {
 
         fn capabilities() -> ExtensionCapabilities {
             ExtensionCapabilities {
+                model_transport: None,
                 frontend: Some(FrontendCapability {
                     languages: vec![LanguageCapability {
                         id: "decorated".into(),
@@ -1615,6 +1660,7 @@ mod tests {
             }),
         };
         let common = CommonCapabilities {
+            model_transport: None,
             streaming: false,
             incremental: false,
             cancellation: false,
@@ -1699,6 +1745,7 @@ mod tests {
             ExtensionRequest::new(
                 methods::INITIALIZE,
                 crate::protocol::InitializeParams {
+                    model_transport: None,
                     protocol_versions: vec![crate::protocol::MEP_VERSION.into()],
                     host: crate::protocol::PeerInfo {
                         kind: Default::default(),
@@ -2086,6 +2133,7 @@ mod tests {
     fn every_control_method_answers_through_the_native_adapter() {
         let native = NativeExtension::frontend_only(FrontendOnly).expect("FrontendOnly is valid");
         let initialize_params = serde_json::to_value(crate::protocol::InitializeParams {
+            model_transport: None,
             protocol_versions: vec![crate::protocol::MEP_VERSION.into()],
             host: crate::protocol::PeerInfo {
                 kind: Default::default(),

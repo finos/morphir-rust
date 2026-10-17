@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 /// JSON-RPC version string
 pub const JSONRPC_VERSION: &str = "2.0";
 
-/// Morphir Extension Protocol version implemented by this SDK.
+/// Default legacy Morphir Extension Protocol version. Rich transport is opt-in.
 pub const MEP_VERSION: &str = "0.1";
 
-/// MEP versions this host SDK can negotiate, newest first.
+/// Default legacy version offer. Model-capable endpoints add the exact model draft.
 pub const SUPPORTED_MEP_VERSIONS: &[&str] = &[MEP_VERSION];
 
 /// Standard extension method names
@@ -29,6 +29,10 @@ pub mod methods {
     pub const CAPABILITIES: &str = "morphir.extension.capabilities";
     /// Frontend: compile source to IR
     pub const COMPILE: &str = "morphir.frontend.compile";
+    /// Frontend: compile a complete model under the exact model draft.
+    pub const COMPILE_MODEL: &str = "morphir.frontend.compileModel";
+    /// Backend: generate from a retained rich model.
+    pub const GENERATE_MODEL: &str = "morphir.backend.generateModel";
     /// Backend: generate code from IR
     pub const GENERATE: &str = "morphir.backend.generate";
     /// Validator: validate IR
@@ -83,6 +87,9 @@ pub struct InitializeParams {
     pub protocol_versions: Vec<String>,
     /// Identity of the host opening the session.
     pub host: PeerInfo,
+    /// Explicit host model offer; absence grants no model operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_transport: Option<crate::model::ModelTransportSupport>,
 }
 
 /// Result returned after the extension accepts a protocol version.

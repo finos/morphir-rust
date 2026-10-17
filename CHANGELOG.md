@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opt-in MorphirModel SDK bindings and host admission for exact MEP
+  `0.2.0-draft.1`, following finos/morphir#1051. Complete tuple negotiation and
+  bilateral limits freeze per session. Rich compile/generate methods preserve
+  exact Ion or Morphir JSON bytes, enforce aggregate limits and integrity, and
+  leave legacy JSON methods available under their own claims. Generic calls use
+  the same admission checks; native rich generation reuses artifact validation.
+  Optional evidence is retained; required remote guarantees are refused until
+  checker/trust-policy integration. IR `4.0.0` remains draft. Handwritten bindings
+  precede generated bindings and MCK qualification. Rust struct literals for
+  `InitializeParams` and `ExtensionCapabilities` gain `model_transport`; use
+  `None` for legacy behavior. No crate version or ecosystem pin changes here.
 - A `provider-snapshot/v<version>` tag publishes the native
   `morphir-provider-snapshot` service and the separate TEST-ONLY
   `provider-snapshot-fixture` exporter for `x86_64-unknown-linux-gnu` and

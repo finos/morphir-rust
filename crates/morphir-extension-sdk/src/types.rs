@@ -135,6 +135,13 @@ pub struct ExtensionCapabilities {
     /// Workspace discovery features, when provided by the extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceCapability>,
+    /// Explicit model transport support, or the selected session subset.
+    #[serde(
+        default,
+        rename = "modelTransport",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub model_transport: Option<crate::model::ModelTransportSupport>,
     /// Supports streaming/incremental processing
     #[serde(default)]
     pub streaming: bool,
@@ -159,7 +166,8 @@ impl Serialize for ExtensionCapabilities {
     where
         S: serde::Serializer,
     {
-        const RESERVED_KEYS: [&str; 7] = [
+        const RESERVED_KEYS: [&str; 8] = [
+            "modelTransport",
             "frontend",
             "backend",
             "workspace",
@@ -182,6 +190,7 @@ impl Serialize for ExtensionCapabilities {
             4 + usize::from(self.frontend.is_some())
                 + usize::from(self.backend.is_some())
                 + usize::from(self.workspace.is_some())
+                + usize::from(self.model_transport.is_some())
                 + self.extra.len(),
         ))?;
         if let Some(frontend) = &self.frontend {
@@ -192,6 +201,9 @@ impl Serialize for ExtensionCapabilities {
         }
         if let Some(workspace) = &self.workspace {
             map.serialize_entry("workspace", workspace)?;
+        }
+        if let Some(model_transport) = &self.model_transport {
+            map.serialize_entry("modelTransport", model_transport)?;
         }
         map.serialize_entry("streaming", &self.streaming)?;
         map.serialize_entry("incremental", &self.incremental)?;

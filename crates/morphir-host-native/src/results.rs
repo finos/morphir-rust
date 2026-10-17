@@ -80,7 +80,7 @@ fn validate_method_result(
     request_params: &serde_json::Value,
     value: serde_json::Value,
 ) -> Result<serde_json::Value, HostError> {
-    if method == methods::GENERATE {
+    if matches!(method, methods::GENERATE | methods::GENERATE_MODEL) {
         return validate_generate_result(value);
     }
     if method == methods::COMPILE {
@@ -110,7 +110,7 @@ fn validate_method_result(
 /// IR of that version. A workspace snapshot must use the requested protocol
 /// version. Other methods pass through unchanged.
 ///
-/// The checks for these three methods run on a blocking worker, so a large
+/// The compile, generation and workspace checks run on a blocking worker, so a large
 /// result does not stall the async runtime. A rule the result breaks is
 /// `HostError::Invalid`; a result that does not decode is `HostError::Json`.
 pub async fn validate_result(
@@ -118,7 +118,7 @@ pub async fn validate_result(
     request_params: serde_json::Value,
     value: serde_json::Value,
 ) -> Result<serde_json::Value, HostError> {
-    if method == methods::GENERATE {
+    if matches!(method, methods::GENERATE | methods::GENERATE_MODEL) {
         return tokio::task::spawn_blocking(move || validate_generate_result(value))
             .await
             .map_err(|error| {
@@ -362,6 +362,36 @@ fn validate_typed_raw_distribution(
 mod tests {
     use super::*;
 
+    fn unsafe_model_generation_results() -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({"success":true,"artifacts":[{"path":"../escape.txt","content":"x"}]}),
+            serde_json::json!({"success":true,"artifacts":[{"path":"same.txt","content":"x"},{"path":"same.txt","content":"y"}]}),
+            serde_json::json!({"success":true,"artifacts":[{"path":"Result.txt","content":"x"},{"path":"result.txt","content":"y"}]}),
+            serde_json::json!({"success":true,"artifacts":[{"path":"model.ionb","content":"!not-base64!","binary":true}]}),
+        ]
+    }
+
+    #[test]
+    fn model_generation_reuses_safe_artifact_checks() {
+        for result in unsafe_model_generation_results() {
+            assert!(
+                validate_method_result(methods::GENERATE_MODEL, &serde_json::json!({}), result)
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn async_model_generation_reuses_safe_artifact_checks() {
+        for result in unsafe_model_generation_results() {
+            assert!(
+                validate_result(methods::GENERATE_MODEL, serde_json::json!({}), result)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
     fn workspace_request(protocol_version: &str) -> serde_json::Value {
         serde_json::json!({
             "protocolVersion": protocol_version,
@@ -556,8 +586,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn binary_generation_validation_runs_off_the_async_worker() {
+    async fn assert_binary_generation_offloaded(method: &'static str) {
         let content = STANDARD.encode(vec![0_u8; 8 * 1024 * 1024]);
         let value = serde_json::json!({
             "success": true,
@@ -571,7 +600,7 @@ mod tests {
         let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
         let validation_tx = order_tx.clone();
         let validation = tokio::spawn(async move {
-            validate_result(methods::GENERATE, serde_json::json!({}), value)
+            validate_result(method, serde_json::json!({}), value)
                 .await
                 .expect("large binary artifact should validate");
             validation_tx.send("validation").unwrap();
@@ -583,6 +612,16 @@ mod tests {
         assert_eq!(order_rx.recv().await, Some("marker"));
         validation.await.unwrap();
         assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn binary_generation_validation_runs_off_the_async_worker() {
+        assert_binary_generation_offloaded(methods::GENERATE).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn model_binary_generation_validation_runs_off_the_async_worker() {
+        assert_binary_generation_offloaded(methods::GENERATE_MODEL).await;
     }
 
     #[tokio::test(flavor = "current_thread")]

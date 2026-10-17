@@ -249,6 +249,7 @@ async fn python_adt_and_conditional_roundtrip_through_the_real_wasm_extension() 
         .call(
             methods::INITIALIZE,
             InitializeParams {
+                model_transport: None,
                 protocol_versions: vec!["0.1".into()],
                 host: PeerInfo {
                     kind: Default::default(),

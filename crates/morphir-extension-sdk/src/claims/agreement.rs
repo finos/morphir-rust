@@ -1,4 +1,5 @@
 use super::CapabilityClaimSet;
+use crate::model::{MODEL_MEP_VERSION, ModelTransportSupport, NegotiatedModelTransport};
 use crate::{ExtensionInfo, ExtensionType};
 use serde_json::{Map, Value};
 
@@ -62,7 +63,9 @@ impl CapabilityClaimSet {
     ///
     /// Pass capability members as received on the wire: typed capability defaults
     /// can add members the session did not report. Objects may omit members;
-    /// arrays and scalar values must match exactly.
+    /// arrays and scalar values must match exactly. Only under the exact model
+    /// draft, `modelTransport` may narrow complete tuples, guarantee IDs and
+    /// positive resource bounds. Unknown members retain the ordinary rules.
     pub fn check_session(
         &self,
         protocol_version: &str,
@@ -92,8 +95,87 @@ impl CapabilityClaimSet {
                 return Err(SessionAgreementError::CapabilityKind(*kind));
             }
         }
-        compare_members(&self.capabilities, capabilities, "capabilities")
+        for (key, reported) in capabilities {
+            if protocol_version == MODEL_MEP_VERSION && key == "modelTransport" {
+                let stated = self.capabilities.get(key).ok_or_else(|| {
+                    SessionAgreementError::CapabilityMember("capabilities.modelTransport".into())
+                })?;
+                compare_model_transport(stated, reported)?;
+            } else {
+                compare_members(
+                    &self.capabilities,
+                    &Map::from_iter([(key.clone(), reported.clone())]),
+                    "capabilities",
+                )?;
+            }
+        }
+        Ok(())
     }
+}
+
+// Validate known negotiation fields, then compare every unknown raw field under
+// the unchanged agreement rules. Decoding DTOs alone would discard unknown
+// members and could incorrectly admit an unclaimed extension capability.
+fn compare_model_transport(stated: &Value, reported: &Value) -> Result<(), SessionAgreementError> {
+    const PATH: &str = "capabilities.modelTransport";
+    let failed = || SessionAgreementError::CapabilityMember(PATH.into());
+    let stated_support: ModelTransportSupport =
+        serde_json::from_value(stated.clone()).map_err(|_| failed())?;
+    let reported_support: ModelTransportSupport =
+        serde_json::from_value(reported.clone()).map_err(|_| failed())?;
+    NegotiatedModelTransport::from_selection(
+        MODEL_MEP_VERSION,
+        Some(&stated_support),
+        Some(&reported_support),
+    )
+    .map_err(|_| failed())?;
+    compare_unknown(stated, reported, &["tuples", "limits", "guarantees"], PATH)?;
+    compare_unknown(
+        &stated["limits"],
+        &reported["limits"],
+        &["maxEncodedBytes", "maxDecodedBytes", "maxDepth", "maxNodes"],
+        "capabilities.modelTransport.limits",
+    )?;
+    for (index, tuple) in reported_support.tuples.iter().enumerate() {
+        let stated_index = stated_support
+            .tuples
+            .iter()
+            .position(|stated| stated == tuple)
+            .ok_or_else(failed)?;
+        compare_unknown(
+            &stated["tuples"][stated_index],
+            &reported["tuples"][index],
+            &[
+                "operation",
+                "profile",
+                "codec",
+                "envelopeVersion",
+                "irVersion",
+            ],
+            &format!("{PATH}.tuples.{index}"),
+        )?;
+    }
+    Ok(())
+}
+
+fn compare_unknown(
+    stated: &Value,
+    reported: &Value,
+    known: &[&str],
+    path: &str,
+) -> Result<(), SessionAgreementError> {
+    let Value::Object(stated) = stated else {
+        return Err(SessionAgreementError::CapabilityMember(path.into()));
+    };
+    let Value::Object(reported) = reported else {
+        return Err(SessionAgreementError::CapabilityMember(path.into()));
+    };
+    let unknown = reported
+        .iter()
+        .filter(|(key, _)| !known.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    compare_members(stated, &unknown, path)
 }
 
 fn compare_members(

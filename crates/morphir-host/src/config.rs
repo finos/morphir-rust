@@ -1,5 +1,6 @@
 //! How a client introduces itself to a guest.
 
+use morphir_extension_sdk::model::{MODEL_MEP_VERSION, ModelTransportSupport};
 use morphir_extension_sdk::protocol::{InitializeParams, PeerInfo, SUPPORTED_MEP_VERSIONS};
 
 /// How a client introduces itself to a guest, and which MEP versions it offers.
@@ -9,10 +10,11 @@ use morphir_extension_sdk::protocol::{InitializeParams, PeerInfo, SUPPORTED_MEP_
 pub struct HostConfig {
     peer: PeerInfo,
     protocol_versions: Vec<String>,
+    model_transport: Option<ModelTransportSupport>,
 }
 
 impl HostConfig {
-    /// A host that offers every MEP version this SDK supports.
+    /// A host with the default legacy MEP offer. Rich transport requires opt-in.
     pub fn new(peer: PeerInfo) -> Self {
         Self {
             peer,
@@ -20,6 +22,7 @@ impl HostConfig {
                 .iter()
                 .map(|version| (*version).to_owned())
                 .collect(),
+            model_transport: None,
         }
     }
 
@@ -32,7 +35,21 @@ impl HostConfig {
         Self {
             peer,
             protocol_versions,
+            model_transport: None,
         }
+    }
+
+    /// Opt into the exact model-operation draft with an explicit transport offer.
+    ///
+    /// The legacy versions remain available. The handshake validates the offer
+    /// and the guest's selection; merely constructing this config grants no call.
+    pub fn with_model_transport(mut self, offer: ModelTransportSupport) -> Self {
+        self.protocol_versions
+            .retain(|version| version != MODEL_MEP_VERSION);
+        self.protocol_versions
+            .insert(0, MODEL_MEP_VERSION.to_owned());
+        self.model_transport = Some(offer);
+        self
     }
 
     /// The client's name and version.
@@ -50,6 +67,7 @@ impl HostConfig {
         InitializeParams {
             protocol_versions: self.protocol_versions.clone(),
             host: self.peer.clone(),
+            model_transport: self.model_transport.clone(),
         }
     }
 }

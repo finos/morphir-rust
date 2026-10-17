@@ -12,6 +12,7 @@ pub fn an_initialized_extension() -> NativeExtension {
         ExtensionRequest::new(
             methods::INITIALIZE,
             InitializeParams {
+                model_transport: None,
                 protocol_versions: vec![MEP_VERSION.into()],
                 host: PeerInfo {
                     kind: Default::default(),

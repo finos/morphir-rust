@@ -24,6 +24,18 @@ pub trait Frontend: Extension {
     /// Compile source files to IR
     fn compile(&self, request: CompileRequest) -> Result<CompileResult>;
 
+    /// Compile a complete model under the independently negotiated rich contract.
+    /// The default does not advertise or implement model compilation.
+    fn compile_model(
+        &self,
+        _request: crate::model::CompileModelRequest,
+    ) -> Result<crate::model::CompileModelResult> {
+        Err(crate::ExtensionError::UnsupportedCapability {
+            extension: Self::info().id,
+            capability: "morphir.frontend.compileModel".into(),
+        })
+    }
+
     /// Languages this frontend supports (e.g., ["gleam", "elm"])
     fn supported_languages() -> Vec<String>;
 
@@ -37,6 +49,18 @@ pub trait Frontend: Extension {
 pub trait Backend: Extension {
     /// Generate code from IR
     fn generate(&self, request: GenerateRequest) -> Result<GenerateResult>;
+
+    /// Generate from a retained model. Transport integrity does not establish
+    /// semantic typing or optimization guarantees for the consumer.
+    fn generate_model(
+        &self,
+        _request: crate::model::GenerateModelRequest,
+    ) -> Result<GenerateResult> {
+        Err(crate::ExtensionError::UnsupportedCapability {
+            extension: Self::info().id,
+            capability: "morphir.backend.generateModel".into(),
+        })
+    }
 
     /// Target languages this backend produces (e.g., ["wasm", "gleam"])
     fn target_languages() -> Vec<String>;

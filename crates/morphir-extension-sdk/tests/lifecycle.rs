@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 enum ProtocolTestDriver {
     Native(Box<NativeExtension>),
-    Guest(__ProtocolSession),
+    Guest(Box<__ProtocolSession>),
 }
 
 impl ProtocolTestDriver {
@@ -30,7 +30,7 @@ fn fresh_protocol_drivers() -> [ProtocolTestDriver; 2] {
         ProtocolTestDriver::Native(Box::new(
             NativeExtension::frontend_only(DocFrontend).unwrap(),
         )),
-        ProtocolTestDriver::Guest(__ProtocolSession::new()),
+        ProtocolTestDriver::Guest(Box::default()),
     ]
 }
 
@@ -213,4 +213,30 @@ fn every_opened_protocol_has_its_own_lifecycle() {
             .error
             .is_none()
     );
+}
+
+#[test]
+fn malformed_callback_response_does_not_initialize_guest() {
+    for bad_id in [false, true] {
+        let session = __ProtocolSession::new();
+        let init = request(
+            methods::INITIALIZE,
+            json!({"protocolVersions":["0.1"],"host":{"name":"test","version":"1"}}),
+        );
+        let response = session.dispatch(&init, || {
+            let mut response =
+                __dispatch_request::<DocFrontend>(&init, &[], &[ExtensionType::Frontend]);
+            if bad_id {
+                response.id += 1;
+            } else {
+                response.jsonrpc = "1.0".into();
+            }
+            response
+        });
+        assert!(response.error.is_some());
+        let retry = session.dispatch(&init, || {
+            __dispatch_request::<DocFrontend>(&init, &[], &[ExtensionType::Frontend])
+        });
+        assert!(retry.error.is_none());
+    }
 }

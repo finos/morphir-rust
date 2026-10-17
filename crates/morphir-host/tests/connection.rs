@@ -11,6 +11,7 @@ use serde_json::json;
 fn params() -> InitializeParams {
     InitializeParams {
         protocol_versions: vec!["0.1".into()],
+        model_transport: None,
         host: PeerInfo {
             kind: PeerKind::Unspecified,
             name: "test".into(),

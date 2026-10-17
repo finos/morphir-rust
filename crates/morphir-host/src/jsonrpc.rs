@@ -114,6 +114,13 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> GuestConnectio
         match self.step(event).await {
             Ok(Action::Completed(value)) => Ok(value),
             Ok(Action::Rejected(error)) => Err(CallError::Rejected(error)),
+            Ok(Action::InvalidResult(error)) => {
+                let error = match self.close().await {
+                    Ok(()) => error,
+                    Err(close) => crate::session::also_failed_to_shut_down(error, close),
+                };
+                Err(CallError::Invalid(error))
+            }
             Ok(Action::Failed(error)) => Err(CallError::Failed(self.abort(error).await)),
             Ok(other) => {
                 let error = Self::unexpected(&other);

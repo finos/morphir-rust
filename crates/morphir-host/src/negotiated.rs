@@ -1,5 +1,6 @@
 //! Validated negotiation data.
 
+use morphir_extension_sdk::model::{MODEL_MEP_VERSION, ModelOperation, NegotiatedModelTransport};
 use morphir_extension_sdk::protocol::methods;
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
 use morphir_workspace::{DiscoveryRequest, speaks_workspace_discovery_protocol};
@@ -11,6 +12,7 @@ pub struct Negotiated {
     extension: ExtensionInfo,
     capabilities: ExtensionCapabilities,
     legacy_backend: bool,
+    model_transport: Option<NegotiatedModelTransport>,
 }
 
 impl Negotiated {
@@ -29,7 +31,21 @@ impl Negotiated {
             extension,
             capabilities,
             legacy_backend,
+            model_transport: None,
         }
+    }
+
+    pub(crate) fn with_model_transport(
+        mut self,
+        transport: Option<NegotiatedModelTransport>,
+    ) -> Self {
+        self.model_transport = transport;
+        self
+    }
+
+    /// The immutable model transport admitted against this session's host offer.
+    pub fn model_transport(&self) -> Option<&NegotiatedModelTransport> {
+        self.model_transport.as_ref()
     }
 
     /// Selected MEP version.
@@ -50,6 +66,31 @@ impl Negotiated {
     /// Whether the guest advertised the capability that `method` needs.
     pub fn supports_method(&self, method: &str) -> bool {
         match method {
+            methods::COMPILE_MODEL | methods::GENERATE_MODEL => {
+                let (kind, operation, metadata) = if method == methods::COMPILE_MODEL {
+                    (
+                        ExtensionType::Frontend,
+                        ModelOperation::CompileModel,
+                        self.capabilities.frontend.is_some(),
+                    )
+                } else {
+                    (
+                        ExtensionType::Backend,
+                        ModelOperation::GenerateModel,
+                        self.capabilities.backend.is_some(),
+                    )
+                };
+                self.protocol_version == MODEL_MEP_VERSION
+                    && self.extension.types.contains(&kind)
+                    && metadata
+                    && self.model_transport.as_ref().is_some_and(|transport| {
+                        transport
+                            .support()
+                            .tuples
+                            .iter()
+                            .any(|tuple| tuple.operation == operation)
+                    })
+            }
             methods::COMPILE => {
                 self.extension.types.contains(&ExtensionType::Frontend)
                     && self

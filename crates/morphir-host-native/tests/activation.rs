@@ -17,6 +17,7 @@ use std::path::Path;
 
 fn activation_params() -> InitializeParams {
     InitializeParams {
+        model_transport: None,
         protocol_versions: vec!["0.1".into()],
         host: PeerInfo {
             kind: Default::default(),

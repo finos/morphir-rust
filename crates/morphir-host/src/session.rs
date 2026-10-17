@@ -2,6 +2,7 @@
 
 use crate::connection::{CallError, GuestConnection};
 use crate::{ChannelCause, HostConfig, HostError, Negotiated};
+use morphir_extension_sdk::model::{CompileModelRequest, CompileModelResult, GenerateModelRequest};
 use morphir_extension_sdk::protocol::methods;
 use morphir_extension_sdk::{CompileRequest, CompileResult, GenerateRequest, GenerateResult};
 use serde::Serialize;
@@ -11,7 +12,7 @@ use serde::de::DeserializeOwned;
 ///
 /// The combined error keeps the channel state of the shutdown failure, since
 /// that is the failure that describes the transport now.
-fn also_failed_to_shut_down(error: HostError, close: HostError) -> HostError {
+pub(crate) fn also_failed_to_shut_down(error: HostError, close: HostError) -> HostError {
     let cause = ChannelCause::of(&error);
     let message = format!("{error}; orderly shutdown also failed: {close}");
     match close {
@@ -132,6 +133,22 @@ impl Session {
         request: GenerateRequest,
     ) -> Result<GenerateResult, CallError> {
         self.call(methods::GENERATE, request).await
+    }
+
+    /// Compile a complete model through the session's admitted transport tuple.
+    pub async fn compile_model(
+        &mut self,
+        request: CompileModelRequest,
+    ) -> Result<CompileModelResult, CallError> {
+        self.call(methods::COMPILE_MODEL, request).await
+    }
+
+    /// Generate artifacts from a retained model after model/evidence admission.
+    pub async fn generate_model(
+        &mut self,
+        request: GenerateModelRequest,
+    ) -> Result<GenerateResult, CallError> {
+        self.call(methods::GENERATE_MODEL, request).await
     }
 
     /// Complete MEP shutdown and release the guest.

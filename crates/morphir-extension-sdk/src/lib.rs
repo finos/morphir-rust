@@ -103,6 +103,7 @@ pub mod error;
 #[cfg(target_arch = "wasm32")]
 pub mod host;
 mod lifecycle;
+pub mod model;
 pub mod native;
 pub mod prelude;
 pub mod protocol;
@@ -457,27 +458,19 @@ fn dispatch_describe_with_metadata(
 ) -> std::result::Result<serde_json::Value, ExtensionError> {
     let params: protocol::DescribeParams = serde_json::from_value(request.params.clone())
         .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
+    let implemented = model::guest::versions(capabilities);
     if !params
         .protocol_versions
         .iter()
-        .any(|version| protocol::SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))
+        .any(|version| implemented.contains(version))
     {
         return Err(ExtensionError::ProtocolVersionMismatch {
             host_versions: params.protocol_versions,
-            extension_versions: protocol::SUPPORTED_MEP_VERSIONS
-                .iter()
-                .map(|version| (*version).into())
-                .collect(),
+            extension_versions: implemented,
         });
     }
-    let claims = claims::CapabilityClaimSet::from_metadata(
-        protocol::SUPPORTED_MEP_VERSIONS
-            .iter()
-            .map(|version| (*version).into())
-            .collect(),
-        info.clone(),
-        capabilities,
-    )?;
+    let claims =
+        claims::CapabilityClaimSet::from_metadata(implemented, info.clone(), capabilities)?;
     serde_json::to_value(claims).map_err(ExtensionError::from)
 }
 
@@ -497,23 +490,8 @@ fn dispatch_initialize_with_metadata(
 ) -> std::result::Result<serde_json::Value, ExtensionError> {
     let params: protocol::InitializeParams = serde_json::from_value(request.params.clone())
         .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
-    if !params
-        .protocol_versions
-        .iter()
-        .any(|version| version == protocol::MEP_VERSION)
-    {
-        return Err(ExtensionError::ProtocolVersionMismatch {
-            host_versions: params.protocol_versions,
-            extension_versions: vec![protocol::MEP_VERSION.to_string()],
-        });
-    }
-
-    serde_json::to_value(protocol::InitializeResult {
-        protocol_version: protocol::MEP_VERSION.to_string(),
-        extension: info.clone(),
-        capabilities: capabilities.clone(),
-    })
-    .map_err(ExtensionError::from)
+    serde_json::to_value(model::guest::initialize(&params, info, capabilities)?)
+        .map_err(ExtensionError::from)
 }
 
 #[doc(hidden)]
@@ -521,11 +499,21 @@ pub fn __dispatch_frontend<E: Frontend>(
     extension: &E,
     request: &protocol::ExtensionRequest,
 ) -> Option<std::result::Result<serde_json::Value, ExtensionError>> {
-    (request.method == protocol::methods::COMPILE).then(|| {
-        let params: types::CompileRequest = serde_json::from_value(request.params.clone())
-            .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
-        serde_json::to_value(extension.compile(params)?).map_err(ExtensionError::from)
-    })
+    match request.method.as_str() {
+        protocol::methods::COMPILE => Some((|| {
+            let params: types::CompileRequest = serde_json::from_value(request.params.clone())
+                .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
+            serde_json::to_value(extension.compile(params)?).map_err(ExtensionError::from)
+        })()),
+        protocol::methods::COMPILE_MODEL => Some((|| {
+            let params: model::CompileModelRequest = serde_json::from_value(request.params.clone())
+                .map_err(|_| {
+                    ExtensionError::InvalidParams("Invalid model compilation request".into())
+                })?;
+            serde_json::to_value(extension.compile_model(params)?).map_err(ExtensionError::from)
+        })()),
+        _ => None,
+    }
 }
 
 #[doc(hidden)]
@@ -533,11 +521,21 @@ pub fn __dispatch_backend<E: Backend>(
     extension: &E,
     request: &protocol::ExtensionRequest,
 ) -> Option<std::result::Result<serde_json::Value, ExtensionError>> {
-    (request.method == protocol::methods::GENERATE).then(|| {
-        let params: types::GenerateRequest = serde_json::from_value(request.params.clone())
-            .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
-        serde_json::to_value(extension.generate(params)?).map_err(ExtensionError::from)
-    })
+    match request.method.as_str() {
+        protocol::methods::GENERATE => Some((|| {
+            let params: types::GenerateRequest = serde_json::from_value(request.params.clone())
+                .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
+            serde_json::to_value(extension.generate(params)?).map_err(ExtensionError::from)
+        })()),
+        protocol::methods::GENERATE_MODEL => Some((|| {
+            let params: model::GenerateModelRequest =
+                serde_json::from_value(request.params.clone()).map_err(|_| {
+                    ExtensionError::InvalidParams("Invalid model generation request".into())
+                })?;
+            serde_json::to_value(extension.generate_model(params)?).map_err(ExtensionError::from)
+        })()),
+        _ => None,
+    }
 }
 
 #[doc(hidden)]
@@ -728,6 +726,7 @@ mod tests {
         ExtensionRequest::new(
             methods::INITIALIZE,
             protocol::InitializeParams {
+                model_transport: None,
                 protocol_versions: protocol_versions.into_iter().map(str::to_string).collect(),
                 host: protocol::PeerInfo {
                     kind: Default::default(),

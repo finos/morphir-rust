@@ -246,6 +246,7 @@ fn initialize(guest: &mut Plugin) {
         ExtensionRequest::new(
             methods::INITIALIZE,
             InitializeParams {
+                model_transport: None,
                 protocol_versions: vec![MEP_VERSION.into()],
                 host: PeerInfo {
                     kind: Default::default(),

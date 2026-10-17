@@ -160,3 +160,35 @@ fn draft_one_document_refuses_draft_two_critical_vocabulary() {
     let error = serde_json::from_value::<CapabilityClaimSet>(old).unwrap_err();
     assert!(error.to_string().contains("critical"), "{error}");
 }
+
+#[test]
+fn model_transport_critical_paths_are_explicit_and_do_not_admit_children() {
+    for path in [
+        "capabilities.modelTransport",
+        "capabilities.modelTransport.tuples",
+        "capabilities.modelTransport.guarantees",
+        "capabilities.modelTransport.limits",
+        "capabilities.modelTransport.limits.maxEncodedBytes",
+        "capabilities.modelTransport.limits.maxDecodedBytes",
+        "capabilities.modelTransport.limits.maxDepth",
+        "capabilities.modelTransport.limits.maxNodes",
+    ] {
+        let mut wire = a_claims();
+        wire["critical"] = json!([path]);
+        assert!(
+            serde_json::from_value::<CapabilityClaimSet>(wire).is_ok(),
+            "{path}"
+        );
+    }
+    for path in [
+        "capabilities.modelTransport.future",
+        "capabilities.modelTransport.limits.future",
+        "capabilities.modelTransport.tuples.0.operation",
+        "capabilities.modelTransport.guarantees.future",
+    ] {
+        let mut wire = a_claims();
+        wire["critical"] = json!([path]);
+        let error = serde_json::from_value::<CapabilityClaimSet>(wire).unwrap_err();
+        assert!(error.to_string().contains(path), "{error}");
+    }
+}

@@ -63,17 +63,16 @@ impl SourceSet {
     }
 }
 
-impl CompileRequest {
+impl SourceSet {
     /// Resolve and validate source identities in document order.
     ///
     /// Relative paths retain their nesting. Multiple absolute documents require
     /// a root; one absolute document without a root retains the legacy basename
     /// behavior. Original document URIs remain unchanged for diagnostics.
     pub fn source_paths(&self) -> Result<Vec<SourcePath>, SourceContextError> {
-        let root = self.sources.root()?;
+        let root = self.root()?;
         let mut seen = BTreeSet::new();
-        self.sources
-            .documents
+        self.documents
             .iter()
             .map(|document| {
                 let normalized = normalize(&document.uri)?;
@@ -87,7 +86,7 @@ impl CompileRequest {
                             .ok_or_else(|| {
                                 SourceContextError("Source document is outside sources.root".into())
                             })?,
-                        None if self.sources.documents.len() == 1 => {
+                        None if self.documents.len() == 1 => {
                             normalized.rsplit('/').next().unwrap_or("")
                         }
                         None => {
@@ -113,6 +112,13 @@ impl CompileRequest {
                 Ok(SourcePath(relative.to_owned()))
             })
             .collect()
+    }
+}
+
+impl CompileRequest {
+    /// Resolve the submitted source set using the shared source identity rules.
+    pub fn source_paths(&self) -> Result<Vec<SourcePath>, SourceContextError> {
+        self.sources.source_paths()
     }
 }
 

@@ -4537,12 +4537,15 @@ dependencies = [
 name = "morphir-extension-sdk"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
  "extism-pdk",
+ "ion-rs",
  "morphir-workspace",
  "percent-encoding",
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.21",
  "url",
 ]

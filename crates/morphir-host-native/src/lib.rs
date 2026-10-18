@@ -16,7 +16,7 @@ mod native;
 pub mod process;
 mod results;
 
-pub use activate::{ActivatedGuest, activate};
+pub use activate::{ActivatedGuest, activate, activate_with_response_policy};
 pub use installed::{InstalledSource, InstalledSourceError};
 pub use native::{NativeChannel, NativeSource};
 pub use results::{CheckedConnection, validate_result};

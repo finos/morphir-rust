@@ -497,6 +497,30 @@ async fn a_real_installed_source_connects_and_negotiates_the_installed_metadata(
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn installed_process_forwards_artifact_policy_without_changing_handshake_checks() {
+    let fixture =
+        runtime_mother::process_with_multi_document(InstalledFrontend::ClaimsWithMultiDocument);
+    let mut registry = Registry::new();
+    registry.register(source_of_runtime(&fixture)).unwrap();
+    let resolved = registry
+        .resolve_frontend("gleam", "4", InvocationPolicy::ProtocolOnly)
+        .unwrap();
+    let connection = resolved
+        .connect_with_response_policy(
+            &fixture.working_directory,
+            morphir_host::GuestResponsePolicy::GeneratedArtifacts,
+        )
+        .await
+        .unwrap();
+    let session = Session::open(connection, &host_config()).await.unwrap();
+    assert_eq!(
+        session.negotiated().capabilities(),
+        &fixture.snapshot.installed().extension_capabilities()
+    );
+}
+
 /// A persisted-capability drift is caught by the handshake, not by
 /// `connect` itself: `connect` only starts the guest. `InstalledSource`
 /// wires the same artifact and workspace into `activate` that a direct call

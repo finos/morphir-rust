@@ -524,6 +524,7 @@ pub struct ModuleResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerateRequest {
     /// Input IR (JSON)
+    #[serde(deserialize_with = "crate::literal_json::deserialize")]
     pub ir: serde_json::Value,
     /// Target selected by the host for this generation call.
     ///
@@ -532,7 +533,7 @@ pub struct GenerateRequest {
     /// this value and never guesses a default.
     pub target: String,
     /// Generation options
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::literal_json::deserialize_options")]
     pub options: HashMap<String, serde_json::Value>,
 }
 

@@ -3,7 +3,7 @@
 
 set -e
 
-cargo build -p morphir-host-native --example mep-native-backend --example mep-native-frontend
+cargo build -p morphir-host-native --example mep-native-backend --example mep-native-frontend --example mep-literal-json-backend
 
 fixture() {
     if [ -f "target/debug/examples/$1.exe" ]; then
@@ -15,4 +15,5 @@ fixture() {
 
 MEP_NATIVE_FIXTURE="$(fixture mep-native-backend)" \
 MEP_NATIVE_FRONTEND_FIXTURE="$(fixture mep-native-frontend)" \
-    cargo test -p morphir-host-native --test spawned_process_extension --test process_describe --test guest_parity -- --ignored
+MEP_LITERAL_JSON_FIXTURE="$(fixture mep-literal-json-backend)" \
+    cargo test -p morphir-host-native --test spawned_process_extension --test process_describe --test guest_parity --test literal_json_process -- --ignored

@@ -7,7 +7,7 @@
 //! only when [`InstalledSource::activate`] (or its [`GuestSource::connect`])
 //! runs.
 
-use crate::{ActivatedGuest, activate};
+use crate::{ActivatedGuest, activate_with_response_policy};
 use async_trait::async_trait;
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
@@ -16,8 +16,8 @@ use morphir_distribution::{
 };
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
 use morphir_host::{
-    CapabilityMetadataScope, GuestConnection, GuestSource, HostError, InvocationMode,
-    InvocationPolicy, ProviderOrigin,
+    CapabilityMetadataScope, GuestConnection, GuestResponsePolicy, GuestSource, HostError,
+    InvocationMode, InvocationPolicy, ProviderOrigin,
 };
 use std::path::Path;
 
@@ -53,7 +53,7 @@ pub enum InstalledSourceError {
         /// The installed extension id.
         id: String,
         /// Why the guest did not start. The variant, channel state and cause
-        /// are the ones [`activate`] reported. Boxed to keep the error small.
+        /// are the ones [`crate::activate`] reported. Boxed to keep the error small.
         #[source]
         error: Box<HostError>,
     },
@@ -110,6 +110,17 @@ impl InstalledSource {
     /// every failure into [`HostError::Invalid`], this keeps the failure
     /// typed.
     pub async fn activate(&self, workspace: &Path) -> Result<ActivatedGuest, InstalledSourceError> {
+        self.activate_with_response_policy(workspace, GuestResponsePolicy::Legacy)
+            .await
+    }
+
+    /// Verify and activate under an explicit response policy. Requests,
+    /// discovery, persisted identity and capability checks retain their bounds.
+    pub async fn activate_with_response_policy(
+        &self,
+        workspace: &Path,
+        policy: GuestResponsePolicy,
+    ) -> Result<ActivatedGuest, InstalledSourceError> {
         let id = self.info.id.clone();
         let home = self.home.clone();
         let snapshot = self.snapshot.clone();
@@ -124,7 +135,7 @@ impl InstalledSource {
                     id: id.clone(),
                     error,
                 })?;
-        activate(artifact, workspace)
+        activate_with_response_policy(artifact, workspace, policy)
             .await
             .map_err(|error| InstalledSourceError::Activate {
                 id,
@@ -162,8 +173,17 @@ impl GuestSource for InstalledSource {
     /// [`InstalledSource::activate`], with its failure flattened into
     /// [`HostError::Invalid`] carrying the same text.
     async fn connect(&self, workspace: &Path) -> Result<Box<dyn GuestConnection>, HostError> {
+        self.connect_with_response_policy(workspace, GuestResponsePolicy::Legacy)
+            .await
+    }
+
+    async fn connect_with_response_policy(
+        &self,
+        workspace: &Path,
+        policy: GuestResponsePolicy,
+    ) -> Result<Box<dyn GuestConnection>, HostError> {
         let guest = self
-            .activate(workspace)
+            .activate_with_response_policy(workspace, policy)
             .await
             .map_err(|error| HostError::Invalid(error.to_string()))?;
         Ok(Box::new(guest.connection))

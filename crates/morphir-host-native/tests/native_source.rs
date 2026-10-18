@@ -14,6 +14,29 @@ use morphir_host_native::NativeSource;
 use std::path::Path;
 use std::sync::Arc;
 
+#[tokio::test]
+async fn native_protocol_sources_accept_the_artifact_response_policy() {
+    let mut registry = Registry::new();
+    registry.register(native::<ExactFour>()).unwrap();
+    let provider = registry
+        .resolve_backend("exact-target", "4", InvocationPolicy::ProtocolOnly)
+        .unwrap();
+    let connection = provider
+        .connect_with_response_policy(
+            Path::new("."),
+            morphir_host::GuestResponsePolicy::GeneratedArtifacts,
+        )
+        .await
+        .unwrap();
+    let config = HostConfig::new(PeerInfo {
+        kind: PeerKind::Unspecified,
+        name: "artifact-policy-test".into(),
+        version: "1.0.0".into(),
+    });
+    let session = Session::open(connection, &config).await.unwrap();
+    session.close().await.unwrap();
+}
+
 macro_rules! native_provider {
     ($provider:ident, $id:literal, $language:literal, $target:literal, $ir_version:literal) => {
         #[derive(Default)]

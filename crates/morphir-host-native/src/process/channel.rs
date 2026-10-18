@@ -5,7 +5,8 @@ use crate::process::launch::ProcessLaunch;
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::ExtensionResponse;
 use morphir_host::{
-    Channel, ChannelCause, ChannelError, ChannelState, ExpectedExtension, HostError, Outgoing,
+    Channel, ChannelCause, ChannelError, ChannelState, ExpectedExtension, GuestResponsePolicy,
+    HostError, Outgoing,
 };
 use std::time::Instant;
 
@@ -31,17 +32,28 @@ pub struct ProcessChannel {
     /// The deadline a request's write recorded, for the `receive` that reads
     /// its response. `None` once spent, cleared, or never set.
     deadline: Option<Instant>,
+    response_policy: GuestResponsePolicy,
 }
 
 impl ProcessChannel {
     /// Start the process that `launch` describes.
     pub async fn spawn(launch: ProcessLaunch) -> Result<Self, HostError> {
+        Self::spawn_with_response_policy(launch, GuestResponsePolicy::Legacy).await
+    }
+
+    /// Start a process with a fixed policy for encoded response bounds.
+    /// Only the SDK generation method can receive the artifact response budget.
+    pub async fn spawn_with_response_policy(
+        launch: ProcessLaunch,
+        response_policy: GuestResponsePolicy,
+    ) -> Result<Self, HostError> {
         let child = ProcessChild::spawn(&launch).await?;
         Ok(Self {
             child,
             expectation: launch.expectation(),
             method: None,
             deadline: None,
+            response_policy,
         })
     }
 
@@ -152,12 +164,16 @@ impl Channel for ProcessChannel {
             Some(deadline) => deadline.saturating_duration_since(Instant::now()),
             None => self.child.request_timeout(),
         };
-        let response = match self.child.read_within(duration).await {
+        let limit = self
+            .response_policy
+            .response_limit(self.method.as_deref().unwrap_or(""));
+        let response = match self.child.read_within_limit(duration, limit).await {
             Ok(frame) => {
                 serde_json::from_slice::<ExtensionResponse>(&frame).map_err(HostError::from)
             }
             Err(error) => Err(self.name_timeout(error, || self.request_subject())),
         };
+        self.method = None;
         match response {
             Ok(response) => Ok(response),
             Err(error) => Err(self.fail(error).await),

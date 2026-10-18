@@ -49,6 +49,7 @@ mod pool;
 /// The install probe: describe a guest before trusting its claims.
 mod probe;
 mod registry;
+mod response_policy;
 mod send;
 mod session;
 mod session_core;
@@ -73,6 +74,7 @@ pub use registry::{
     CapabilityMetadataScope, GuestSource, InvocationMode, InvocationPolicy, ProviderMetadata,
     ProviderOrigin, Registry, Resolved,
 };
+pub use response_policy::{GuestResponsePolicy, ResponseByteLimit};
 pub use send::MaybeSend;
 pub use session::{Session, call_once, compile_once, generate_once};
 pub use session_core::{Action, BasicChecks, Event, SessionChecks, SessionCore};

@@ -7,7 +7,9 @@ use crate::process::MAX_MEP_PAYLOAD_BYTES;
 use extism::{Manifest, Plugin, PluginBuilder, Wasm};
 use morphir_extension_sdk::protocol::{ExtensionRequest, ExtensionResponse};
 use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
-use morphir_host::{EnvelopeError, HostError, validate_envelope};
+use morphir_host::{
+    EnvelopeError, GuestResponsePolicy, HostError, ResponseByteLimit, validate_envelope,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
 use std::path::Path;
@@ -17,6 +19,9 @@ use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 const MAX_WASM_MEMORY_BYTES: u64 = 256 * 1024 * 1024;
+// Artifact JSON may occupy 385 MiB. Keep finite room for guest serialization
+// and its input without changing the memory budget of any legacy container.
+const MAX_ARTIFACT_WASM_MEMORY_BYTES: u64 = 1024 * 1024 * 1024;
 const WASM_PAGE_BYTES: u64 = 64 * 1024;
 const DEFAULT_WASM_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 // The 4.6 KB Rust compiler fixture needs up to 153 million fuel per request.
@@ -58,6 +63,7 @@ pub struct ExtensionContainer {
     info: ExtensionInfo,
     /// Request ID counter
     request_id: std::sync::atomic::AtomicU64,
+    response_policy: GuestResponsePolicy,
 }
 
 impl ExtensionContainer {
@@ -82,6 +88,44 @@ impl ExtensionContainer {
         host_funcs: MorphirHostFunctions,
     ) -> Result<Self, HostError> {
         Self::from_bytes_with_timeout(id, wasm_bytes, host_funcs, DEFAULT_WASM_EXECUTION_TIMEOUT)
+    }
+
+    /// Load a guest under an explicit generation-response resource policy.
+    /// Artifact containers have a finite 1 GiB WASM memory budget; legacy
+    /// containers retain 256 MiB. Discovery and requests always stay at 64 MiB.
+    pub fn from_bytes_with_response_policy(
+        id: &str,
+        wasm_bytes: &[u8],
+        host_funcs: MorphirHostFunctions,
+        policy: GuestResponsePolicy,
+    ) -> Result<Self, HostError> {
+        Self::from_bytes_with_policy_and_limits(
+            id,
+            wasm_bytes,
+            host_funcs,
+            DEFAULT_WASM_EXECUTION_TIMEOUT,
+            DEFAULT_WASM_FUEL_LIMIT,
+            policy,
+        )
+    }
+
+    /// Load an explicitly policy-scoped guest on a blocking discovery worker.
+    pub async fn from_bytes_with_response_policy_async<B>(
+        id: String,
+        wasm_bytes: B,
+        host_funcs: MorphirHostFunctions,
+        policy: GuestResponsePolicy,
+    ) -> Result<Self, HostError>
+    where
+        B: AsRef<[u8]> + Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            Self::from_bytes_with_response_policy(&id, wasm_bytes.as_ref(), host_funcs, policy)
+        })
+        .await
+        .map_err(|error| {
+            HostError::Invalid(format!("Extension discovery worker failed: {error}"))
+        })?
     }
 
     /// Create a container from WASM bytes owned by the blocking compilation worker.
@@ -150,9 +194,31 @@ impl ExtensionContainer {
         execution_timeout: Duration,
         fuel_limit: u64,
     ) -> Result<Self, HostError> {
+        Self::from_bytes_with_policy_and_limits(
+            id,
+            wasm_bytes,
+            host_funcs,
+            execution_timeout,
+            fuel_limit,
+            GuestResponsePolicy::Legacy,
+        )
+    }
+
+    fn from_bytes_with_policy_and_limits(
+        id: &str,
+        wasm_bytes: &[u8],
+        host_funcs: MorphirHostFunctions,
+        execution_timeout: Duration,
+        fuel_limit: u64,
+        response_policy: GuestResponsePolicy,
+    ) -> Result<Self, HostError> {
+        let memory_bytes = match response_policy {
+            GuestResponsePolicy::Legacy => MAX_WASM_MEMORY_BYTES,
+            GuestResponsePolicy::GeneratedArtifacts => MAX_ARTIFACT_WASM_MEMORY_BYTES,
+        };
         // Create manifest with memory limits
         let manifest = Manifest::new([Wasm::data(wasm_bytes)])
-            .with_memory_max(wasm_pages_for_bytes(MAX_WASM_MEMORY_BYTES)?)
+            .with_memory_max(wasm_pages_for_bytes(memory_bytes)?)
             .with_timeout(execution_timeout);
 
         // Create plugin with host functions
@@ -179,6 +245,7 @@ impl ExtensionContainer {
             plugin: Arc::new(Mutex::new(plugin)),
             info,
             request_id: std::sync::atomic::AtomicU64::new(1),
+            response_policy,
         })
     }
 
@@ -208,11 +275,10 @@ impl ExtensionContainer {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         let request = ExtensionRequest::new(method, params, id)?;
-        let request_bytes = serde_json::to_vec(&request)?;
 
         debug!("Calling extension method: {} (id={})", method, id);
 
-        let output = self.call_raw("handle", &request_bytes).await?;
+        let output = self.call_protocol(&request).await?;
 
         let response: ExtensionResponse = serde_json::from_slice(&output)?;
         let value = validate_envelope(response, id).map_err(|error| match error {
@@ -223,6 +289,30 @@ impl ExtensionContainer {
 
     /// Call a raw function on the plugin (no JSON-RPC wrapping)
     pub async fn call_raw(&self, func_name: &str, input: &[u8]) -> Result<Vec<u8>, HostError> {
+        self.call_raw_with_response_limit(
+            func_name,
+            input,
+            GuestResponsePolicy::Legacy.response_limit(""),
+        )
+        .await
+    }
+
+    pub(crate) async fn call_protocol(
+        &self,
+        request: &ExtensionRequest,
+    ) -> Result<Vec<u8>, HostError> {
+        let bytes = serde_json::to_vec(request)?;
+        let limit = self.response_policy.response_limit(&request.method);
+        self.call_raw_with_response_limit("handle", &bytes, limit)
+            .await
+    }
+
+    async fn call_raw_with_response_limit(
+        &self,
+        func_name: &str,
+        input: &[u8],
+        limit: ResponseByteLimit,
+    ) -> Result<Vec<u8>, HostError> {
         ensure_payload_within_limit("request", input.len())?;
         let mut plugin = Arc::clone(&self.plugin).lock_owned().await;
         let func_name = func_name.to_owned();
@@ -231,7 +321,7 @@ impl ExtensionContainer {
             let output = plugin
                 .call::<&[u8], &[u8]>(&func_name, &input)
                 .map_err(|e| HostError::Invalid(format!("Plugin call failed: {}", e)))?;
-            ensure_payload_within_limit("response", output.len())?;
+            limit.check_len(output.len())?;
             Ok(output.to_vec())
         })
         .await
@@ -444,6 +534,70 @@ mod tests {
     #[test]
     fn configures_the_256_mib_memory_limit_in_wasm_pages() {
         assert_eq!(wasm_pages_for_bytes(MAX_WASM_MEMORY_BYTES).unwrap(), 4096);
+    }
+
+    #[tokio::test]
+    async fn artifact_container_preserves_request_raw_and_other_method_limits() {
+        use morphir_extension_sdk::protocol::methods;
+        use morphir_host::GuestResponsePolicy;
+        let container = ExtensionContainer::from_bytes_with_response_policy(
+            "runtime-limit-fixture",
+            &guest_with_handle_response_size(MAX_MEP_PAYLOAD_BYTES as usize + 1),
+            MorphirHostFunctions::default(),
+            GuestResponsePolicy::GeneratedArtifacts,
+        )
+        .unwrap();
+        assert!(
+            container
+                .call_raw("handle", &[])
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("response exceeds")
+        );
+        let compile = ExtensionRequest::new(methods::COMPILE, serde_json::json!({}), 1).unwrap();
+        assert!(
+            container
+                .call_protocol(&compile)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("response exceeds")
+        );
+        let generate = ExtensionRequest::new(methods::GENERATE, serde_json::json!({}), 2).unwrap();
+        assert_eq!(
+            container.call_protocol(&generate).await.unwrap().len(),
+            MAX_MEP_PAYLOAD_BYTES as usize + 1
+        );
+        let request = vec![0; MAX_MEP_PAYLOAD_BYTES as usize + 1];
+        assert!(
+            container
+                .call_raw("handle", &request)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("request exceeds")
+        );
+    }
+
+    #[tokio::test]
+    async fn artifact_wasm_output_is_checked_before_the_host_copy() {
+        use morphir_extension_sdk::protocol::methods;
+        use morphir_host::GuestResponsePolicy;
+        let limit = GuestResponsePolicy::GeneratedArtifacts.response_limit(methods::GENERATE);
+        let container = ExtensionContainer::from_bytes_with_response_policy(
+            "runtime-limit-fixture",
+            &guest_with_handle_response_size(limit.bytes() as usize + 1),
+            MorphirHostFunctions::default(),
+            GuestResponsePolicy::GeneratedArtifacts,
+        )
+        .unwrap();
+        let generate = ExtensionRequest::new(methods::GENERATE, serde_json::json!({}), 1).unwrap();
+        let error = container.call_protocol(&generate).await.unwrap_err();
+        assert!(
+            error.to_string().contains(&limit.bytes().to_string()),
+            "{error}"
+        );
     }
 
     #[tokio::test]

@@ -160,4 +160,14 @@ impl GuestSource for NativeSource {
             channel, checks,
         ))))
     }
+
+    async fn connect_with_response_policy(
+        &self,
+        workspace: &Path,
+        _policy: morphir_host::GuestResponsePolicy,
+    ) -> Result<Box<dyn GuestConnection>, HostError> {
+        // Native protocol calls exchange typed values, not encoded frames.
+        // Artifact retention validates decoded limits after this invocation.
+        self.connect(workspace).await
+    }
 }

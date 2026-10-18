@@ -62,11 +62,9 @@ impl Channel for ExtismChannel {
             // a notification has nowhere to go.
             Outgoing::Notification(_) => return Ok(()),
         };
-        let bytes =
-            serde_json::to_vec(&request).map_err(|error| indeterminate(HostError::from(error)))?;
         let output = self
             .container
-            .call_raw("handle", &bytes)
+            .call_protocol(&request)
             .await
             .map_err(indeterminate)?;
         self.response = Some(output);

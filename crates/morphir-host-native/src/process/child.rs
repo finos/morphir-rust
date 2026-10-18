@@ -1,6 +1,6 @@
 //! A running extension process and its standard streams.
 
-use crate::process::frame::{read_frame, write_frame};
+use crate::process::frame::{read_frame_with_limit, write_frame};
 use crate::process::launch::{ProcessLaunch, ProcessProgram};
 use crate::process::stage::prepare_program;
 use morphir_host::{ChannelCause, ChannelState, HostError};
@@ -139,13 +139,27 @@ impl ProcessChild {
     /// Used by `ProcessChannel` to keep one exchange under one timeout.
     #[doc(hidden)]
     pub async fn read_within(&mut self, duration: Duration) -> Result<Vec<u8>, HostError> {
+        self.read_within_limit(
+            duration,
+            morphir_host::GuestResponsePolicy::Legacy.response_limit(""),
+        )
+        .await
+    }
+
+    /// Read under the request's response policy and remaining timeout budget.
+    /// Oversized headers fail before a response body allocation.
+    pub async fn read_within_limit(
+        &mut self,
+        duration: Duration,
+        limit: morphir_host::ResponseByteLimit,
+    ) -> Result<Vec<u8>, HostError> {
         let request_timeout = self.request_timeout;
         if duration.is_zero() {
             return Err(timed_out(format!(
                 "Extension process read timed out after {request_timeout:?}"
             )));
         }
-        match timeout(duration, read_frame(&mut self.stdout)).await {
+        match timeout(duration, read_frame_with_limit(&mut self.stdout, limit)).await {
             Ok(result) => result,
             Err(_) => Err(timed_out(format!(
                 "Extension process read timed out after {request_timeout:?}"

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Explicit generated-artifact response policies for process, HTTP and Extism
+  hosts. Only `morphir.backend.generate` can opt into the 385 MiB encoded
+  response budget. Legacy responses remain at 64 MiB; process requests are
+  bounded during serialization before any write, and response headers share
+  an 8 KiB limit. Installed sources forward the policy without changing
+  identity or capability checks. Artifact-scoped Extism containers have a
+  finite 1 GiB memory budget; legacy containers retain 256 MiB.
+- SDK request decoding preserves literal JSON objects in protocol parameters
+  and generation IR/options, including keys that resemble Serde internals.
+  The normal wire nesting limit and active numeric/map-ordering behavior
+  remain in effect; deeper constructed opaque values return a bounded error.
 - Opt-in MorphirModel SDK bindings and host admission for exact MEP
   `0.2.0-draft.1`, following finos/morphir#1051. Complete tuple negotiation and
   bilateral limits freeze per session. Unsupported reader combinations refuse

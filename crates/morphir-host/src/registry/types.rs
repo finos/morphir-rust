@@ -1,6 +1,6 @@
 //! The types a registry resolves to, and the source trait it resolves over.
 
-use crate::{GuestConnection, HostError, MaybeSend};
+use crate::{GuestConnection, GuestResponsePolicy, HostError, MaybeSend};
 use async_trait::async_trait;
 use morphir_extension_sdk::{
     BackendCapability, ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability,
@@ -96,6 +96,25 @@ pub trait GuestSource: MaybeSend + Sync {
 
     /// Start the guest and return a checked, unopened connection.
     async fn connect(&self, workspace: &Path) -> Result<Box<dyn GuestConnection>, HostError>;
+
+    /// Open with an explicit encoded response policy.
+    ///
+    /// Legacy-only sources keep their behavior. A source must explicitly
+    /// implement an artifact opt-in; silently falling back could truncate a
+    /// valid result. A warm pool must include the policy in its ownership key.
+    async fn connect_with_response_policy(
+        &self,
+        workspace: &Path,
+        policy: GuestResponsePolicy,
+    ) -> Result<Box<dyn GuestConnection>, HostError> {
+        match policy {
+            GuestResponsePolicy::Legacy => self.connect(workspace).await,
+            GuestResponsePolicy::GeneratedArtifacts => Err(HostError::Rejected(format!(
+                "Provider '{}' does not support the generated-artifact response policy",
+                self.info().id
+            ))),
+        }
+    }
 }
 
 /// The capability a provider was resolved for.
@@ -304,5 +323,19 @@ impl Resolved {
     /// in the host process may ignore it.
     pub async fn connect(&self, workspace: &Path) -> Result<Box<dyn GuestConnection>, HostError> {
         self.source.connect(workspace).await
+    }
+
+    /// Start a checked guest under an explicit response policy.
+    ///
+    /// The caller owns policy-separated warm-session reuse. This does not
+    /// change the provider's identity or grant a generation capability.
+    pub async fn connect_with_response_policy(
+        &self,
+        workspace: &Path,
+        policy: GuestResponsePolicy,
+    ) -> Result<Box<dyn GuestConnection>, HostError> {
+        self.source
+            .connect_with_response_policy(workspace, policy)
+            .await
     }
 }

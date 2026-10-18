@@ -11,7 +11,7 @@ use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use morphir_extension_sdk::protocol::{ExtensionResponse, RpcError, methods};
 use morphir_host::{
     Channel, ChannelCause, ChannelError, ChannelState, ExpectedChecks, ExpectedExtension,
-    HostError, JsonRpcConnection, Outgoing,
+    GuestResponsePolicy, HostError, JsonRpcConnection, Outgoing,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -83,9 +83,29 @@ impl HttpEndpoint {
 /// ```
 pub struct HttpChannel {
     id: String,
-    client: HttpClient,
+    clients: ResponseClients,
     reply: Option<ExtensionResponse>,
     shutdown_acknowledged: bool,
+}
+
+enum ResponseClients {
+    Legacy(HttpClient),
+    GeneratedArtifacts {
+        ordinary: HttpClient,
+        generation: HttpClient,
+    },
+}
+
+impl ResponseClients {
+    fn for_method(&self, method: &str) -> &HttpClient {
+        match self {
+            Self::Legacy(client) => client,
+            Self::GeneratedArtifacts { generation, .. } if method == methods::GENERATE => {
+                generation
+            }
+            Self::GeneratedArtifacts { ordinary, .. } => ordinary,
+        }
+    }
 }
 
 impl HttpChannel {
@@ -95,25 +115,45 @@ impl HttpChannel {
     /// is `HostError::Rejected`. Nothing is sent: the first request makes
     /// the first connection.
     pub fn connect(endpoint: HttpEndpoint) -> Result<Self, HostError> {
+        Self::connect_with_response_policy(endpoint, GuestResponsePolicy::Legacy)
+    }
+
+    /// Build clients with explicit per-method response bounds.
+    /// Artifact generation gets its own bounded client; every other method
+    /// and every request retain the legacy limit, even on a reused channel.
+    pub fn connect_with_response_policy(
+        endpoint: HttpEndpoint,
+        policy: GuestResponsePolicy,
+    ) -> Result<Self, HostError> {
         if endpoint.id.trim().is_empty() {
             return Err(HostError::Rejected(
                 "HTTP extension identity cannot be empty".into(),
             ));
         }
-        let client = HttpClientBuilder::default()
-            .request_timeout(endpoint.request_timeout)
-            .max_request_size(MAX_MEP_PAYLOAD_BYTES)
-            .max_response_size(MAX_MEP_PAYLOAD_BYTES)
-            .build(&endpoint.url)
-            .map_err(|error| {
-                HostError::Rejected(format!(
-                    "Invalid HTTP extension endpoint '{}': {error}",
-                    endpoint.url
-                ))
-            })?;
+        let build = |limit| {
+            HttpClientBuilder::default()
+                .request_timeout(endpoint.request_timeout)
+                .max_request_size(MAX_MEP_PAYLOAD_BYTES)
+                .max_response_size(limit)
+                .build(&endpoint.url)
+                .map_err(|error| {
+                    HostError::Rejected(format!(
+                        "Invalid HTTP extension endpoint '{}': {error}",
+                        endpoint.url
+                    ))
+                })
+        };
+        let ordinary = build(MAX_MEP_PAYLOAD_BYTES)?;
+        let clients = match policy {
+            GuestResponsePolicy::Legacy => ResponseClients::Legacy(ordinary),
+            GuestResponsePolicy::GeneratedArtifacts => ResponseClients::GeneratedArtifacts {
+                ordinary,
+                generation: build(policy.response_limit(methods::GENERATE).bytes())?,
+            },
+        };
         Ok(Self {
             id: endpoint.id,
-            client,
+            clients,
             reply: None,
             shutdown_acknowledged: false,
         })
@@ -162,7 +202,12 @@ impl Channel for HttpChannel {
             return Ok(());
         };
 
-        let reply = match self.client.request::<Value, _>(&method, params).await {
+        let reply = match self
+            .clients
+            .for_method(&method)
+            .request::<Value, _>(&method, params)
+            .await
+        {
             Ok(result) => {
                 let reply = ExtensionResponse::success(id, result).map_err(|error| {
                     indeterminate(HostError::from(error).to_string(), ChannelCause::Json)
@@ -326,5 +371,65 @@ mod tests {
                 .to_string()
                 .contains("Invalid HTTP extension endpoint")
         );
+    }
+
+    #[tokio::test]
+    async fn artifact_http_budget_is_scoped_to_the_generation_method() {
+        use morphir_host::GuestResponsePolicy;
+        let payload = "x".repeat(MAX_MEP_PAYLOAD_BYTES as usize + 1);
+        let mut module = RpcModule::new(payload);
+        for method in [methods::GENERATE, methods::COMPILE] {
+            module
+                .register_method(method, |_, payload, _| payload.to_string())
+                .unwrap();
+        }
+        let config = jsonrpsee::server::ServerConfig::builder()
+            .max_response_body_size(
+                GuestResponsePolicy::GeneratedArtifacts
+                    .response_limit(methods::GENERATE)
+                    .bytes(),
+            )
+            .build();
+        let server = ServerBuilder::default()
+            .set_config(config)
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+        let endpoint = HttpEndpoint::new(
+            "large-http-guest",
+            format!("http://{}", server.local_addr().unwrap()),
+        );
+        let handle = server.start(module);
+        for (policy, method, accepted) in [
+            (GuestResponsePolicy::Legacy, methods::GENERATE, false),
+            (
+                GuestResponsePolicy::GeneratedArtifacts,
+                methods::COMPILE,
+                false,
+            ),
+            (
+                GuestResponsePolicy::GeneratedArtifacts,
+                methods::GENERATE,
+                true,
+            ),
+        ] {
+            let mut channel =
+                HttpChannel::connect_with_response_policy(endpoint.clone(), policy).unwrap();
+            let request = ExtensionRequest::new(method, serde_json::json!({}), 1).unwrap();
+            let result = channel.send(Outgoing::Request(request)).await;
+            assert_eq!(result.is_ok(), accepted, "{policy:?} {method}: {result:?}");
+            if accepted {
+                let response = channel.receive().await.unwrap();
+                assert_eq!(
+                    response.result.unwrap().as_str().unwrap().len(),
+                    MAX_MEP_PAYLOAD_BYTES as usize + 1
+                );
+                // The same opted-in channel must not reuse its large client for compile.
+                let request =
+                    ExtensionRequest::new(methods::COMPILE, serde_json::json!({}), 2).unwrap();
+                assert!(channel.send(Outgoing::Request(request)).await.is_err());
+            }
+        }
+        handle.stop().unwrap();
     }
 }

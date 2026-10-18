@@ -11,6 +11,8 @@ use morphir_extension_sdk::{
 };
 use std::io;
 
+#[path = "support/artifact_response.rs"]
+mod artifact_response;
 #[path = "support/describe.rs"]
 mod describe;
 #[path = "support/frame.rs"]
@@ -76,6 +78,14 @@ impl Backend for NativeBackend {
     fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
         if std::env::var_os("MEP_FIXTURE_HANG_GENERATE").is_some() {
             std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+        if let Some(result) = request
+            .options
+            .get("artifact-response")
+            .and_then(serde_json::Value::as_str)
+            .and_then(artifact_response::generate)
+        {
+            return Ok(result);
         }
         if request.ir.is_string() {
             return Ok(GenerateResult {

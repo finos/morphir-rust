@@ -103,6 +103,7 @@ pub mod error;
 #[cfg(target_arch = "wasm32")]
 pub mod host;
 mod lifecycle;
+mod literal_json;
 pub mod model;
 pub mod native;
 pub mod prelude;

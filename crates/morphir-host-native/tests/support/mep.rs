@@ -48,7 +48,15 @@ pub struct SharedProcess(Arc<Mutex<ProcessChannel>>);
 impl SharedProcess {
     /// Start the process that `launch` describes.
     pub async fn spawn(launch: ProcessLaunch) -> Self {
-        let channel = ProcessChannel::spawn(launch)
+        Self::spawn_with_response_policy(launch, morphir_host::GuestResponsePolicy::Legacy).await
+    }
+
+    /// Start a fixture with the exact response policy under qualification.
+    pub async fn spawn_with_response_policy(
+        launch: ProcessLaunch,
+        policy: morphir_host::GuestResponsePolicy,
+    ) -> Self {
+        let channel = ProcessChannel::spawn_with_response_policy(launch, policy)
             .await
             .expect("the host should start the extension process");
         Self(Arc::new(Mutex::new(channel)))

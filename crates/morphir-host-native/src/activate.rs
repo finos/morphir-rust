@@ -5,7 +5,7 @@ use crate::process::{ProcessChannel, ProcessLaunch};
 use crate::results::CheckedConnection;
 use morphir_distribution::VerifiedExtensionArtifact;
 use morphir_host::{
-    Channel, ExpectedChecks, ExpectedExtension, HostError, JsonRpcConnection,
+    Channel, ExpectedChecks, ExpectedExtension, GuestResponsePolicy, HostError, JsonRpcConnection,
     PersistedExtensionCapabilities,
 };
 use std::path::Path;
@@ -78,6 +78,17 @@ pub async fn activate(
     artifact: VerifiedExtensionArtifact,
     working_directory: &Path,
 ) -> Result<ActivatedGuest, HostError> {
+    activate_with_response_policy(artifact, working_directory, GuestResponsePolicy::Legacy).await
+}
+
+/// Start a verified guest with an explicit encoded generation-response budget.
+/// Identity and capability checks are unchanged. The caller must separate warm
+/// sessions by this policy and bound the number of artifact invocations.
+pub async fn activate_with_response_policy(
+    artifact: VerifiedExtensionArtifact,
+    working_directory: &Path,
+    policy: GuestResponsePolicy,
+) -> Result<ActivatedGuest, HostError> {
     let (channel, expectation): (Box<dyn Channel>, ExpectedExtension) = match artifact {
         VerifiedExtensionArtifact::Process(process) => {
             let capabilities = process.extension_capabilities();
@@ -111,7 +122,7 @@ pub async fn activate(
                 .args()
                 .iter()
                 .fold(launch, |launch, argument| launch.arg(argument));
-            let channel = ProcessChannel::spawn(launch).await?;
+            let channel = ProcessChannel::spawn_with_response_policy(launch, policy).await?;
             let expectation = channel.expectation();
             (Box::new(channel), expectation)
         }
@@ -126,10 +137,11 @@ pub async fn activate(
             } else {
                 PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend)
             };
-            let container = ExtensionContainer::from_bytes_async(
+            let container = ExtensionContainer::from_bytes_with_response_policy_async(
                 info.id.clone(),
                 wasm.into_bytes(),
                 wasm_host_functions(working_directory),
+                policy,
             )
             .await?;
             let expected = if !persisted.is_empty() {

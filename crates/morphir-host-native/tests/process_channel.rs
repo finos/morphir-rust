@@ -50,6 +50,45 @@ fn ping() -> Outgoing {
 }
 
 #[tokio::test]
+async fn scoped_response_limits_refuse_headers_and_reap_the_process() {
+    use morphir_host::GuestResponsePolicy;
+    for (policy, method, length, limit) in [
+        (
+            GuestResponsePolicy::Legacy,
+            methods::GENERATE,
+            64 * 1024 * 1024 + 1,
+            64 * 1024 * 1024,
+        ),
+        (
+            GuestResponsePolicy::GeneratedArtifacts,
+            methods::COMPILE,
+            64 * 1024 * 1024 + 1,
+            64 * 1024 * 1024,
+        ),
+        (
+            GuestResponsePolicy::GeneratedArtifacts,
+            methods::GENERATE,
+            385 * 1024 * 1024 + 1,
+            385 * 1024 * 1024,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let script =
+            format!("#!/bin/sh\nprintf 'Content-Length: {length}\\r\\n\\r\\n'\nread line\n");
+        let launch = ProcessLaunch::new("guest", guest(&dir, &script), dir.path());
+        let mut channel = ProcessChannel::spawn_with_response_policy(launch, policy)
+            .await
+            .unwrap();
+        let request = ExtensionRequest::new(method, serde_json::json!({}), 1).unwrap();
+        channel.send(Outgoing::Request(request)).await.unwrap();
+        let error = channel.receive().await.unwrap_err();
+        assert!(error.message.contains(&limit.to_string()), "{error}");
+        assert_eq!(error.state, ChannelState::Stopped);
+        assert!(!channel.is_running().unwrap());
+    }
+}
+
+#[tokio::test]
 async fn close_after_exit_waits_without_a_second_exit() {
     let dir = tempfile::tempdir().unwrap();
     let launch = ProcessLaunch::new("guest", guest(&dir, ECHO), dir.path())

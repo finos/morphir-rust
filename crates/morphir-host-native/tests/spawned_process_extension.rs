@@ -59,6 +59,116 @@ fn a_distribution_with_one_value() -> serde_json::Value {
 
 #[tokio::test]
 #[ignore = "requires the independently built mep-native-backend executable"]
+async fn transports_exact_64_mib_generated_binary_and_worst_case_json_text() {
+    use morphir_distribution::Sha256Digest;
+    use morphir_host::GuestResponsePolicy;
+    // Frozen independently authored chunk-indexed byte recipes, crosschecked
+    // with OpenSSL before the fixture producer was implemented.
+    let hashes = [
+        "728f52a85b49e21b090f8aab42eac87b30f1c82bdb3a3890627bc244de6756b0",
+        "d42312f945214c8f55c283c08415efdddb975c664bc7ae4b129a6c37b79b87c8",
+        "75e9210fb9b010ccd02fc3b824d482d6f1646aa3a5765baba3034423eb1550f7",
+        "d5f3e8e4c2a22852ec5d5aa01c92f7ad149031ea896fd3fd70887f425fc30d27",
+    ];
+    for kind in ["binary", "escaped-text"] {
+        let process = SharedProcess::spawn_with_response_policy(
+            native_launch().request_timeout(Duration::from_secs(120)),
+            GuestResponsePolicy::GeneratedArtifacts,
+        )
+        .await;
+        let mut session = Session::open(
+            process.connection().await,
+            &host_config("artifact-byte-test", "0.1.0"),
+        )
+        .await
+        .unwrap();
+        let result = session
+            .generate(GenerateRequest {
+                ir: a_distribution_with_one_value(),
+                target: "json".into(),
+                options: [("artifact-response".into(), json!(kind))].into(),
+            })
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert_eq!(result.artifacts.len(), 4);
+        let mut total = 0;
+        for (index, artifact) in result.artifacts.iter().enumerate() {
+            let bytes = if kind == "binary" {
+                assert!(artifact.binary);
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&artifact.content)
+                    .unwrap();
+                assert_eq!(Sha256Digest::of_bytes(&bytes).to_string(), hashes[index]);
+                bytes
+            } else {
+                assert!(!artifact.binary);
+                assert!(artifact.content.bytes().all(|byte| byte == 0));
+                artifact.content.as_bytes().to_vec()
+            };
+            assert_eq!(bytes.len(), 16 * 1024 * 1024);
+            total += bytes.len();
+        }
+        assert_eq!(total, 64 * 1024 * 1024);
+        // Reuse stays negotiated and a following ordinary generation is intact.
+        let small = session
+            .generate(GenerateRequest {
+                ir: a_distribution_with_one_value(),
+                target: "json".into(),
+                options: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(small.artifacts[0].path, "observed-ir.json");
+        session.close().await.unwrap();
+        assert!(!process.is_running().await);
+        assert!(process.stdout_is_exhausted().await);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
+async fn legacy_sessions_refuse_large_artifacts_and_artifact_timeouts_reap_the_child() {
+    use morphir_host::GuestResponsePolicy;
+    for (policy, hang, marker) in [
+        (GuestResponsePolicy::Legacy, false, "67108864 byte limit"),
+        (GuestResponsePolicy::GeneratedArtifacts, true, "timed out"),
+    ] {
+        let launch = if hang {
+            native_launch()
+                .env("MEP_FIXTURE_HANG_GENERATE", "1")
+                .request_timeout(Duration::from_secs(1))
+        } else {
+            native_launch().request_timeout(Duration::from_secs(120))
+        };
+        let process = SharedProcess::spawn_with_response_policy(launch, policy).await;
+        let mut session = Session::open(
+            process.connection().await,
+            &host_config("artifact-refusal-test", "0.1.0"),
+        )
+        .await
+        .unwrap();
+        let error = session
+            .generate(GenerateRequest {
+                ir: a_distribution_with_one_value(),
+                target: "json".into(),
+                options: [("artifact-response".into(), json!("binary"))].into(),
+            })
+            .await
+            .unwrap_err();
+        match error {
+            CallError::Failed(error) => {
+                assert!(error.to_string().contains(marker), "{error}");
+                assert_eq!(channel_state(&error), ChannelState::Stopped);
+            }
+            other => panic!("expected a stopped transport, got {other:?}"),
+        }
+        assert!(!process.is_running().await);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
 async fn retains_exact_ion_models_through_a_real_child_process() {
     let corpus: serde_json::Value = serde_json::from_str(include_str!(
         "../../morphir-extension-sdk/tests/fixtures/model_transport/model-transport.cases.json"

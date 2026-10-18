@@ -6,6 +6,48 @@ use morphir_extension_sdk::{
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+/// Run with --ignored --nocapture to compare flat and deeply nested opaque data.
+/// Timing is diagnostic rather than a machine-dependent CI pass threshold.
+#[test]
+#[ignore = "manual literal JSON scaling measurement"]
+fn literal_json_scaling_measurement() {
+    for depth in [0, 120] {
+        let content = "x".repeat(4 * 1024 * 1024);
+        let ir = format!("{}\"{content}\"{}", "[".repeat(depth), "]".repeat(depth));
+        let source = format!(r#"{{"ir":{ir},"target":"literal-json","options":{{}}}}"#);
+        let started = std::time::Instant::now();
+        let decoded: GenerateRequest = serde_json::from_str(std::hint::black_box(&source)).unwrap();
+        let elapsed = started.elapsed();
+        let mut value = &decoded.ir;
+        for _ in 0..depth {
+            value = &value[0];
+        }
+        assert_eq!(value.as_str(), Some(content.as_str()));
+        eprintln!(
+            "literal-json depth={depth} bytes={} elapsed_us={}",
+            source.len(),
+            elapsed.as_micros()
+        );
+    }
+}
+
+#[test]
+fn container_materialization_matches_json_scalars_and_member_semantics() {
+    // Delimiters inside escaped strings are data. Duplicate members retain the
+    // active serde_json map semantics, including its configured key ordering.
+    let ir = r#" {
+        "z" : [ {}, [], "commas, brackets[] and braces{}", "quote\" slash\\" ],
+        "a" : { "雪" : [ true, false, null, -0, 1e-20, 18446744073709551615 ] },
+        "duplicate" : 1,
+        "duplicate" : { "\\u0041" : "\u0041", "colon:" : [ [ [ "end" ] ] ] }
+    } "#;
+    let source = format!(r#"{{"ir":{ir},"target":"literal-json","options":{{}}}}"#);
+    let decoded: GenerateRequest = serde_json::from_str(&source).unwrap();
+    let expected: Value = serde_json::from_str(ir).unwrap();
+    assert_eq!(decoded.ir, expected);
+    assert_eq!(decoded.ir.to_string(), expected.to_string());
+}
+
 #[derive(Default)]
 struct RecordingBackend(Arc<Mutex<Vec<GenerateRequest>>>);
 

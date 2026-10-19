@@ -184,6 +184,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#946).
 
 ### Changed
+- Refactored devkit configuration loading into private ordered pure stages,
+  retaining source precedence, per-layer normalization, provenance and existing
+  project selection. Filesystem selection remains in the legacy loader.
 - `ChannelError` and `HostError::Channel` carry a `cause`, a
   `#[non_exhaustive]` `ChannelCause`, so a transport failure keeps what it
   began as: an I/O error, a JSON error, or the transport itself.

@@ -282,10 +282,21 @@ pub(crate) fn members_select(
     directory: &Path,
     warnings: &mut Vec<String>,
 ) -> bool {
+    member_path_selected(workspace_root, members, exclude, directory, warnings)
+        && accept_member_directory(workspace_root, directory, warnings)
+}
+
+/// Pure path predicate shared by Current selection before directory inspection.
+pub(crate) fn member_path_selected(
+    workspace_root: &Path,
+    members: &[String],
+    exclude: &[String],
+    directory: &Path,
+    warnings: &mut Vec<String>,
+) -> bool {
     let members = confined_patterns(members, warnings);
     patterns_select_refs(workspace_root, &members, directory)
         && is_member(workspace_root, exclude, directory)
-        && accept_member_directory(workspace_root, directory, warnings)
 }
 
 /// Does any pattern select `directory`, relative to `workspace_root`?

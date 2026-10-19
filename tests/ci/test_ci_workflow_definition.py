@@ -53,6 +53,7 @@ GATED_JOBS = {
 
 PUBLISHED_CRATES = (
     "morphir-config",
+    "morphir-json",
     "morphir-core",
     "morphir-workspace",
     "morphir-extension-sdk",

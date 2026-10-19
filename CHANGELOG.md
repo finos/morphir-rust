@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- An additive model-originals generic JSON decoder with finite source and
+  assembled-value budgets, literal private-looking keys, ordinary last-wins
+  members, actual header evidence and bounded serialized output. The shared
+  serde-only `morphir-json` traversal preserves the extension SDK's existing
+  wire bounds. Historical storage/v1 decoding is unchanged. Checked typed v3,
+  YAML, Ion and document-tree assembly remain pending; this JSON slice does
+  not qualify those formats or claim an exact heap limit.
 - Explicit generated-artifact response policies for process, HTTP and Extism
   hosts. Only `morphir.backend.generate` can opt into the 385 MiB encoded
   response budget. Legacy responses remain at 64 MiB; process requests are

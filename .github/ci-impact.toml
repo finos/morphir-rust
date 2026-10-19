@@ -121,6 +121,7 @@ paths = [".mise/tasks/build/wasm", ".mise/tasks/check/lint/wasm"]
 # Cargo.toml and Cargo.lock are global paths, so they turn this job on too.
 crates = [
   "morphir-config",
+  "morphir-json",
   "morphir-core",
   "morphir-workspace",
   "morphir-extension-sdk",

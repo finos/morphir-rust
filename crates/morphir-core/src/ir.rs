@@ -27,6 +27,9 @@ pub mod v4;
 // Document-tree layout: the storage profile, path grammar and file stems.
 pub mod layout;
 
+/// Opt-in bounded decoding for the additive model-originals profile.
+pub mod decode;
+
 // The JSON storage profile's canonical writer
 pub mod json;
 

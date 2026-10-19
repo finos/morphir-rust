@@ -648,7 +648,7 @@ jobs:
       # Packaging the crates together lets a crate build against the packages
       # of the crates it depends on, before those versions are on crates.io.
       - name: Package and build the published crates
-        run: cargo package -p morphir-config -p morphir-core -p morphir-workspace -p morphir-extension-sdk -p morphir-projection --locked
+        run: cargo package -p morphir-config -p morphir-json -p morphir-core -p morphir-workspace -p morphir-extension-sdk -p morphir-projection --locked
 
   ci-ok:
     name: CI OK

@@ -39,3 +39,6 @@ pub use single_file::{ClassicV3ModuleVisitor, visit_classic_v3, visit_classic_v3
 // Concrete IR values are recursive and production models can be much deeper
 // than a platform's default worker-thread stack permits.
 const IR_RECURSION_STACK_BYTES: usize = 32 * 1024 * 1024;
+
+/// Opt-in generic JSON projection for model-originals; other formats remain pending.
+pub mod checked_json;

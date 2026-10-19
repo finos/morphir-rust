@@ -1,6 +1,8 @@
 //! Confined native filesystem adapter for portable workspace discovery.
 
 mod aliases;
+mod capability;
+pub use capability::{CapturedWorkspaceDiscovery, WorkspaceDiscoveryRoot};
 mod budget;
 mod mounts;
 mod source_selection;
@@ -17,18 +19,17 @@ mod tests;
 use std::{
     collections::BTreeMap,
     error::Error,
-    fmt, fs,
+    fmt,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use cap_std::{ambient_authority, fs::Dir};
 use morphir_common::config::MorphirConfig;
 use morphir_workspace::{
     DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, RelativePath, WorkspaceSnapshot,
     discover_with_details,
 };
-use same_file::Handle;
 
 use super::{
     discovery::{native_global_config_candidates, native_system_config_candidates},
@@ -166,6 +167,13 @@ pub fn discover_workspace_detailed_typed(
 ) -> std::result::Result<NativeWorkspaceDiscovery, NativeWorkspaceDiscoveryError> {
     let (canonical_root, request) = bind_workspace_discovery_request(root, options)
         .map_err(NativeWorkspaceDiscoveryError::Host)?;
+    decode_captured_details(canonical_root, request)
+}
+
+fn decode_captured_details(
+    canonical_root: PathBuf,
+    request: DiscoveryRequest,
+) -> std::result::Result<NativeWorkspaceDiscovery, NativeWorkspaceDiscoveryError> {
     let details =
         discover_with_details(request).map_err(NativeWorkspaceDiscoveryError::Portable)?;
     let root_config = decode_effective_config(details.root_effective)
@@ -280,39 +288,25 @@ fn bind_workspace_discovery_request_with(
             )
         })?;
     root_opened_hook(&granted_root);
-    let canonical_root = fs::canonicalize(&granted_root).map_err(|error| {
-        anyhow!(
-            "workspace.path.not-confined: development root changed after binding `{}`: {error}",
-            granted_root.display()
-        )
-    })?;
-    let bound_identity = Handle::from_file(
-        root_capability
-            .try_clone()
-            .context("Failed to clone bound development root capability")?
-            .into_std_file(),
-    )
-    .context("Failed to inspect bound development root identity")?;
-    let canonical_identity = Handle::from_path(&canonical_root).map_err(|error| {
-        anyhow!(
-            "workspace.path.not-confined: development root changed after binding `{}` while verifying `{}`: {error}",
-            granted_root.display(),
-            canonical_root.display()
-        )
-    })?;
-    if bound_identity != canonical_identity {
-        bail!(
-            "workspace.path.not-confined: development root changed after binding `{}`; canonical path now identifies `{}`",
-            granted_root.display(),
-            canonical_root.display()
-        );
-    }
+    WorkspaceDiscoveryRoot::from_directory(root_capability, &granted_root)?
+        .capture_with_budgets(options, alias_budgets, traversal_budgets)
+        .map(CapturedWorkspaceDiscovery::into_parts)
+}
+
+fn capture_request(
+    root_capability: &Dir,
+    canonical_root: &Path,
+    granted_root: &Path,
+    options: &ConfigLoadOptions,
+    alias_budgets: AliasBudgets,
+    traversal_budgets: TraversalBudgets,
+) -> Result<DiscoveryRequest> {
     let mut payload = PayloadBudget::new(traversal_budgets.config_bytes);
     let classify_config = |path: &RelativePath| config_payload_kind(&options.user_override, path);
     let mut development_root = build_tree_from_capability(
-        &root_capability,
-        &canonical_root,
-        &granted_root,
+        root_capability,
+        canonical_root,
+        granted_root,
         alias_budgets,
         traversal_budgets,
         &mut payload,
@@ -339,7 +333,7 @@ fn bind_workspace_discovery_request_with(
         cli_overlay: serde_json::json!({}),
         purpose: DiscoveryPurpose::default(),
     };
-    Ok((canonical_root, request))
+    Ok(request)
 }
 
 fn discovery_failure(failure: morphir_workspace::DiscoveryFailure) -> anyhow::Error {

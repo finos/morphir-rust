@@ -141,3 +141,63 @@ fn actual64_mib_serialized_output_fits_and_one_less_byte_refuses() {
     ));
     assert!(output.len() < size);
 }
+#[test]
+fn frozen_policy_header_expectations_bind_actual_projection_results() {
+    use morphir_common::ir_transport::checked_json::HeaderEvidence;
+    let packet: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/model-originals-json-policy.json")).unwrap();
+    let mut asserted = 0;
+    for case in packet["cases"].as_array().unwrap() {
+        let fields = [
+            "expectedSourceHeader",
+            "expectedProjectionHeader",
+            "expectedSourceRelease",
+            "expectedProjectionRelease",
+        ];
+        if !fields.iter().any(|name| case.get(name).is_some()) {
+            continue;
+        }
+        let id = case["id"].as_str().unwrap();
+        let source = case["source"].as_str().unwrap();
+        let mut budget = DecodeBudget::new(DecodeLimits::model_originals());
+        let mut output = Vec::new();
+        let headers = write_literal_projection(
+            source.as_bytes(),
+            &mut budget,
+            &mut output,
+            ProjectionByteLimit::model_originals(),
+        )
+        .unwrap();
+        for (field, actual) in [
+            ("expectedSourceHeader", headers.source()),
+            ("expectedProjectionHeader", headers.projection()),
+        ] {
+            let Some(expected) = case.get(field) else {
+                continue;
+            };
+            match expected.as_str().unwrap() {
+                "not-reported" => assert_eq!(actual, &HeaderEvidence::NotReported, "{id} {field}"),
+                other => panic!("unhandled frozen header expectation {id} {field} {other}"),
+            }
+            asserted += 1;
+        }
+        for (field, actual) in [
+            ("expectedSourceRelease", headers.source()),
+            ("expectedProjectionRelease", headers.projection()),
+        ] {
+            let Some(expected) = case.get(field) else {
+                continue;
+            };
+            let expected = expected.as_str().unwrap();
+            let HeaderEvidence::Reported(version) = actual else {
+                panic!("{id} {field}: expected release {expected}, got {actual:?}")
+            };
+            assert_eq!(version.release.to_string(), expected, "{id} {field}");
+            asserted += 1;
+        }
+    }
+    assert_eq!(
+        asserted, 4,
+        "all four independently authored header/release fields must be exercised"
+    );
+}

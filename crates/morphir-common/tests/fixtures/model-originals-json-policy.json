@@ -1,0 +1,118 @@
+{
+  "status": "independently authored before implementation execution",
+  "policy": "additive-model-originals-literal-json; historical-v1-unchanged",
+  "source": "approved coordinator decision18October2026 and MoonBit root0/value counting; no implementation outputs",
+  "cases": [
+    {
+      "id": "literal-number-key",
+      "source": "{\"formatVersion\":4,\"extra\":{\"$serde_json::private::Number\":\"1\"}}",
+      "expectedJson": "{\"formatVersion\":4,\"extra\":{\"$serde_json::private::Number\":\"1\"}}"
+    },
+    {
+      "id": "literal-raw-key",
+      "source": "{\"extra\":{\"$serde_json::private::RawValue\":\"{\\\"x\\\":1,\\\"x\\\":2}\"}}",
+      "expectedJson": "{\"extra\":{\"$serde_json::private::RawValue\":\"{\\\"x\\\":1,\\\"x\\\":2}\"}}"
+    },
+    {
+      "id": "escaped-private-key",
+      "source": "{\"\\u0024serde_json::private::Number\":\"1\"}",
+      "expectedJson": "{\"$serde_json::private::Number\":\"1\"}"
+    },
+    {
+      "id": "ordinary-last-wins",
+      "source": "{\"a\":1,\"keep\":true,\"a\":2}",
+      "expectedJson": "{\"a\":2,\"keep\":true}"
+    },
+    {
+      "id": "unknown-order",
+      "source": "{\"z\":{\"opaque\":[null,true,\"x\"]},\"formatVersion\":4,\"a\":0}",
+      "expectedJson": "{\"z\":{\"opaque\":[null,true,\"x\"]},\"formatVersion\":4,\"a\":0}"
+    },
+    {
+      "id": "precision",
+      "source": "[1.00000000000000000001,123456789012345678901234567890,1e+900]",
+      "expectedNumericLexemes": [
+        "1.00000000000000000001",
+        "123456789012345678901234567890",
+        "1e+900"
+      ],
+      "features": [
+        "arbitrary_precision"
+      ]
+    },
+    {
+      "id": "root-zero-depth-exact",
+      "sourceRecipe": {
+        "kind": "nested-array-around-zero",
+        "arrays": 128
+      },
+      "expectedStatus": "accepted",
+      "expectedValues": 129
+    },
+    {
+      "id": "root-zero-depth-over",
+      "sourceRecipe": {
+        "kind": "nested-array-around-zero",
+        "arrays": 129
+      },
+      "expectedStatus": "depth-limit"
+    },
+    {
+      "id": "values-exact",
+      "sourceRecipe": {
+        "kind": "array-of-zero",
+        "elements": 99999
+      },
+      "expectedStatus": "accepted",
+      "expectedValues": 100000
+    },
+    {
+      "id": "values-over",
+      "sourceRecipe": {
+        "kind": "array-of-zero",
+        "elements": 100000
+      },
+      "expectedStatus": "value-limit"
+    },
+    {
+      "id": "key-plus-value-units",
+      "source": "{\"\ud83d\ude00\":\"\ud83d\ude00\"}",
+      "limits": {
+        "stringUnits": 4
+      },
+      "expectedStatus": "accepted"
+    },
+    {
+      "id": "key-plus-value-units-over",
+      "source": "{\"\ud83d\ude00\":\"\ud83d\ude00\"}",
+      "limits": {
+        "stringUnits": 3
+      },
+      "expectedStatus": "string-unit-limit"
+    },
+    {
+      "id": "syntax-scalar-suffix",
+      "source": "[1true]",
+      "expectedStatus": "syntax"
+    },
+    {
+      "id": "syntax-trailing-member",
+      "source": "{\"x\":1,}",
+      "expectedStatus": "syntax"
+    },
+    {
+      "id": "header-not-inferred",
+      "source": "{\"opaque\":true}",
+      "expectedSourceHeader": "not-reported",
+      "expectedProjectionHeader": "not-reported",
+      "expectedStatus": "accepted"
+    },
+    {
+      "id": "header-last-wins-separate-framing",
+      "source": "{\"formatVersion\":3,\"formatVersion\":4}",
+      "expectedSourceRelease": "4.0.0",
+      "expectedProjectionRelease": "4.0.0",
+      "expectedStatus": "accepted"
+    }
+  ]
+}

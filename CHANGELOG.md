@@ -289,6 +289,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `ProcessChild::read_within`, or a `ProcessChannel`.
 
 ### Fixed
+- Canonical YAML writer tests read the shared Gherkin kit's inline, doc-string,
+  outline and referenced-file spellings after the Markdown case retirement.
+  An explicit missing kit directory fails rather than silently skipping coverage.
 - V4 scalar literal readers accept an expanded `value` alongside unknown
   members, so forward-compatible FloatLiteral and IntegerLiteral objects decode
   without changing compact or DocumentLiteral behavior (finos/morphir#946).

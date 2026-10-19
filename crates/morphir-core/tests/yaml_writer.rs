@@ -1,6 +1,9 @@
 //! The canonical YAML writer's bytes (`docs/spec/ir/schemas/v4/yaml-profile.md`, "Canonical
-//! writer"). The kit's `yaml canonical` fences are the oracle; the last test holds the writer
-//! against every one of them.
+//! writer"). The shared Gherkin kit's canonical YAML spellings are the oracle; the last test
+//! holds the writer against its inline, doc-string, outline and referenced-file examples.
+
+#[path = "support/canonical_yaml_kit.rs"]
+mod canonical_yaml_kit;
 
 use morphir_core::ir::yaml::{read, write_canonical};
 use serde_json::json;
@@ -135,16 +138,20 @@ fn round_trips_the_kit_style() {
 }
 
 // ---------------------------------------------------------------------------
-// The kit's fences
+// The kit's canonical spellings
 // ---------------------------------------------------------------------------
 
 /// The Morphir Compatibility Kit lives in the parent repository (`spec/ir/mck` in finos/morphir),
 /// which holds this one as a submodule. When this repository is checked out on its own the kit is
 /// not there and the test reports that rather than failing.
 fn kit_dir() -> Option<std::path::PathBuf> {
-    if let Ok(dir) = std::env::var("MORPHIR_MCK_DIR") {
+    if let Some(dir) = std::env::var_os("MORPHIR_MCK_DIR") {
         let path = std::path::PathBuf::from(dir);
-        return path.is_dir().then_some(path);
+        assert!(
+            path.is_dir(),
+            "explicit MORPHIR_MCK_DIR is not a directory: {path:?}"
+        );
+        return Some(path);
     }
     let mut here = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     loop {
@@ -158,39 +165,8 @@ fn kit_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Every ```` ```yaml canonical ```` fence in a kit page, with the case id whose section it sits
-/// in (a `## <id>: <title>` heading).
-fn fences(markdown: &str) -> Vec<(String, String)> {
-    let mut found = Vec::new();
-    let mut case = String::from("<no case>");
-    let mut lines = markdown.lines();
-    while let Some(line) = lines.next() {
-        if let Some(heading) = line.strip_prefix("## ") {
-            case = heading
-                .split(':')
-                .next()
-                .unwrap_or(heading)
-                .trim()
-                .to_owned();
-        }
-        if line.trim_end() != "```yaml canonical" {
-            continue;
-        }
-        let mut body = String::new();
-        for line in lines.by_ref() {
-            if line.trim_end() == "```" {
-                break;
-            }
-            body.push_str(line);
-            body.push('\n');
-        }
-        found.push((case.clone(), body));
-    }
-    found
-}
-
 #[test]
-fn every_kit_canonical_fence_round_trips() {
+fn every_kit_canonical_yaml_spelling_round_trips() {
     let Some(kit) = kit_dir() else {
         eprintln!("the kit is not checked out next to this repository; skipping");
         return;
@@ -199,15 +175,23 @@ fn every_kit_canonical_fence_round_trips() {
     let mut failures: Vec<String> = Vec::new();
     let mut pages: Vec<_> = std::fs::read_dir(&kit)
         .expect("the kit directory reads")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| path.extension().is_some_and(|e| e == "md"))
+        .map(|entry| entry.expect("a kit entry reads").path())
+        .filter(|path| path.extension().is_some_and(|e| e == "feature"))
         .collect();
     pages.sort();
     for page in pages {
-        let text = std::fs::read_to_string(&page).expect("a kit page reads");
-        for (case, fence) in fences(&text) {
+        let (document, _) = morphir_gherkin::read_document(&page).expect("a kit feature parses");
+        for spelling in canonical_yaml_kit::spellings(&document).expect("canonical steps are valid")
+        {
+            let fence = spelling
+                .read(&kit)
+                .expect("a canonical YAML spelling reads");
             total += 1;
-            let name = format!("{}#{case}", page.file_name().unwrap().to_string_lossy());
+            let name = format!(
+                "{}#{}",
+                page.file_name().unwrap().to_string_lossy(),
+                spelling.case
+            );
             let value = match read(&fence) {
                 Ok(value) => value,
                 Err(diagnostic) => {
@@ -236,13 +220,13 @@ fn every_kit_canonical_fence_round_trips() {
     }
     assert!(
         total > 0,
-        "no `yaml canonical` fences were found in {kit:?}"
+        "no canonical YAML spellings were found in the Gherkin kit {kit:?}"
     );
     assert!(
         failures.is_empty(),
-        "{} of {total} kit fences did not round-trip:\n{}",
+        "{} of {total} kit YAML spellings did not round-trip:\n{}",
         failures.len(),
         failures.join("\n")
     );
-    eprintln!("{total} kit `yaml canonical` fences round-tripped");
+    eprintln!("{total} Gherkin kit canonical YAML spellings round-tripped");
 }

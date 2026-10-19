@@ -4408,6 +4408,7 @@ dependencies = [
  "granit-parser",
  "indexmap",
  "lasso",
+ "morphir-gherkin",
  "morphir-json",
  "num-bigint 0.5.1",
  "rstest",

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opt-in bounded physical YAML decoding shares the JSON source ledger while
+  preserving the existing YAML profile. Resource credit precedes AST ownership
+  and scalar resolution; parser nesting is configured before parsing. Typed
+  YAML IR conversion, tree assembly and completed projection remain pending.
 - Additive devkit `WorkspaceDiscoveryRoot` and `CapturedWorkspaceDiscovery`
   APIs capture discovery from an existing host-owned directory capability,
   refuse changed root identities before configuration reads, and decode typed

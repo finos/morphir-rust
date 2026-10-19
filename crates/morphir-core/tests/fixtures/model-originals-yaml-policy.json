@@ -1,0 +1,21 @@
+{
+  "purpose": "Independent expected physical YAML source behavior, frozen before the bounded YAML implementation or its outputs. This does not specify typed IR migration or completed projection.",
+  "cases": [
+    {"id":"root-zero-string", "source":"\"4\"\n", "limits":{"depth":0,"values":1,"stringUnits":1}, "expectedJson":"\"4\""},
+    {"id":"literal-private-map", "source":"extra:\n  '$serde_json::private::Number': '1'\n", "expectedJson":"{\"extra\":{\"$serde_json::private::Number\":\"1\"}}"},
+    {"id":"unknown-members", "source":"formatVersion: 4\nopaque: [null, true, 'text']\n", "expectedJson":"{\"formatVersion\":4,\"opaque\":[null,true,\"text\"]}"},
+    {"id":"duplicate-members-still-refused", "source":"x: 1\nx: 2\n", "expectedDiagnostic":"DuplicateMember"},
+    {"id":"root-depth128", "sourceRecipe":{"kind":"nested-array-around-zero","arrays":128}, "expectedStatus":"accepted", "expectedValues":129},
+    {"id":"root-depth129", "sourceRecipe":{"kind":"nested-array-around-zero","arrays":129}, "expectedLimit":"Depth"},
+    {"id":"100000-values", "sourceRecipe":{"kind":"array-of-zero","elements":99999}, "expectedStatus":"accepted", "expectedValues":100000},
+    {"id":"100001-values", "sourceRecipe":{"kind":"array-of-zero","elements":100000}, "expectedLimit":"Values"},
+    {"id":"keys-not-values", "source":"a: 0\nb: 1\nc: 2\n", "limits":{"values":4,"stringUnits":3}, "expectedJson":"{\"a\":0,\"b\":1,\"c\":2}", "expectedValues":4,"expectedStringUnits":3},
+    {"id":"astral-key-and-value-exact", "source":"'😀': 'x'\n", "limits":{"stringUnits":3}, "expectedJson":"{\"😀\":\"x\"}", "expectedStringUnits":3},
+    {"id":"astral-key-and-value-one-over", "source":"'😀': 'x'\n", "limits":{"stringUnits":2}, "expectedLimit":"StringUnits"},
+    {"id":"aliases-still-refused", "source":"x: &a [0]\ny: *a\n", "expectedDiagnostic":"UnsupportedYamlFeature"},
+    {"id":"directives-still-refused", "source":"%YAML 1.2\n---\nx: 1\n", "expectedDiagnostic":"UnsupportedYamlFeature"},
+    {"id":"non-string-key-still-refused", "source":"1: value\n", "expectedDiagnostic":"InvalidType"},
+    {"id":"quoted-scalar-no-implicit-resolution", "source":"['true', '01', 'null']\n", "expectedJson":"[\"true\",\"01\",\"null\"]"},
+    {"id":"plain-leading-zero-still-refused", "source":"x: 01\n", "expectedDiagnostic":"InvalidLiteral"}
+  ]
+}

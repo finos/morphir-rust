@@ -166,7 +166,7 @@ impl DecodeBudget {
             })?;
         Ok(())
     }
-    pub(super) fn source(&mut self) -> &mut PhaseBudget {
+    pub(crate) fn source(&mut self) -> &mut PhaseBudget {
         &mut self.source
     }
     pub(super) fn assembled(&mut self) -> &mut PhaseBudget {
@@ -174,12 +174,18 @@ impl DecodeBudget {
     }
 }
 #[derive(Debug)]
-pub(super) struct PhaseBudget {
+pub(crate) struct PhaseBudget {
     limits: DecodeLimits,
     phase: DecodePhase,
     usage: DecodeUsage,
 }
 impl PhaseBudget {
+    pub(crate) fn depth_limit(&self) -> usize {
+        self.limits.depth
+    }
+    pub(crate) fn depth_refusal(&self) -> DecodeLimitExceeded {
+        self.exceeded(DecodeLimit::Depth)
+    }
     fn new(limits: DecodeLimits, phase: DecodePhase) -> Self {
         Self {
             limits,

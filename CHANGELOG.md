@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preserving the existing YAML profile. Resource credit precedes AST ownership
   and scalar resolution; parser nesting is configured before parsing. Typed
   YAML IR conversion, tree assembly and completed projection remain pending.
+- Additive devkit `WorkspaceDiscoveryRoot` and `CapturedWorkspaceDiscovery`
+  APIs capture discovery from an existing host-owned directory capability,
+  refuse changed root identities before configuration reads, and decode typed
+  configuration from the same immutable request without reopening files.
+  Existing path entrypoints and discovery/source policies remain available.
 - An additive model-originals generic JSON decoder with finite source and
   assembled-value budgets, literal private-looking keys, ordinary last-wins
   members, actual header evidence and bounded serialized output. The shared

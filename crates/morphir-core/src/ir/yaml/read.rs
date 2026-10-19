@@ -5,9 +5,12 @@
 //! diagnostic codes and JSON-pointer cursors. Numbers keep their lexeme through serde_json's
 //! `arbitrary_precision`.
 
+use super::read_policy::{Legacy, ReadFailure, YamlBudget};
 use super::scalar::{Resolved, resolve_plain};
+use crate::ir::decode::{DecodeLimitExceeded, PhaseBudget};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage};
 use granit_parser::{Event, Marker, Options, Parser, ScalarStyle, Span};
+use morphir_json::ValueKind;
 use serde_json::{Map, Value};
 
 /// The nesting bound the reader enforces, the same bound the JSON probe uses.
@@ -178,19 +181,39 @@ impl Reader {
 
 /// Reads one profile-conforming YAML document into the JSON value tree.
 pub fn read(text: &str) -> Result<Value, Diagnostic> {
+    match read_with_policy(text, &mut Legacy) {
+        Ok(value) => Ok(value),
+        Err(ReadFailure::Profile(error)) => Err(error),
+        Err(ReadFailure::Limit(never)) => match never {},
+    }
+}
+
+pub(crate) fn read_bounded(
+    text: &str,
+    budget: &mut PhaseBudget,
+) -> Result<Value, ReadFailure<DecodeLimitExceeded>> {
+    read_with_policy(text, budget)
+}
+
+fn read_with_policy<B: YamlBudget>(
+    text: &str,
+    budget: &mut B,
+) -> Result<Value, ReadFailure<B::Error>> {
     if has_directive(text) {
-        return Err(diagnostic(
+        return Err(ReadFailure::Profile(diagnostic(
             DiagnosticCode::UnsupportedYamlFeature,
             "",
             "%YAML and %TAG directives are not part of the profile",
             None,
-        ));
+        )));
     }
     let mut options = Options::default();
     options.emit_comments = false;
-    // The reader's own bound is the one that has to bite, so the parser's limits sit above it.
-    options.flow_nesting_limit = MAX_DEPTH + 8;
-    options.block_nesting_limit = MAX_DEPTH + 8;
+    // Historical parsing retains its original overhead allowance. The checked
+    // policy permits root-zero container depth, and bounds parser state before
+    // scanning; reader callbacks also count scalar depth and aggregate values.
+    options.flow_nesting_limit = budget.parser_nesting_limit();
+    options.block_nesting_limit = budget.parser_nesting_limit();
 
     let mut r = Reader {
         stack: Vec::new(),
@@ -199,60 +222,63 @@ pub fn read(text: &str) -> Result<Value, Diagnostic> {
     };
     for item in Parser::new_from_str_with_options(text, options) {
         let (event, span) = item.map_err(|e| {
+            if let Some(error) = budget.scanner_refusal(&e) {
+                return ReadFailure::Limit(error);
+            }
             // `info()` is the parser's own description; its `Display` would repeat the position
             // that `line` and `column` already carry.
-            diagnostic(
+            ReadFailure::Profile(diagnostic(
                 DiagnosticCode::InvalidYaml,
                 &r.cursor(),
                 e.info(),
                 Some(e.marker()),
-            )
+            ))
         })?;
         match event {
             Event::StreamStart | Event::StreamEnd | Event::DocumentEnd | Event::Comment(..) => {}
             Event::DocumentStart(_, version) => {
                 r.documents += 1;
                 if version.is_some() {
-                    return Err(diagnostic(
+                    return Err(ReadFailure::Profile(diagnostic(
                         DiagnosticCode::UnsupportedYamlFeature,
                         "",
                         "%YAML directives are not part of the profile",
                         at(&span),
-                    ));
+                    )));
                 }
                 if r.documents > 1 {
-                    return Err(diagnostic(
+                    return Err(ReadFailure::Profile(diagnostic(
                         DiagnosticCode::InvalidYaml,
                         "",
                         "expected exactly one document",
                         at(&span),
-                    ));
+                    )));
                 }
             }
             Event::Alias(_) => {
-                return Err(diagnostic(
+                return Err(ReadFailure::Profile(diagnostic(
                     DiagnosticCode::UnsupportedYamlFeature,
                     &r.cursor(),
                     "anchors and aliases are not part of the profile",
                     at(&span),
-                ));
+                )));
             }
             Event::Scalar(scalar, style, anchor, tag) => {
                 if anchor != 0 {
-                    return Err(diagnostic(
+                    return Err(ReadFailure::Profile(diagnostic(
                         DiagnosticCode::UnsupportedYamlFeature,
                         &r.cursor(),
                         "anchors and aliases are not part of the profile",
                         at(&span),
-                    ));
+                    )));
                 }
                 if tag.is_some() {
-                    return Err(diagnostic(
+                    return Err(ReadFailure::Profile(diagnostic(
                         DiagnosticCode::UnsupportedYamlFeature,
                         &r.cursor(),
                         "tags are not part of the profile",
                         at(&span),
-                    ));
+                    )));
                 }
                 if r.in_key_position() {
                     // A quoted or block scalar is its own text; a plain one has to resolve to a
@@ -263,82 +289,104 @@ pub fn read(text: &str) -> Result<Value, Diagnostic> {
                             if scalar == "<<" {
                                 // The key's own position, as the reference reader reports it.
                                 let cursor = format!("{}/<<", r.cursor());
-                                return Err(diagnostic(
+                                return Err(ReadFailure::Profile(diagnostic(
                                     DiagnosticCode::UnsupportedYamlFeature,
                                     &cursor,
                                     "merge keys are not part of the profile",
                                     at(&span),
-                                ));
+                                )));
                             }
                             match resolve_plain(&scalar) {
-                                Ok(Resolved::Str(text)) => text,
+                                Ok(Resolved::Str(text)) => {
+                                    budget.before_string(text).map_err(ReadFailure::Limit)?;
+                                    scalar.into_owned()
+                                }
                                 Ok(_) => {
-                                    return Err(diagnostic(
+                                    return Err(ReadFailure::Profile(diagnostic(
                                         DiagnosticCode::InvalidType,
                                         &r.cursor(),
                                         "mapping keys must be strings",
                                         at(&span),
-                                    ));
+                                    )));
                                 }
                                 Err(message) => {
-                                    return Err(diagnostic(
+                                    return Err(ReadFailure::Profile(diagnostic(
                                         DiagnosticCode::InvalidLiteral,
                                         &r.cursor(),
                                         message,
                                         at(&span),
-                                    ));
+                                    )));
                                 }
                             }
                         }
-                        _ => scalar.into_owned(),
+                        _ => {
+                            budget.before_string(&scalar).map_err(ReadFailure::Limit)?;
+                            scalar.into_owned()
+                        }
                     };
                     r.place(Value::String(key), &span)?;
                     continue;
                 }
+                budget
+                    .before_value(r.stack.len(), ValueKind::Scalar)
+                    .map_err(ReadFailure::Limit)?;
                 let value = match style {
                     ScalarStyle::Plain => match resolve_plain(&scalar) {
                         Ok(Resolved::Null) => Value::Null,
                         Ok(Resolved::Bool(b)) => Value::Bool(b),
                         Ok(Resolved::Number(n)) => Value::Number(n),
-                        Ok(Resolved::Str(s)) => Value::String(s),
+                        Ok(Resolved::Str(s)) => {
+                            budget.before_string(s).map_err(ReadFailure::Limit)?;
+                            Value::String(scalar.into_owned())
+                        }
                         Err(message) => {
-                            return Err(diagnostic(
+                            return Err(ReadFailure::Profile(diagnostic(
                                 DiagnosticCode::InvalidLiteral,
                                 &r.cursor(),
                                 message,
                                 at(&span),
-                            ));
+                            )));
                         }
                     },
-                    _ => Value::String(scalar.into_owned()),
+                    _ => {
+                        budget.before_string(&scalar).map_err(ReadFailure::Limit)?;
+                        Value::String(scalar.into_owned())
+                    }
                 };
                 r.place(value, &span)?;
             }
             Event::SequenceStart(_, anchor, ref tag) | Event::MappingStart(_, anchor, ref tag) => {
                 if anchor != 0 || tag.is_some() {
-                    return Err(diagnostic(
+                    return Err(ReadFailure::Profile(diagnostic(
                         DiagnosticCode::UnsupportedYamlFeature,
                         &r.cursor(),
                         "anchors and tags are not part of the profile",
                         at(&span),
-                    ));
+                    )));
                 }
                 if r.in_key_position() {
-                    return Err(diagnostic(
+                    return Err(ReadFailure::Profile(diagnostic(
                         DiagnosticCode::InvalidType,
                         &r.cursor(),
                         "mapping keys must be strings",
                         at(&span),
-                    ));
+                    )));
                 }
                 if r.stack.len() >= MAX_DEPTH {
-                    return Err(diagnostic(
+                    return Err(ReadFailure::Profile(diagnostic(
                         DiagnosticCode::NestingTooDeep,
                         &r.cursor(),
                         format!("nesting deeper than {MAX_DEPTH} levels"),
                         at(&span),
-                    ));
+                    )));
                 }
+                let kind = match event {
+                    Event::SequenceStart(..) => ValueKind::Array,
+                    _ => ValueKind::Object,
+                };
+                budget
+                    .before_value(r.stack.len(), kind)
+                    .map_err(ReadFailure::Limit)?;
                 r.stack.push(match event {
                     Event::SequenceStart(..) => Frame::Seq(Vec::new()),
                     _ => Frame::Map {
@@ -360,11 +408,11 @@ pub fn read(text: &str) -> Result<Value, Diagnostic> {
     }
     match r.root {
         Some(value) if r.documents == 1 => Ok(value),
-        _ => Err(diagnostic(
+        _ => Err(ReadFailure::Profile(diagnostic(
             DiagnosticCode::InvalidYaml,
             "",
             "expected exactly one document",
             None,
-        )),
+        ))),
     }
 }

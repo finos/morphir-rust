@@ -1,8 +1,9 @@
-//! Opt-in bounded literal JSON for the additive model-originals profile.
+//! Opt-in bounded physical JSON and YAML for the additive model-originals profile.
 //!
 //! Historical JSON storage and extension-wire decoders are unchanged. This
-//! policy preserves private-looking keys literally, ordinary last-wins object
-//! members and the active serde_json numeric precision and map ordering.
+//! JSON policy preserves private-looking keys literally, ordinary last-wins
+//! object members and active numeric precision/map ordering. YAML retains its
+//! existing profile semantics, including duplicate-key refusal.
 //!
 //! ```
 //! use morphir_core::ir::decode::{DecodeBudget, DecodeLimits, read_json};
@@ -12,12 +13,15 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 mod budget;
+pub(crate) use budget::PhaseBudget;
+mod yaml;
 pub use budget::{
     DecodeBudget, DecodeLimit, DecodeLimitExceeded, DecodeLimits, DecodePhase, DecodeUsage,
     InvalidDecodeLimits,
 };
 use serde_json::Value;
 use std::{error::Error, fmt};
+pub use yaml::{YamlDecodeError, read_yaml};
 
 /// Syntax, Unicode or finite resource refusal, without retained source bytes.
 #[derive(Debug)]

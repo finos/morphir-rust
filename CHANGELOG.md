@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opt-in bounded physical YAML decoding shares the JSON source ledger while
+  preserving the existing YAML profile. Resource credit precedes AST ownership
+  and scalar resolution; parser nesting is configured before parsing. Typed
+  YAML IR conversion, tree assembly and completed projection remain pending.
 - An additive model-originals generic JSON decoder with finite source and
   assembled-value budgets, literal private-looking keys, ordinary last-wins
   members, actual header evidence and bounded serialized output. The shared

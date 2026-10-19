@@ -3,10 +3,13 @@
 //! See `docs/spec/ir/schemas/v4/yaml-profile.md`.
 
 mod read;
+mod read_policy;
 mod scalar;
 mod write;
 
+pub(crate) use read::read_bounded;
 pub use read::{MAX_DEPTH, read};
+pub(crate) use read_policy::ReadFailure;
 pub use write::write_canonical;
 
 use crate::ir::v4::{IRFile, TypeEncoding, with_type_encoding};

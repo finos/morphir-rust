@@ -9,11 +9,11 @@ use serde_json::Number;
 use std::str::FromStr;
 
 /// What a plain scalar resolves to under the profile.
-pub(crate) enum Resolved {
+pub(crate) enum Resolved<'a> {
     Null,
     Bool(bool),
     Number(Number),
-    Str(String),
+    Str(&'a str),
 }
 
 fn is_int(s: &str) -> bool {
@@ -110,7 +110,7 @@ pub(crate) fn resolves_non_string(text: &str) -> bool {
 }
 
 /// Resolves a plain scalar, or refuses it with the message an `invalid_literal` carries.
-pub(crate) fn resolve_plain(text: &str) -> Result<Resolved, &'static str> {
+pub(crate) fn resolve_plain(text: &str) -> Result<Resolved<'_>, &'static str> {
     match text {
         "true" | "True" | "TRUE" => return Ok(Resolved::Bool(true)),
         "false" | "False" | "FALSE" => return Ok(Resolved::Bool(false)),
@@ -140,5 +140,5 @@ pub(crate) fn resolve_plain(text: &str) -> Result<Resolved, &'static str> {
             Number::from_str(&json_lexeme(text)).map_err(|_| "this number is not a JSON number")?,
         ));
     }
-    Ok(Resolved::Str(text.to_owned()))
+    Ok(Resolved::Str(text))
 }

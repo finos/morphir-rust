@@ -1,0 +1,540 @@
+{
+  "status": "source-authored design cases, not MCK or implementation observations",
+  "authoredAtUtc": "2026-10-19T00:52:15.843437+00:00",
+  "semanticBase": "parent19b05c00; SDKb23c7cb source semantics unchanged after306rebase",
+  "cases": [
+    {
+      "id": "standalone-default",
+      "setup": {
+        "providerRoot": "/work/app",
+        "selected": ".",
+        "files": {
+          "/work/app/morphir.toml": "[project]\nname='acme/app'\n"
+        }
+      },
+      "expected": {
+        "writerRoot": "/work/app",
+        "module": "",
+        "out": "/work/app/.morphir/out",
+        "grant": "provider-confined"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "system-output",
+      "setup": {
+        "providerRoot": "/work/app",
+        "selected": ".",
+        "files": {
+          "/work/app/morphir.toml": "[project]\nname='acme/app'\n"
+        },
+        "system": "[workspace]\nout_dir='system/shared'\n",
+        "global": null,
+        "userOverride": "discover",
+        "environment": {}
+      },
+      "expected": {
+        "module": "",
+        "out": "/work/app/system/shared",
+        "guestRoot": "/work/app"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "global-output",
+      "setup": {
+        "providerRoot": "/work/app",
+        "selected": ".",
+        "files": {
+          "/work/app/morphir.toml": "[project]\nname='acme/app'\n"
+        },
+        "system": "[workspace]\nout_dir='system/shared'\n",
+        "global": "[workspace]\nout_dir='global/shared'\n",
+        "userOverride": "discover",
+        "environment": {}
+      },
+      "expected": {
+        "module": "",
+        "out": "/work/app/global/shared",
+        "guestRoot": "/work/app"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "primary-output",
+      "setup": {
+        "providerRoot": "/work/app",
+        "selected": ".",
+        "files": {
+          "/work/app/morphir.toml": "[project]\nname='acme/app'\n[workspace]\nout_dir='primary/shared'\n"
+        },
+        "system": "[workspace]\nout_dir='system/shared'\n",
+        "global": "[workspace]\nout_dir='global/shared'\n",
+        "userOverride": "discover",
+        "environment": {}
+      },
+      "expected": {
+        "module": "",
+        "out": "/work/app/primary/shared",
+        "guestRoot": "/work/app"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "root-user-output",
+      "setup": {
+        "providerRoot": "/work/app",
+        "selected": ".",
+        "files": {
+          "/work/app/morphir.toml": "[project]\nname='acme/app'\n[workspace]\nout_dir='primary/shared'\n",
+          "/work/app/morphir.user.toml": "[workspace]\nout_dir='user/shared'\n"
+        },
+        "system": "[workspace]\nout_dir='system/shared'\n",
+        "global": "[workspace]\nout_dir='global/shared'\n",
+        "userOverride": "discover",
+        "environment": {}
+      },
+      "expected": {
+        "module": "",
+        "out": "/work/app/user/shared",
+        "guestRoot": "/work/app"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "captured-env-output",
+      "setup": {
+        "providerRoot": "/work/app",
+        "selected": ".",
+        "files": {
+          "/work/app/morphir.toml": "[project]\nname='acme/app'\n[workspace]\nout_dir='primary/shared'\n",
+          "/work/app/morphir.user.toml": "[workspace]\nout_dir='user/shared'\n"
+        },
+        "system": "[workspace]\nout_dir='system/shared'\n",
+        "global": "[workspace]\nout_dir='global/shared'\n",
+        "userOverride": "discover",
+        "environment": {
+          "MORPHIR_WORKSPACE__OUT_DIR": "environment/shared"
+        }
+      },
+      "expected": {
+        "module": "",
+        "out": "/work/app/environment/shared",
+        "guestRoot": "/work/app"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "member-scoped-relocation",
+      "setup": {
+        "providerRoot": "/work/ws",
+        "selected": "packages/orders",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\nout_dir='shared'\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n[workspace]\nout_dir='member/ignored'\n",
+          "/work/ws/packages/orders/morphir.user.toml": "[workspace]\nout_dir='personal/ignored'\n"
+        },
+        "userOverride": "discover"
+      },
+      "expected": {
+        "writerRoot": "/work/ws",
+        "module": "packages/orders",
+        "out": "/work/ws/shared",
+        "guestRelativePath": "packages/orders"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "explicit-user-does-not-load-member-user",
+      "setup": {
+        "providerRoot": "/work/ws",
+        "selected": "packages/orders",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\nout_dir='shared'\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n[workspace]\nout_dir='member/ignored'\n",
+          "/work/ws/packages/orders/morphir.user.toml": "[ir]\nmode='not-a-mode'\n"
+        },
+        "userOverride": {
+          "explicit": "[workspace]\nout_dir='explicit/shared'\n"
+        }
+      },
+      "expected": {
+        "out": "/work/ws/explicit/shared",
+        "module": "packages/orders",
+        "memberUserRole": "omitted"
+      },
+      "source": "loadermerge_user_overrides explicit branch"
+    },
+    {
+      "id": "relative-flag",
+      "setup": {
+        "providerRoot": "/work/ws",
+        "selected": "packages/orders",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\nout_dir='shared'\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n[workspace]\nout_dir='member/ignored'\n",
+          "/work/ws/packages/orders/morphir.user.toml": "[workspace]\nout_dir='personal/ignored'\n"
+        },
+        "userOverride": "discover",
+        "startupCwd": "/shell",
+        "flag": "flag",
+        "runtimeEnv": "env"
+      },
+      "expected": {
+        "out": "/shell/flag",
+        "module": "packages/orders",
+        "additionalOutputGrant": true
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "relative-runtime-env",
+      "setup": {
+        "providerRoot": "/work/ws",
+        "selected": "packages/orders",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\nout_dir='shared'\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n[workspace]\nout_dir='member/ignored'\n",
+          "/work/ws/packages/orders/morphir.user.toml": "[workspace]\nout_dir='personal/ignored'\n"
+        },
+        "userOverride": "discover",
+        "startupCwd": "/shell",
+        "flag": null,
+        "runtimeEnv": "env"
+      },
+      "expected": {
+        "out": "/shell/env",
+        "module": "packages/orders",
+        "additionalOutputGrant": true
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "absolute-flag",
+      "setup": {
+        "providerRoot": "/work/ws",
+        "selected": "packages/orders",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\nout_dir='shared'\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n[workspace]\nout_dir='member/ignored'\n",
+          "/work/ws/packages/orders/morphir.user.toml": "[workspace]\nout_dir='personal/ignored'\n"
+        },
+        "userOverride": "discover",
+        "startupCwd": "/shell",
+        "flag": "/output/flag",
+        "runtimeEnv": "env"
+      },
+      "expected": {
+        "out": "/output/flag",
+        "module": "packages/orders",
+        "additionalOutputGrant": true
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "empty-runtime-env",
+      "setup": {
+        "providerRoot": "/work/ws",
+        "selected": "packages/orders",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\nout_dir='shared'\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n[workspace]\nout_dir='member/ignored'\n",
+          "/work/ws/packages/orders/morphir.user.toml": "[workspace]\nout_dir='personal/ignored'\n"
+        },
+        "userOverride": "discover",
+        "startupCwd": "/shell",
+        "flag": null,
+        "runtimeEnv": ""
+      },
+      "expected": {
+        "out": "/work/ws/shared",
+        "module": "packages/orders",
+        "additionalOutputGrant": false
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "ancestor-default-is-not-output-grant",
+      "setup": {
+        "providerRoot": "/work/ws/packages/orders",
+        "selected": ".",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n"
+        },
+        "approvedConfigLookupAncestors": [
+          "/work/ws/packages",
+          "/work/ws",
+          "/work",
+          "/"
+        ]
+      },
+      "expected": {
+        "writerRoot": "/work/ws",
+        "module": "packages/orders",
+        "computedOut": "/work/ws/.morphir/out",
+        "result": "configured-output-leaves-provider",
+        "outputReadEffects": 0,
+        "guestRoot": "/work/ws/packages/orders"
+      },
+      "source": "parentproject_model.rs86\u201392"
+    },
+    {
+      "id": "ancestor-output-inside-provider",
+      "setup": {
+        "providerRoot": "/work/ws/packages/orders",
+        "selected": ".",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\nout_dir='packages/orders/inner-output'\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n"
+        },
+        "approvedConfigLookupAncestors": [
+          "/work/ws/packages",
+          "/work/ws",
+          "/work",
+          "/"
+        ]
+      },
+      "expected": {
+        "writerRoot": "/work/ws",
+        "module": "packages/orders",
+        "out": "/work/ws/packages/orders/inner-output",
+        "grant": "provider-confined"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "explicit-output-still-needs-ancestor-module",
+      "setup": {
+        "providerRoot": "/work/ws/packages/orders",
+        "selected": ".",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['packages/*']\n",
+          "/work/ws/packages/orders/morphir.toml": "[project]\nname='acme/orders'\n"
+        },
+        "approvedConfigLookupAncestors": [
+          "/work/ws/packages",
+          "/work/ws",
+          "/work",
+          "/"
+        ],
+        "flag": "/explicit/output",
+        "startupCwd": "/shell"
+      },
+      "expected": {
+        "out": "/explicit/output",
+        "module": "packages/orders",
+        "additionalOutputGrant": "original-startup-flag"
+      },
+      "source": "SDKconfig/loader.rs Current branch + out/root.rs; parent19b05 project_model.rs"
+    },
+    {
+      "id": "nearest-matching-nested-workspace",
+      "setup": {
+        "providerRoot": "/work/ws",
+        "selected": "nested/orders",
+        "files": {
+          "/work/ws/morphir.toml": "[workspace]\nmembers=['**']\nout_dir='outer'\n",
+          "/work/ws/nested/morphir.toml": "[workspace]\nmembers=['orders']\nout_dir='inner'\n",
+          "/work/ws/nested/orders/morphir.toml": "[project]\nname='acme/orders'\n"
+        }
+      },
+      "expected": {
+        "writerRoot": "/work/ws/nested",
+        "module": "orders",
+        "out": "/work/ws/nested/inner",
+        "guestRelativePath": "nested/orders"
+      },
+      "source": "loaderfind_enclosing_workspace first matching parent"
+    },
+    {
+      "id": "missing-ancestor-slot-materializes",
+      "setup": {
+        "initialCandidate": "/work/ws/nested/morphir.toml absent",
+        "beforePublication": "same file added selecting orders"
+      },
+      "expected": {
+        "preparedBinding": "changed",
+        "publication": "refused",
+        "newGrant": "none",
+        "subsequentAttempt": "may recapture within same approved lookup scope"
+      },
+      "source": "proposed currentness; absence is fingerprinted"
+    },
+    {
+      "id": "atomic-config-replacement",
+      "setup": {
+        "candidateParentIdentity": "unchanged",
+        "file": "root primary atomically replaced with new out_dir"
+      },
+      "expected": {
+        "preparedBinding": "changed",
+        "publication": "refused",
+        "nextAttempt": "same granted parent can capture replacement without new authority"
+      },
+      "source": "proposed captured-file identity/digest currentness"
+    },
+    {
+      "id": "ancestor-label-replacement",
+      "setup": {
+        "startupAncestorHandle": "owned",
+        "label": "renamed then replaced with foreign directory"
+      },
+      "expected": {
+        "result": "directory-binding-changed",
+        "foreignConfigReadEffects": 0
+      },
+      "source": "SDKb23 same_file binding policy"
+    },
+    {
+      "id": "client-cannot-issue-scope",
+      "setup": {
+        "browserRootLabel": "/ungranted",
+        "selected": "ungranted-project"
+      },
+      "expected": {
+        "scopeCreated": false,
+        "ambientOpenEffects": 0
+      },
+      "source": "new API trusted startup issuer only"
+    },
+    {
+      "id": "symlink-retarget-outside-sealed-candidates",
+      "setup": {
+        "candidate": "host-config alias",
+        "afterStartup": "target changes to ungranted location"
+      },
+      "expected": {
+        "result": "lookup-authority-insufficient",
+        "newTargetReadEffects": 0,
+        "requires": "trusted issuer refresh"
+      },
+      "source": "proposed narrow config lookup confinement"
+    },
+    {
+      "id": "new-installed-project-in-fixed-scope",
+      "setup": {
+        "guestResponse": "newproject within original providerRoot",
+        "nativeMembership": "does not contain it",
+        "capturedSelectedConfig": "valid"
+      },
+      "expected": {
+        "membershipAuthority": "actualguest",
+        "nativeSubstitution": false,
+        "binding": "selected config predicate within fixed startup lookup scope"
+      },
+      "source": "parentextension.rs WORKSPACE_DISCOVER actual response"
+    },
+    {
+      "id": "missing-output-does-not-block-browsing",
+      "setup": {
+        "providerDiscovery": "success",
+        "computedOutputDirectory": "notfound"
+      },
+      "expected": {
+        "workspaceBrowsing": "available",
+        "modelOutput": "unavailable",
+        "directoryCreated": false
+      },
+      "source": "parentproject_model.rs99\u2013103 missing vs invalid distinction"
+    },
+    {
+      "id": "config-absent-guest-project",
+      "setup": {
+        "actualGuestProject": "synthesized",
+        "selectedPrimary": "absent"
+      },
+      "expected": {
+        "v1": "project-root default+empty module retained",
+        "additiveManifestBinding": "unavailable",
+        "compilerCwd": "not invented"
+      },
+      "source": "parentproject_model.rs77\u201382 vs compileprepare.rs load_configuration"
+    },
+    {
+      "id": "selected-config-error-not-absence",
+      "setup": {
+        "selectedPrimary": "malformed TOML"
+      },
+      "expected": {
+        "result": "config-error",
+        "legacyFallback": "none"
+      },
+      "source": "parentproject_model.rs loadertranspose errors"
+    },
+    {
+      "id": "malformed-ancestor-compatibility",
+      "setup": {
+        "nearestAncestor": "malformed",
+        "nextAncestor": "valid workspace matching selected"
+      },
+      "expected": {
+        "selection": "next valid matching ancestor",
+        "budgetBreach": "must refuse separately, never treat as malformed/absent"
+      },
+      "source": "loaderfind_enclosing_workspace .ok legacy behavior"
+    },
+    {
+      "id": "legacy-json-duplicate-known-field",
+      "setup": {
+        "source": "morphir.json with duplicate name fields"
+      },
+      "expected": {
+        "parse": "same legacy derived duplicate-known-field error",
+        "preflight": "does not change to last-wins decode"
+      },
+      "source": "morphir-config parse.rs103 +LegacyProjectConfig derive"
+    },
+    {
+      "id": "yaml-profile-preserved",
+      "setup": {
+        "source": "YAML alias/anchor or duplicate mapping key"
+      },
+      "expected": {
+        "parse": "existing config-profile refusal",
+        "jsonOnlyShortcut": false
+      },
+      "source": "morphir-config parse.rs validate_yaml_profile+yaml_options"
+    },
+    {
+      "id": "reservation-before-lookup",
+      "setup": {
+        "hostWorkerCapacity": "exhausted",
+        "captureRequest": "otherwise valid"
+      },
+      "expected": {
+        "result": "capacity",
+        "configReadEffects": 0,
+        "copyEffects": 0
+      },
+      "source": "parent approved worker reservation before every attempt"
+    },
+    {
+      "id": "raw-config-budget",
+      "setup": {
+        "retainedRawConfigBytes": "limit+1",
+        "reader": "metadata may underreport size"
+      },
+      "expected": {
+        "result": "config-input-limit",
+        "copyBeyondReservedCredit": false,
+        "parserStarted": false
+      },
+      "source": "proposed before-read/copy ledger"
+    },
+    {
+      "id": "parser-and-merge-budgets",
+      "setup": {
+        "rawInput": "within byte limit",
+        "tokenOrLogicalExpansion": "exceeds separately reviewed parser/merge credit"
+      },
+      "expected": {
+        "result": "config-work-limit",
+        "posthocValidationOnly": false,
+        "newProfileCompletionClaim": false
+      },
+      "source": "proposed per-format preflight and pre-copy reducer hooks"
+    }
+  ],
+  "scope": "Current-selection only; output grants unchanged; proposed resource limits and exact API need review; prior144+JSON16 unchanged"
+}

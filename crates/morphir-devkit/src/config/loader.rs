@@ -1,16 +1,19 @@
 //! Layered loading: merges every configuration source in precedence order and
 //! resolves the workspace/project context around the result.
 
+mod layers;
+
+#[cfg(test)]
+use super::discovery::user_override_candidates;
+
 use super::discovery::{
     config_root, discover_config_at, discover_config_candidates, discover_morphir_dir,
     native_global_config_candidates, native_system_config_candidates, project_config_candidates,
-    user_override_candidates,
 };
 use super::members::{
     accept_member_directory, expand_members, is_confined, is_member, members_select,
     unconfined_warning,
 };
-use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
     EnvSelection, ProjectSelection, SourceSelection,
@@ -92,14 +95,6 @@ enum LayerScope {
     Member,
 }
 
-fn merge_source(
-    state: &mut ProvenanceState,
-    source: &ConfigSource,
-    notes: &mut LayerNotes,
-) -> Result<()> {
-    merge_scoped_source(state, source, LayerScope::Workspace, notes)
-}
-
 /// What merging the individual layers noticed about them, gathered as they go
 /// by so the caller can turn it into warnings once everything is merged.
 #[derive(Debug, Default)]
@@ -112,36 +107,8 @@ struct LayerNotes {
     ir_mode_shadowed: bool,
 }
 
-/// Merge one loaded source, first dropping the keys a member layer may not set.
-///
-/// `workspace.out_dir` is the one such key today: the out root is a property of
-/// the whole workspace, so a member that set it would relocate every other
-/// member's output as well. It is dropped from the layer before the merge
-/// rather than repaired in the merged value afterwards, so both the value and
-/// its provenance stay honest and whatever the workspace itself set — in its
-/// own configuration or in a user override beside it — simply stays in place.
-///
-/// The member scope covers the member's `morphir.toml` and the
-/// `morphir.user.toml` next to it alike. Only the member's own configuration
-/// used to be caught, because the check ran on the merged value's provenance
-/// and a user override records the kind `UserOverride` no matter which
-/// directory it came from, so an override beside a member relocated the whole
-/// workspace's out root.
-///
-/// The deprecated `ir.mode` alias is applied here too, inside the layer,
-/// before the layer meets any other. Mapping it afterwards on the merged
-/// value made the alias lose to `ir.layout` set ANYWHERE — a `layout` in the
-/// global configuration silently beat a `mode` in the project's own
-/// configuration, which is backwards. Normalised per layer, `mode` becomes
-/// that layer's `layout` and ordinary precedence decides the rest.
-/// `notes.ir_mode_shadowed` records that some layer set both, so that layer's
-/// own `mode` had no effect and the caller can say so.
-fn merge_scoped_source(
-    state: &mut ProvenanceState,
-    source: &ConfigSource,
-    scope: LayerScope,
-    notes: &mut LayerNotes,
-) -> Result<()> {
+/// Read exactly the source selected by the shell. Normalization is pure.
+fn read_file_source(source: &ConfigSource) -> Result<Option<layers::FileLayer>> {
     if let (ConfigSourceStatus::Loaded, Some(path)) = (source.status, &source.path) {
         let declaring_path = std::path::absolute(path).with_context(|| {
             format!(
@@ -150,28 +117,17 @@ fn merge_scoped_source(
                 path.display()
             )
         })?;
-        let mut layer = load_config_value(&declaring_path).with_context(|| {
+        let value = load_config_value(&declaring_path).with_context(|| {
             format!(
                 "Failed to load {} configuration: {}",
                 source.kind.name(),
                 path.display()
             )
         })?;
-        if scope == LayerScope::Member && take_workspace_out_dir(&mut layer) {
-            notes.out_dir.push(declaring_path.clone());
-        }
-        if apply_ir_mode_alias(&mut layer, &declaring_path)? {
-            notes.ir_mode_shadowed = true;
-        }
-        state.merge(
-            &layer,
-            ConfigOrigin {
-                kind: source.kind,
-                path: Some(declaring_path),
-            },
-        );
+        Ok(Some(layers::FileLayer::new(value, declaring_path)))
+    } else {
+        Ok(None)
     }
-    Ok(())
 }
 
 /// Turn one layer's `ir.mode` into that layer's `ir.layout`, reporting whether
@@ -220,13 +176,16 @@ fn decode_config(value: &Value, what: &str) -> Result<MorphirConfig> {
 /// since that layer has no configuration file of its own to name.
 const ENVIRONMENT_DECLARING_PATH: &str = "<environment variables>";
 
-fn env_source(
-    state: &mut ProvenanceState,
+fn read_environment_source(
     options: &ConfigLoadOptions,
-    notes: &mut LayerNotes,
-) -> Result<ConfigSource> {
-    let mut layer = match &options.env {
-        EnvSelection::Skip => return Ok(ConfigSource::skipped(ConfigSourceKind::Environment)),
+) -> (ConfigSource, layers::EnvironmentLayer) {
+    let layer = match &options.env {
+        EnvSelection::Skip => {
+            return (
+                ConfigSource::skipped(ConfigSourceKind::Environment),
+                layers::EnvironmentLayer::Skipped,
+            );
+        }
         EnvSelection::Process => process_env_config_value(&options.env_prefix),
         EnvSelection::Explicit(vars) => env_config_value(
             &options.env_prefix,
@@ -238,26 +197,10 @@ fn env_source(
         Some(map) if !map.is_empty() => ConfigSourceStatus::Loaded,
         _ => ConfigSourceStatus::NotFound,
     };
-    // Route the environment layer through the same `ir.mode` alias every
-    // other layer gets, so `MORPHIR_IR__MODE` is normalised to `ir.layout`
-    // before it meets the other layers instead of being merged raw and
-    // silently losing to a `layout` set anywhere below it.
-    if apply_ir_mode_alias(&mut layer, Path::new(ENVIRONMENT_DECLARING_PATH))? {
-        notes.ir_mode_shadowed = true;
-    }
-    state.merge(
-        &layer,
-        ConfigOrigin {
-            kind: ConfigSourceKind::Environment,
-            path: None,
-        },
-    );
-    Ok(ConfigSource::new(
-        ConfigSourceKind::Environment,
-        None,
-        Vec::new(),
-        status,
-    ))
+    (
+        ConfigSource::new(ConfigSourceKind::Environment, None, Vec::new(), status),
+        layers::EnvironmentLayer::Selected(layer),
+    )
 }
 
 struct WorkspaceMemberConfig {
@@ -359,40 +302,53 @@ fn select_member(
     }
 }
 
-/// Merge the selected workspace member's configuration, returning its root and primary path.
-fn merge_workspace_member(
-    state: &mut ProvenanceState,
-    sources: &mut Vec<ConfigSource>,
+/// Selection outcome, including the source report for a declared missing member.
+enum MemberSelection {
+    Unselected,
+    Missing(ConfigSource),
+    Selected(WorkspaceMemberConfig),
+}
+
+impl MemberSelection {
+    fn source(&self) -> Option<ConfigSource> {
+        match self {
+            Self::Unselected => None,
+            Self::Missing(source) => Some(source.clone()),
+            Self::Selected(member) => Some(ConfigSource::loaded(
+                ConfigSourceKind::WorkspaceMember,
+                member.config_path.clone(),
+            )),
+        }
+    }
+
+    fn into_member(self) -> Option<WorkspaceMemberConfig> {
+        match self {
+            Self::Selected(member) => Some(member),
+            Self::Unselected | Self::Missing(_) => None,
+        }
+    }
+}
+
+fn resolve_workspace_member(
     workspace_root: Option<&Path>,
     root_config: &MorphirConfig,
     warnings: &mut Vec<String>,
-    notes: &mut LayerNotes,
-) -> Result<Option<WorkspaceMemberConfig>> {
+) -> Result<MemberSelection> {
     let (Some(ws_root), Some(ws)) = (workspace_root, &root_config.workspace) else {
-        return Ok(None);
+        return Ok(MemberSelection::Unselected);
     };
     let Some(member_path) = select_member(ws_root, ws, warnings) else {
-        return Ok(None);
+        return Ok(MemberSelection::Unselected);
     };
-
     match discover_config_at(&member_path)? {
-        Some(member_config) => {
-            let source =
-                ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_config.clone());
-            merge_scoped_source(state, &source, LayerScope::Member, notes)?;
-            sources.push(source);
-            Ok(Some(WorkspaceMemberConfig {
-                root: member_path,
-                config_path: member_config,
-            }))
-        }
-        None => {
-            sources.push(ConfigSource::not_found(
-                ConfigSourceKind::WorkspaceMember,
-                project_config_candidates(&member_path).to_vec(),
-            ));
-            Ok(None)
-        }
+        Some(config_path) => Ok(MemberSelection::Selected(WorkspaceMemberConfig {
+            root: member_path,
+            config_path,
+        })),
+        None => Ok(MemberSelection::Missing(ConfigSource::not_found(
+            ConfigSourceKind::WorkspaceMember,
+            project_config_candidates(&member_path).to_vec(),
+        ))),
     }
 }
 
@@ -453,56 +409,22 @@ fn explicit_project(
     }
 }
 
-/// Merge user overrides adjacent to the project primary path, then the member primary path.
+/// Resolve user sources in the pure plan's order, reading each before the next.
 fn merge_user_overrides(
-    state: &mut ProvenanceState,
+    layers: &mut layers::LayerStack<layers::AwaitUsers>,
     sources: &mut Vec<ConfigSource>,
     options: &ConfigLoadOptions,
     project_config: Option<&Path>,
     member_config: Option<&Path>,
-    notes: &mut LayerNotes,
 ) -> Result<()> {
-    match &options.user_override {
-        SourceSelection::Discover => {
-            // An override beside the workspace primary speaks for the whole
-            // workspace; one beside the member primary speaks only for that
-            // member, and so may not set `workspace.out_dir`.
-            let primary_paths = project_config
-                .into_iter()
-                .map(|path| (path, LayerScope::Workspace))
-                .chain(
-                    member_config
-                        .filter(|member| Some(*member) != project_config)
-                        .map(|path| (path, LayerScope::Member)),
-                )
-                .collect::<Vec<_>>();
-            if primary_paths.is_empty() {
-                sources.push(ConfigSource::skipped(ConfigSourceKind::UserOverride));
-                return Ok(());
-            }
-            let mut found_layout = false;
-            for (primary_path, scope) in primary_paths {
-                let Some(candidates) = user_override_candidates(primary_path) else {
-                    continue;
-                };
-                found_layout = true;
-                let source = resolve_file_source(
-                    ConfigSourceKind::UserOverride,
-                    &SourceSelection::Discover,
-                    || candidates.to_vec(),
-                )?;
-                merge_scoped_source(state, &source, scope, notes)?;
-                sources.push(source);
-            }
-            if !found_layout {
-                sources.push(ConfigSource::skipped(ConfigSourceKind::UserOverride));
-            }
-        }
-        selection => {
-            let source = resolve_file_source(ConfigSourceKind::UserOverride, selection, Vec::new)?;
-            merge_source(state, &source, notes)?;
-            sources.push(source);
-        }
+    for planned in layers::user_override_plan(&options.user_override, project_config, member_config)
+    {
+        let source =
+            resolve_file_source(ConfigSourceKind::UserOverride, &planned.selection, || {
+                planned.candidates
+            })?;
+        layers.user(read_file_source(&source)?, planned.scope)?;
+        sources.push(source);
     }
     Ok(())
 }
@@ -532,16 +454,8 @@ pub fn load_effective_config(
     project_config: Option<&Path>,
     options: &ConfigLoadOptions,
 ) -> Result<EffectiveConfig> {
-    let mut state = ProvenanceState::default();
+    let layers = layers::LayerStack::new();
     let mut warnings = Vec::new();
-    let mut notes = LayerNotes::default();
-    state.merge(
-        &builtin_defaults(),
-        ConfigOrigin {
-            kind: ConfigSourceKind::Defaults,
-            path: None,
-        },
-    );
     let mut sources = vec![ConfigSource::new(
         ConfigSourceKind::Defaults,
         None,
@@ -552,7 +466,7 @@ pub fn load_effective_config(
     let system = resolve_file_source(ConfigSourceKind::System, &options.system, || {
         native_system_config_candidates().to_vec()
     })?;
-    merge_source(&mut state, &system, &mut notes)?;
+    let layers = layers.system(read_file_source(&system)?)?;
     sources.push(system);
 
     let global = resolve_file_source(
@@ -560,7 +474,7 @@ pub fn load_effective_config(
         &options.global,
         native_global_config_candidates,
     )?;
-    merge_source(&mut state, &global, &mut notes)?;
+    let layers = layers.global(read_file_source(&global)?)?;
     sources.push(global);
 
     // A configuration that lies inside a workspace member is the member layer,
@@ -580,11 +494,9 @@ pub fn load_effective_config(
         Some(path) => ConfigSource::loaded(ConfigSourceKind::Project, path.clone()),
         None => ConfigSource::not_found(ConfigSourceKind::Project, Vec::new()),
     };
-    merge_source(&mut state, &project, &mut notes)?;
+    let (root_config, layers) = layers.project(read_file_source(&project)?)?;
     sources.push(project);
-
-    let root_config = decode_config(state.value(), "project")?;
-    let (workspace_root, member_config) = if let ProjectSelection::Explicit(selector) =
+    let (workspace_root, member_selection) = if let ProjectSelection::Explicit(selector) =
         &options.project
     {
         let root = project_layer
@@ -592,71 +504,65 @@ pub fn load_effective_config(
             .and_then(config_root)
             .ok_or_else(|| anyhow::anyhow!("Project selection requires a project configuration"))?;
         let member = explicit_project(root, &root_config, selector, &mut warnings)?;
-        if let Some(member) = &member {
-            let source = ConfigSource::loaded(
-                ConfigSourceKind::WorkspaceMember,
-                member.config_path.clone(),
-            );
-            merge_scoped_source(&mut state, &source, LayerScope::Member, &mut notes)?;
-            sources.push(source);
-        }
         (
             root_config.is_workspace().then(|| root.to_path_buf()),
-            member,
+            member.map_or(MemberSelection::Unselected, MemberSelection::Selected),
         )
     } else {
         match (enclosing, selected_root.clone(), project_config) {
-            (Some(workspace), Some(member_root), Some(member_path)) => {
-                let source = ConfigSource::loaded(
-                    ConfigSourceKind::WorkspaceMember,
-                    member_path.to_path_buf(),
-                );
-                merge_scoped_source(&mut state, &source, LayerScope::Member, &mut notes)?;
-                sources.push(source);
-                (
-                    Some(workspace.root),
-                    Some(WorkspaceMemberConfig {
-                        root: member_root,
-                        config_path: member_path.to_path_buf(),
-                    }),
-                )
-            }
+            (Some(workspace), Some(member_root), Some(member_path)) => (
+                Some(workspace.root),
+                MemberSelection::Selected(WorkspaceMemberConfig {
+                    root: member_root,
+                    config_path: member_path.to_path_buf(),
+                }),
+            ),
             _ => {
                 let workspace_root = root_config
                     .is_workspace()
                     .then(|| selected_root.clone())
                     .flatten();
                 let member = if options.project == ProjectSelection::Current {
-                    None
+                    MemberSelection::Unselected
                 } else {
-                    merge_workspace_member(
-                        &mut state,
-                        &mut sources,
+                    resolve_workspace_member(
                         workspace_root.as_deref(),
                         &root_config,
                         &mut warnings,
-                        &mut notes,
                     )?
                 };
                 (workspace_root, member)
             }
         }
     };
+    let member_source = member_selection.source();
+    let mut layers = layers.member(
+        member_source
+            .as_ref()
+            .map(read_file_source)
+            .transpose()?
+            .flatten(),
+    )?;
+    sources.extend(member_source);
+    let member_config = member_selection.into_member();
 
     merge_user_overrides(
-        &mut state,
+        &mut layers,
         &mut sources,
         options,
         project_layer.as_deref(),
         member_config
             .as_ref()
             .map(|member| member.config_path.as_path()),
-        &mut notes,
     )?;
 
-    sources.push(env_source(&mut state, options, &mut notes)?);
-
-    let (value, provenance) = state.into_parts();
+    let (environment_source, environment) = read_environment_source(options);
+    let layers::MergedLayers {
+        value,
+        provenance,
+        notes,
+    } = layers.environment(environment)?;
+    sources.push(environment_source);
 
     Ok(EffectiveConfig {
         value,

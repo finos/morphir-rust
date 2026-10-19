@@ -41,10 +41,10 @@ pub use sources::{
     EnvSelection, ProjectSelection, SourceSelection,
 };
 pub use workspace_discovery::{
-    CapturedSelection, CapturedSource, DEFAULT_SOURCE_BYTES, NativeWorkspaceDiscovery,
-    NativeWorkspaceDiscoveryError, SourceSelectionOptions, build_workspace_discovery_request,
-    capture_source_selection, discover_workspace, discover_workspace_detailed,
-    discover_workspace_detailed_typed,
+    CapturedSelection, CapturedSource, CapturedWorkspaceDiscovery, DEFAULT_SOURCE_BYTES,
+    NativeWorkspaceDiscovery, NativeWorkspaceDiscoveryError, SourceSelectionOptions,
+    WorkspaceDiscoveryRoot, build_workspace_discovery_request, capture_source_selection,
+    discover_workspace, discover_workspace_detailed, discover_workspace_detailed_typed,
 };
 
 #[cfg(test)]

@@ -37,6 +37,43 @@ let context = load_config_context(&config_path)?;
 
 `load_config_context` merges built-in defaults, system configuration, global user configuration, project configuration, workspace-member configuration, user overrides, and `MORPHIR_*` environment sources. `context.sources` records which sources the loader consulted.
 
+## Discovery from a host-owned directory
+
+A connected host that already owns a directory capability can capture discovery
+without reopening a root path for configuration reads:
+
+```rust
+use cap_std::fs::Dir;
+use morphir_devkit::{ConfigLoadOptions, WorkspaceDiscoveryRoot};
+use std::path::Path;
+
+fn capture_owned(directory: Dir, label: &Path) -> anyhow::Result<()> {
+    let root = WorkspaceDiscoveryRoot::from_directory(directory, label)?;
+    let captured = root.capture(&ConfigLoadOptions::project_only())?;
+    let request_for_guest = captured.request().clone();
+    let details = captured.into_typed_details()?;
+    // Send request_for_guest to the installed discovery guest. Keep that guest's
+    // actual response as membership authority; details supplies local configs.
+    Ok(())
+}
+```
+
+Construction and every capture check that the host-selected labels identify the
+supplied directory before reading configuration. Renaming or replacing the root
+or retargeting its label refuses capture. Development traversal uses the owned
+`Dir`; the labels support diagnostics and confined absolute aliases.
+
+The request owns the captured configuration text, mounts and environment. Typed
+details decode from that exact request without reading the live filesystem or
+process environment again. Capturing is synchronous and does not freeze concurrent
+filesystem changes. Hosts still own worker permits, cancellation, later currentness
+checks and the choice of which installed guest result to accept.
+
+Traversal, alias and payload budgets are shared with the existing path APIs.
+`project_only()` omits system/global configuration, personal overrides and process
+environment. The default options retain those existing selections; a directory
+capability does not remove or expand the other source grants in the options.
+
 ## Path resolution
 
 Every task writes under one workspace-level out root. `resolve_out_root` finds that root, and `TaskPaths` gives one task its scratch directory and its result record inside it.

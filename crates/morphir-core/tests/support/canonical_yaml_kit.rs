@@ -33,7 +33,19 @@ fn newline(mut text: String) -> String {
     text
 }
 
-fn substitute(text: &str, bindings: Option<&[(&str, &str)]>) -> Result<String, String> {
+#[derive(Clone, Copy)]
+enum Substitution {
+    StepText,
+    DocString,
+}
+
+// Match the primary kit's placeholder grammar. Unknown names in doc strings
+// are literal model text; step text must name an actual example column.
+fn substitute(
+    text: &str,
+    bindings: Option<&[(&str, &str)]>,
+    mode: Substitution,
+) -> Result<String, String> {
     let Some(bindings) = bindings else {
         return Ok(text.to_owned());
     };
@@ -41,15 +53,30 @@ fn substitute(text: &str, bindings: Option<&[(&str, &str)]>) -> Result<String, S
     let mut remaining = text;
     while let Some((before, after)) = remaining.split_once('<') {
         out.push_str(before);
-        let (name, rest) = after
-            .split_once('>')
-            .ok_or("unterminated outline parameter")?;
-        let (_, value) = bindings
-            .iter()
-            .find(|(key, _)| *key == name)
-            .ok_or_else(|| format!("missing outline parameter <{name}>"))?;
-        out.push_str(value);
-        remaining = rest;
+        match after.split_once('>').filter(|(name, _)| {
+            !name.is_empty() && !name.contains(|c: char| c.is_whitespace() || c == '<')
+        }) {
+            Some((name, rest)) => {
+                match bindings.iter().find(|(key, _)| *key == name) {
+                    Some((_, value)) => out.push_str(value),
+                    None => match mode {
+                        Substitution::StepText => {
+                            return Err(format!("missing outline parameter <{name}>"));
+                        }
+                        Substitution::DocString => {
+                            out.push('<');
+                            out.push_str(name);
+                            out.push('>');
+                        }
+                    },
+                }
+                remaining = rest;
+            }
+            None => {
+                out.push('<');
+                remaining = after;
+            }
+        }
     }
     out.push_str(remaining);
     Ok(out)
@@ -59,7 +86,7 @@ fn expected(
     step: &Step,
     bindings: Option<&[(&str, &str)]>,
 ) -> Result<Option<ExpectedYaml>, String> {
-    let text = substitute(&step.text, bindings)?;
+    let text = substitute(&step.text, bindings, Substitution::StepText)?;
     let (profile, body) = match text.strip_prefix("its canonical ") {
         Some(rest) => rest
             .split_once(" spelling is")
@@ -76,7 +103,7 @@ fn expected(
         if doc.content_type.as_deref() != Some(if profile == "YAML" { "yaml" } else { "text" }) {
             return Err("canonical doc-string content type differs from its profile".into());
         }
-        substitute(&doc.body, bindings)?
+        substitute(&doc.body, bindings, Substitution::DocString)?
     } else {
         if step.argument.is_some() {
             return Err("inline spelling also has a step argument".into());
@@ -225,6 +252,30 @@ fn outlines_doc_strings_and_rules_preserve_expected_bytes() {
     assert_eq!(
         actual[1].read(Path::new("unused")).unwrap(),
         "note: |\n  first\n\n  last\n"
+    );
+}
+
+#[test]
+fn outline_doc_string_preserves_literal_angle_brackets() {
+    let text = r#"Feature: Oracle
+  Scenario Outline: examples-0001 Literal text
+    Then its canonical YAML spelling is:
+      """yaml
+      message: <unknown>
+      less: <
+      empty: <>
+      space: <two words>
+      known: <value>
+      """
+    Examples:
+      | value |
+      | 42    |
+"#;
+    let (document, _) = morphir_gherkin::read_str("oracle.feature", text).unwrap();
+    let actual = spellings(&document).unwrap();
+    assert_eq!(
+        actual[0].read(Path::new("unused")).unwrap(),
+        "message: <unknown>\nless: <\nempty: <>\nspace: <two words>\nknown: 42\n"
     );
 }
 

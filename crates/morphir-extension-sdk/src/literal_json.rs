@@ -18,16 +18,11 @@ const MAX_FIELD_CONTAINERS: u8 = 126;
 
 pub(crate) fn deserialize<'de, D: Deserializer<'de>>(reader: D) -> Result<Value, D::Error> {
     let raw = Box::<RawValue>::deserialize(reader)?;
-    let mut literal = LiteralReader {
-        source: raw.get(),
-        offset: 0,
-    };
-    let value = literal.value(0).map_err(D::Error::custom)?;
-    literal.whitespace();
-    if literal.offset != literal.source.len() {
-        return Err(D::Error::custom("trailing literal JSON data"));
-    }
-    Ok(value)
+    morphir_json::read(raw.get(), &mut WireBudget).map_err(|error| match error {
+        morphir_json::ReadError::Syntax(error) | morphir_json::ReadError::Budget(error) => {
+            D::Error::custom(error)
+        }
+    })
 }
 
 pub(crate) fn deserialize_options<'de, D: Deserializer<'de>>(
@@ -39,90 +34,21 @@ pub(crate) fn deserialize_options<'de, D: Deserializer<'de>>(
     }
 }
 
-/// Only constructed from a validated RawValue above. This cursor interprets
-/// container structure; serde_json still owns all lexical/syntax validation,
-/// string escaping and numeric semantics. Its offset only moves forward.
-struct LiteralReader<'a> {
-    source: &'a str,
-    offset: usize,
-}
-
-impl<'a> LiteralReader<'a> {
-    fn whitespace(&mut self) {
-        while matches!(
-            self.source.as_bytes().get(self.offset),
-            Some(b' ' | b'\n' | b'\r' | b'\t')
-        ) {
-            self.offset += 1;
-        }
-    }
-
-    fn take(&mut self, byte: u8) -> bool {
-        self.whitespace();
-        if self.source.as_bytes().get(self.offset) == Some(&byte) {
-            self.offset += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn expect(&mut self, byte: u8) -> Result<(), serde_json::Error> {
-        if self.take(byte) {
-            Ok(())
-        } else {
-            Err(serde_json::Error::custom("invalid literal JSON container"))
-        }
-    }
-
-    fn scalar<T: Deserialize<'a>>(&mut self) -> Result<T, serde_json::Error> {
-        let mut stream =
-            serde_json::Deserializer::from_str(&self.source[self.offset..]).into_iter::<T>();
-        let value = stream
-            .next()
-            .ok_or_else(|| serde_json::Error::custom("missing literal JSON scalar"))??;
-        self.offset += stream.byte_offset();
-        Ok(value)
-    }
-
-    fn value(&mut self, depth: u8) -> Result<Value, serde_json::Error> {
-        self.whitespace();
-        let next = self.source.as_bytes().get(self.offset).copied();
-        if matches!(next, Some(b'{' | b'[')) && depth >= MAX_FIELD_CONTAINERS {
+/// Wire policy intentionally retains the historical opaque container bound.
+struct WireBudget;
+impl morphir_json::ReadBudget for WireBudget {
+    type Error = serde_json::Error;
+    fn before_value(
+        &mut self,
+        depth: usize,
+        kind: morphir_json::ValueKind,
+    ) -> Result<(), Self::Error> {
+        if kind != morphir_json::ValueKind::Scalar && depth >= usize::from(MAX_FIELD_CONTAINERS) {
             return Err(serde_json::Error::custom("recursion limit exceeded"));
         }
-        match next {
-            Some(b'{') => {
-                self.offset += 1;
-                let mut fields = serde_json::Map::new();
-                if !self.take(b'}') {
-                    loop {
-                        let key = self.scalar::<String>()?;
-                        self.expect(b':')?;
-                        fields.insert(key, self.value(depth + 1)?);
-                        if self.take(b'}') {
-                            break;
-                        }
-                        self.expect(b',')?;
-                    }
-                }
-                Ok(Value::Object(fields))
-            }
-            Some(b'[') => {
-                self.offset += 1;
-                let mut values = Vec::new();
-                if !self.take(b']') {
-                    loop {
-                        values.push(self.value(depth + 1)?);
-                        if self.take(b']') {
-                            break;
-                        }
-                        self.expect(b',')?;
-                    }
-                }
-                Ok(Value::Array(values))
-            }
-            _ => self.scalar(),
-        }
+        Ok(())
+    }
+    fn before_string(&mut self, _: &str) -> Result<(), Self::Error> {
+        Ok(())
     }
 }

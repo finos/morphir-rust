@@ -1,0 +1,18 @@
+[package]
+name = "morphir-json"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/morphir-json"
+readme = "README.md"
+keywords = ["json", "serde", "morphir", "parsers"]
+categories = ["parsing", "encoding"]
+description = "Literal JSON value traversal with caller-owned resource budgets"
+
+[dependencies]
+serde = "1.0"
+serde_json = "1.0"

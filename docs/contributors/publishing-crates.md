@@ -17,9 +17,10 @@ which publishes that one crate.
 | Crate | Current version | Depends on |
 |-------|-----------------|------------|
 | `morphir-config` | `0.0.1` | no workspace crates |
-| `morphir-core` | `0.2.0` | no workspace crates |
+| `morphir-json` | `0.2.0` | no workspace crates |
+| `morphir-core` | `0.2.0` | `morphir-json` |
 | `morphir-workspace` | `0.2.0` | `morphir-config` |
-| `morphir-extension-sdk` | `0.2.0` | `morphir-workspace` |
+| `morphir-extension-sdk` | `0.2.0` | `morphir-workspace`, `morphir-json` |
 | `morphir-projection` | `0.1.0` | `morphir-core` |
 
 The other crates in the workspace are not on crates.io. They keep the shared
@@ -57,7 +58,9 @@ change the `version` of every path dependency on it too.
 
 Publish the crates in tiers:
 
-- Tier 0: `morphir-config`, which is already on crates.io.
+- Tier 0: `morphir-config` and the new serde-only `morphir-json` helper.
+  The helper must be published before a release of core or the extension SDK
+  that depends on it; adding it to this table does not publish it.
 - Tier 1: `morphir-core` and `morphir-workspace`.
 - Tier 2: `morphir-extension-sdk` and `morphir-projection`.
 
@@ -71,7 +74,7 @@ The `Package (published crates)` job in the CI workflow packages all the
 published crates together:
 
 ```bash
-cargo package -p morphir-config -p morphir-core -p morphir-workspace \
+cargo package -p morphir-config -p morphir-json -p morphir-core -p morphir-workspace \
   -p morphir-extension-sdk -p morphir-projection --locked
 ```
 

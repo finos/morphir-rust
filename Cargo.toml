@@ -13,6 +13,7 @@ default-members = [
     "crates/morphir-common",
     "crates/morphir-config",
     "crates/morphir-core",
+    "crates/morphir-json",
     "crates/morphir-daemon",
     "crates/morphir-devkit",
     "crates/morphir-distribution",

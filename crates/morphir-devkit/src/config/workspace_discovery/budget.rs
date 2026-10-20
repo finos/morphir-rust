@@ -3,6 +3,8 @@
 use std::{fs, io::Read, path::Path};
 
 use anyhow::{Context, Result, bail};
+use cap_std::fs::Dir;
+use morphir_common::config::observation::{self, SourceReadScope};
 #[cfg(test)]
 use morphir_workspace::FileEntry;
 
@@ -20,6 +22,38 @@ pub(super) enum PayloadKind {
     Omit,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum NativeReads<'a> {
+    Unobserved,
+    Observed(&'a SourceReadScope),
+}
+impl NativeReads<'_> {
+    pub(super) fn read_native(self, path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Observed(scope) => observation::read_native_file(scope, path, limit),
+            Self::Unobserved => {
+                let mut bytes = Vec::new();
+                fs::File::open(path)?.take(limit).read_to_end(&mut bytes)?;
+                Ok(bytes)
+            }
+        }
+    }
+    pub(super) fn read_confined(
+        self,
+        root: &Dir,
+        relative: &Path,
+        limit: u64,
+    ) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Observed(scope) => scope.read_capability(root, relative, limit),
+            Self::Unobserved => {
+                let mut bytes = Vec::new();
+                root.open(relative)?.take(limit).read_to_end(&mut bytes)?;
+                Ok(bytes)
+            }
+        }
+    }
+}
 impl PayloadBudget {
     pub(super) const fn new(limit: usize) -> Self {
         Self {
@@ -27,6 +61,10 @@ impl PayloadBudget {
             final_used: 0,
             transient_used: 0,
         }
+    }
+
+    pub(super) fn limit(&self) -> usize {
+        self.limit
     }
 
     pub(super) const fn remaining(&self) -> usize {
@@ -82,6 +120,7 @@ pub(super) fn read_utf8_file(
     path: &Path,
     description: &str,
     payload: &mut PayloadBudget,
+    reads: NativeReads<'_>,
 ) -> Result<String> {
     let remaining = payload.remaining();
     let metadata = fs::metadata(path).with_context(|| {
@@ -93,22 +132,13 @@ pub(super) fn read_utf8_file(
     if metadata.len() > remaining as u64 {
         return resource_limit(payload.limit);
     }
-    let file = fs::File::open(path).with_context(|| {
+    let read_limit = u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX);
+    let bytes = reads.read_native(path, read_limit).with_context(|| {
         format!(
             "workspace.traversal.unreadable: Failed to read {description}: {}",
             path.display()
         )
     })?;
-    let read_limit = u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX);
-    let mut bytes = Vec::new();
-    file.take(read_limit)
-        .read_to_end(&mut bytes)
-        .with_context(|| {
-            format!(
-                "workspace.traversal.unreadable: Failed to read {description}: {}",
-                path.display()
-            )
-        })?;
     payload.reserve(bytes.len())?;
     String::from_utf8(bytes).with_context(|| {
         format!(

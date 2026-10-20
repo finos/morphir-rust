@@ -26,11 +26,26 @@ use morphir_common::config::load_config_value;
 use morphir_common::config::model::{
     MorphirConfig, ProjectSection, WorkspaceSection, ir_layout_for_mode,
 };
+use morphir_common::config::{load_config_value_observed, observation::SourceReadScope};
 pub use morphir_config::builtin_defaults;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy)]
+enum ConfigReads<'a> {
+    Unobserved,
+    Observed(&'a SourceReadScope),
+}
+impl ConfigReads<'_> {
+    fn load(self, path: &Path) -> Result<Value> {
+        match self {
+            Self::Unobserved => load_config_value(path),
+            Self::Observed(scope) => load_config_value_observed(path, scope),
+        }
+    }
+}
 
 /// Configuration context containing loaded config and resolved paths
 #[derive(Debug, Clone)]
@@ -108,7 +123,10 @@ struct LayerNotes {
 }
 
 /// Read exactly the source selected by the shell. Normalization is pure.
-fn read_file_source(source: &ConfigSource) -> Result<Option<layers::FileLayer>> {
+fn read_file_source(
+    source: &ConfigSource,
+    reads: ConfigReads<'_>,
+) -> Result<Option<layers::FileLayer>> {
     if let (ConfigSourceStatus::Loaded, Some(path)) = (source.status, &source.path) {
         let declaring_path = std::path::absolute(path).with_context(|| {
             format!(
@@ -117,7 +135,7 @@ fn read_file_source(source: &ConfigSource) -> Result<Option<layers::FileLayer>> 
                 path.display()
             )
         })?;
-        let value = load_config_value(&declaring_path).with_context(|| {
+        let value = reads.load(&declaring_path).with_context(|| {
             format!(
                 "Failed to load {} configuration: {}",
                 source.kind.name(),
@@ -226,11 +244,13 @@ struct EnclosingWorkspace {
 fn find_enclosing_workspace(
     member_root: &Path,
     warnings: &mut Vec<String>,
+    reads: ConfigReads<'_>,
 ) -> Option<EnclosingWorkspace> {
     let mut current = member_root.parent();
     while let Some(directory) = current {
         if let Some(config_path) = discover_config_at(directory).ok().flatten()
-            && let Some(workspace) = load_config_value(&config_path)
+            && let Some(workspace) = reads
+                .load(&config_path)
                 .ok()
                 .and_then(|value| decode_config(&value, "workspace").ok())
                 .and_then(|config| config.workspace)
@@ -358,6 +378,7 @@ fn explicit_project(
     config: &MorphirConfig,
     selector: &str,
     warnings: &mut Vec<String>,
+    reads: ConfigReads<'_>,
 ) -> Result<Option<WorkspaceMemberConfig>> {
     if selector == "." && config.project.is_some() {
         return Ok(None);
@@ -392,7 +413,7 @@ fn explicit_project(
         let Some(path) = discover_config_at(&member)? else {
             continue;
         };
-        let value = load_config_value(&path)?;
+        let value = reads.load(&path)?;
         if value.pointer("/project/name").and_then(Value::as_str) == Some(selector) {
             matches.push(Some(WorkspaceMemberConfig {
                 root: member,
@@ -416,6 +437,7 @@ fn merge_user_overrides(
     options: &ConfigLoadOptions,
     project_config: Option<&Path>,
     member_config: Option<&Path>,
+    reads: ConfigReads<'_>,
 ) -> Result<()> {
     for planned in layers::user_override_plan(&options.user_override, project_config, member_config)
     {
@@ -423,7 +445,7 @@ fn merge_user_overrides(
             resolve_file_source(ConfigSourceKind::UserOverride, &planned.selection, || {
                 planned.candidates
             })?;
-        layers.user(read_file_source(&source)?, planned.scope)?;
+        layers.user(read_file_source(&source, reads)?, planned.scope)?;
         sources.push(source);
     }
     Ok(())
@@ -454,6 +476,14 @@ pub fn load_effective_config(
     project_config: Option<&Path>,
     options: &ConfigLoadOptions,
 ) -> Result<EffectiveConfig> {
+    load_effective_config_with_reads(project_config, options, ConfigReads::Unobserved)
+}
+
+fn load_effective_config_with_reads(
+    project_config: Option<&Path>,
+    options: &ConfigLoadOptions,
+    reads: ConfigReads<'_>,
+) -> Result<EffectiveConfig> {
     let layers = layers::LayerStack::new();
     let mut warnings = Vec::new();
     let mut sources = vec![ConfigSource::new(
@@ -466,7 +496,7 @@ pub fn load_effective_config(
     let system = resolve_file_source(ConfigSourceKind::System, &options.system, || {
         native_system_config_candidates().to_vec()
     })?;
-    let layers = layers.system(read_file_source(&system)?)?;
+    let layers = layers.system(read_file_source(&system, reads)?)?;
     sources.push(system);
 
     let global = resolve_file_source(
@@ -474,7 +504,7 @@ pub fn load_effective_config(
         &options.global,
         native_global_config_candidates,
     )?;
-    let layers = layers.global(read_file_source(&global)?)?;
+    let layers = layers.global(read_file_source(&global, reads)?)?;
     sources.push(global);
 
     // A configuration that lies inside a workspace member is the member layer,
@@ -484,7 +514,7 @@ pub fn load_effective_config(
     let selected_root = project_config.and_then(config_root).map(Path::to_path_buf);
     let enclosing = selected_root
         .as_deref()
-        .and_then(|root| find_enclosing_workspace(root, &mut warnings));
+        .and_then(|root| find_enclosing_workspace(root, &mut warnings, reads));
     let project_layer = enclosing.as_ref().map_or_else(
         || project_config.map(Path::to_path_buf),
         |workspace| Some(workspace.config_path.clone()),
@@ -494,7 +524,7 @@ pub fn load_effective_config(
         Some(path) => ConfigSource::loaded(ConfigSourceKind::Project, path.clone()),
         None => ConfigSource::not_found(ConfigSourceKind::Project, Vec::new()),
     };
-    let (root_config, layers) = layers.project(read_file_source(&project)?)?;
+    let (root_config, layers) = layers.project(read_file_source(&project, reads)?)?;
     sources.push(project);
     let (workspace_root, member_selection) = if let ProjectSelection::Explicit(selector) =
         &options.project
@@ -503,7 +533,7 @@ pub fn load_effective_config(
             .as_deref()
             .and_then(config_root)
             .ok_or_else(|| anyhow::anyhow!("Project selection requires a project configuration"))?;
-        let member = explicit_project(root, &root_config, selector, &mut warnings)?;
+        let member = explicit_project(root, &root_config, selector, &mut warnings, reads)?;
         (
             root_config.is_workspace().then(|| root.to_path_buf()),
             member.map_or(MemberSelection::Unselected, MemberSelection::Selected),
@@ -539,7 +569,7 @@ pub fn load_effective_config(
     let mut layers = layers.member(
         member_source
             .as_ref()
-            .map(read_file_source)
+            .map(|source| read_file_source(source, reads))
             .transpose()?
             .flatten(),
     )?;
@@ -554,6 +584,7 @@ pub fn load_effective_config(
         member_config
             .as_ref()
             .map(|member| member.config_path.as_path()),
+        reads,
     )?;
 
     let (environment_source, environment) = read_environment_source(options);
@@ -628,6 +659,25 @@ pub fn load_config_context_with(
     config_path: &Path,
     options: &ConfigLoadOptions,
 ) -> Result<ConfigContext> {
+    load_config_context_with_reads(config_path, options, ConfigReads::Unobserved)
+}
+
+/// Load the existing Current/default/explicit selection policy with actual read
+/// observations, including ignored ancestor configurations. Coverage is limited
+/// to this synchronous SDK prefix and does not certify host/worker completion.
+pub fn load_config_context_observed(
+    config_path: &Path,
+    options: &ConfigLoadOptions,
+    scope: &SourceReadScope,
+) -> Result<ConfigContext> {
+    load_config_context_with_reads(config_path, options, ConfigReads::Observed(scope))
+}
+
+fn load_config_context_with_reads(
+    config_path: &Path,
+    options: &ConfigLoadOptions,
+    reads: ConfigReads<'_>,
+) -> Result<ConfigContext> {
     // Absolutise a relative `config_path` against the process's current
     // directory right away, before anything derives `workspace_root`,
     // `project_root`, or `morphir_dir` from it. Otherwise those paths stay
@@ -656,7 +706,7 @@ pub fn load_config_context_with(
         warnings: member_warnings,
         ir_mode_shadowed,
         ..
-    } = load_effective_config(Some(config_path), options)?;
+    } = load_effective_config_with_reads(Some(config_path), options, reads)?;
     let config = decode_config(&effective, "merged")
         .with_context(|| format!("Failed to load Morphir config: {}", config_path.display()))?;
 

@@ -1,7 +1,7 @@
 //! Discovery rooted in a directory capability already owned by the host.
 use anyhow::{Context, anyhow, bail};
 use cap_std::fs::Dir;
-use same_file::Handle;
+use morphir_common::file_identity::FileIdentity;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -36,9 +36,49 @@ pub struct WorkspaceDiscoveryRoot {
     directory: Dir,
     granted_root: PathBuf,
     canonical_root: PathBuf,
-    identity: Handle,
+    identity: FileIdentity,
 }
 impl WorkspaceDiscoveryRoot {
+    /// Capture the same confined discovery request while observing real reads.
+    /// Selected mounts outside the workspace count as ambient even when allowed
+    /// by the options. A sealed scope covers only this synchronous SDK prefix.
+    ///
+    /// ```no_run
+    /// use cap_std::{ambient_authority, fs::Dir};
+    /// use morphir_common::config::observation::{ReadLimits, SourceReadScope};
+    /// use morphir_devkit::{ConfigLoadOptions, WorkspaceDiscoveryRoot};
+    /// use std::path::Path;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let path = Path::new("/already-authorized/workspace");
+    /// let held = Dir::open_ambient_dir(path, ambient_authority())?;
+    /// let scope = SourceReadScope::bind_workspace(&held, path, ReadLimits::new(16, 128, 1_048_576, 1)?)?;
+    /// let root = WorkspaceDiscoveryRoot::from_directory(held, path)?;
+    /// let capture = root.capture_observed(&ConfigLoadOptions::project_only(), &scope);
+    /// scope.seal().require_complete()?;
+    /// let request = capture?;
+    /// # let _ = request;
+    /// # Ok(()) }
+    /// ```
+    pub fn capture_observed(
+        &self,
+        options: &super::ConfigLoadOptions,
+        scope: &morphir_common::config::observation::SourceReadScope,
+    ) -> anyhow::Result<CapturedWorkspaceDiscovery> {
+        self.verify_current()?;
+        let request = super::capture_request_with_reads(
+            &self.directory,
+            &self.canonical_root,
+            &self.granted_root,
+            options,
+            super::AliasBudgets::DEFAULT,
+            super::TraversalBudgets::DEFAULT,
+            Some(scope),
+        )?;
+        Ok(CapturedWorkspaceDiscovery {
+            canonical_root: self.canonical_root.clone(),
+            request,
+        })
+    }
     /// Bind an existing directory to the host-selected root label.
     ///
     /// Only directory identity metadata is read here. The label supplies no
@@ -57,14 +97,14 @@ impl WorkspaceDiscoveryRoot {
                 granted_root.display()
             )
         })?;
-        let identity = Handle::from_file(
+        let identity = FileIdentity::from_file(
             directory
                 .try_clone()
                 .context("Failed to clone bound development root capability")?
                 .into_std_file(),
         )
         .context("Failed to inspect bound development root identity")?;
-        let canonical_identity = Handle::from_path(&canonical_root).map_err(|error| anyhow!(
+        let canonical_identity = FileIdentity::from_path(&canonical_root).map_err(|error| anyhow!(
             "workspace.path.not-confined: development root changed after binding `{}` while verifying `{}`: {error}",granted_root.display(),canonical_root.display()))?;
         if identity != canonical_identity {
             bail!(
@@ -170,7 +210,7 @@ impl WorkspaceDiscoveryRoot {
     }
     fn verify_current(&self) -> anyhow::Result<()> {
         for label in [&self.granted_root, &self.canonical_root] {
-            let identity = Handle::from_path(label).map_err(|error| anyhow!(
+            let identity = FileIdentity::from_path(label).map_err(|error| anyhow!(
                 "workspace.path.not-confined: development root changed after binding `{}` while verifying `{}`: {error}", self.granted_root.display(), label.display()))?;
             if identity != self.identity {
                 bail!(

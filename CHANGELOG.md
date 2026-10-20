@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- An opaque `morphir_common::file_identity::FileIdentity` retains the actual
+  file owner for equality without exposing a reader or primitive identifier.
+  Source observations, native root reads and capability-bound devkit discovery
+  share the same platform implementation. Windows compares full FileIdInfo
+  identities; Unix ambient identity queries use nonblocking, no-controlling-
+  terminal opens so FIFO labels do not wait for content peers. Identity remains
+  separate from content revision, confinement and access authority.
+- Opt-in native SDK configuration-read observations bind a held workspace
+  identity, retain bounded actual-read counters and file-identity witnesses,
+  and distinguish workspace reads from permitted ambient mounts. Existing
+  configuration and discovery policies are unchanged. A consumed, sealed
+  observation covers only the instrumented synchronous SDK prefix; overflow,
+  unknown identity or an entirely unused scope cannot certify zero reads.
+  Calls through unobserved APIs are outside that prefix. Actual directory-backed
+  content-file wrappers preserve caller open flags and read loops; file witnesses
+  must be registered before the first content attempt. Generic reads through
+  proper descendant directory grants remain Partial; only actual selected-root
+  acquisitions certify workspace content. A closed read-only descendant route
+  and whole-host composition remain pending. Windows observations retain real
+  handles and compare complete 128-bit file identities; unavailable identity
+  queries cannot certify complete coverage or issue a file witness.
 - Opt-in bounded physical YAML decoding shares the JSON source ledger while
   preserving the existing YAML profile. Resource credit precedes AST ownership
   and scalar resolution; parser nesting is configured before parsing. Typed

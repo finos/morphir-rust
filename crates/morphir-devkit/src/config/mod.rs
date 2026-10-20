@@ -24,8 +24,8 @@ pub use discovery::{
     system_config_candidates, user_override_candidates,
 };
 pub use loader::{
-    ConfigContext, deprecated_key_warnings, load_config_context, load_config_context_with,
-    load_config_context_with_global, load_effective_config,
+    ConfigContext, deprecated_key_warnings, load_config_context, load_config_context_observed,
+    load_config_context_with, load_config_context_with_global, load_effective_config,
 };
 pub use morphir_config::builtin_defaults;
 pub use paths::{

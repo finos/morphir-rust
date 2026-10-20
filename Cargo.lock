@@ -4366,6 +4366,7 @@ dependencies = [
  "morphir-workspace",
  "nbformat",
  "reqwest",
+ "rustix 1.1.4",
  "same-file",
  "secrecy",
  "semver",

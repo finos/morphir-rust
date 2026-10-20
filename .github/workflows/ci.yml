@@ -150,7 +150,7 @@ jobs:
         run: mise run check:lint:rust -- ${{ needs.changes.outputs.cargo_packages }}
 
   provider-windows-standard-user:
-    name: Ordinary-user provider candidate (${{ matrix.arch }})
+    name: Native Windows candidate (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     needs: changes
@@ -182,6 +182,21 @@ jobs:
           shared-key: native
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
+      # The adapter depends on common, so common changes already select this job.
+      # Reuse its two native architectures without changing package/kit routing.
+      - name: Install native source observation target
+        if: ${{ needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.crates), 'morphir-common') }}
+        run: rustup target add ${{ matrix.target }}
+      - name: Test native common unit controls
+        if: ${{ needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.crates), 'morphir-common') }}
+        run: cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib
+      - name: Test native observed read routes
+        if: ${{ needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.crates), 'morphir-common') }}
+        run: >-
+          cargo test --locked --target ${{ matrix.target }} -p morphir-common -p morphir-devkit
+          --test source_read_observation --test source_read_scope_adversarial
+          --test source_read_late_registration --test source_read_alias_route
+          --test source_read_content_file --test file_identity_public
       - name: Build and execute under a separate standard-user account
         shell: pwsh
         env:
@@ -679,6 +694,11 @@ jobs:
         if: ${{ needs.changes.result != 'success' || contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
         run: |
           echo "::error::A required job failed or was cancelled."
+          exit 1
+      - name: Require selected Windows candidate evidence
+        if: ${{ needs.changes.result == 'success' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.job_kit_conformance == 'true') && needs.provider-windows-standard-user.result != 'success' }}
+        run: |
+          echo "::error::Selected native Windows candidate evidence did not succeed."
           exit 1
       - name: All required jobs passed or were skipped
         run: echo "CI OK"

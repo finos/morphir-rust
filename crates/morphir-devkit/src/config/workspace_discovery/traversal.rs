@@ -3,7 +3,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
-    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -14,26 +13,32 @@ use morphir_workspace::{FileEntry, FileTree, RelativePath};
 use super::aliases::{
     AliasBudgets, DirectoryAlias, materialize_directory_aliases, record_directory_alias,
 };
-use super::budget::{PayloadBudget, PayloadKind, resource_limit};
+use super::budget::{NativeReads, PayloadBudget, PayloadKind, resource_limit};
+
+pub(super) struct TreeCapturePolicy {
+    pub(super) aliases: AliasBudgets,
+    pub(super) traversal: TraversalBudgets,
+}
 
 pub(super) fn build_tree_from_capability(
     root: &Dir,
     canonical_root: &Path,
     granted_root: &Path,
-    alias_budgets: AliasBudgets,
-    traversal_budgets: TraversalBudgets,
+    policy: TreeCapturePolicy,
     payload: &mut PayloadBudget,
     classify_config: &dyn Fn(&RelativePath) -> PayloadKind,
+    reads: NativeReads<'_>,
 ) -> Result<FileTree> {
     build_tree_with_payload(
         root,
         canonical_root,
         granted_root,
-        alias_budgets,
-        traversal_budgets,
+        policy.aliases,
+        policy.traversal,
         payload,
         classify_config,
         &mut |_, _| {},
+        reads,
     )
 }
 
@@ -57,6 +62,7 @@ pub(super) fn build_tree_with(
         &mut payload,
         &account_all,
         boundary_hook,
+        NativeReads::Unobserved,
     )
 }
 
@@ -70,6 +76,7 @@ fn build_tree_with_payload(
     payload: &mut PayloadBudget,
     classify_config: &dyn Fn(&RelativePath) -> PayloadKind,
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
+    reads: NativeReads<'_>,
 ) -> Result<FileTree> {
     let mut entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory)]);
     let mut visited_directories = BTreeSet::from([RelativePath::root()]);
@@ -88,6 +95,7 @@ fn build_tree_with_payload(
         payload,
         classify_config,
         boundary_hook,
+        reads,
     }
     .walk(root, &RelativePath::root(), &RelativePath::root(), 0)?;
     materialize_directory_aliases(
@@ -172,7 +180,7 @@ pub(super) enum BoundaryEvent {
     ReadConfig,
 }
 
-struct Traversal<'a> {
+struct Traversal<'a, 'scope> {
     root: &'a Dir,
     canonical_root: &'a Path,
     granted_root: &'a Path,
@@ -185,9 +193,10 @@ struct Traversal<'a> {
     payload: &'a mut PayloadBudget,
     classify_config: &'a dyn Fn(&RelativePath) -> PayloadKind,
     boundary_hook: &'a mut dyn FnMut(BoundaryEvent, &RelativePath),
+    reads: NativeReads<'scope>,
 }
 
-impl Traversal<'_> {
+impl Traversal<'_, '_> {
     fn walk(
         &mut self,
         directory: &Dir,
@@ -284,10 +293,10 @@ impl Traversal<'_> {
                         self.entries,
                         lexical_path,
                         confined_target,
-                        self.traversal_budgets,
                         self.payload,
                         payload_kind,
                         self.boundary_hook,
+                        self.reads,
                     )?;
                 }
                 continue;
@@ -331,10 +340,10 @@ impl Traversal<'_> {
                     self.entries,
                     lexical_path,
                     canonical_child,
-                    self.traversal_budgets,
                     self.payload,
                     payload_kind,
                     self.boundary_hook,
+                    self.reads,
                 )?;
             }
         }
@@ -412,10 +421,10 @@ fn insert_config_file(
     entries: &mut BTreeMap<RelativePath, FileEntry>,
     lexical_path: RelativePath,
     confined_path: PathBuf,
-    budgets: TraversalBudgets,
     payload: &mut PayloadBudget,
     payload_kind: PayloadKind,
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
+    reads: NativeReads<'_>,
 ) -> Result<()> {
     let remaining = match payload_kind {
         PayloadKind::Final => payload.remaining(),
@@ -430,19 +439,11 @@ fn insert_config_file(
         )
     })?;
     if metadata.len() > remaining as u64 {
-        return resource_limit(budgets.config_bytes);
+        return resource_limit(payload.limit());
     }
     boundary_hook(BoundaryEvent::ReadConfig, &lexical_path);
-    let file = root.open(&confined_path).with_context(|| {
-        format!(
-            "workspace.traversal.unreadable: Failed to read confined UTF-8 Morphir configuration `{}` from `{}`",
-            lexical_path.as_str(),
-            confined_path.display()
-        )
-    })?;
     let read_limit = u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX);
-    let mut bytes = Vec::new();
-    file.take(read_limit).read_to_end(&mut bytes).with_context(|| {
+    let bytes = reads.read_confined(root, &confined_path, read_limit).with_context(|| {
         format!(
             "workspace.traversal.unreadable: Failed to read confined UTF-8 Morphir configuration `{}` from `{}`",
             lexical_path.as_str(),

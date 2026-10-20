@@ -59,10 +59,20 @@ class WindowsSourceIdentityTests(unittest.TestCase):
         self.assertNotIn("        if:", provider_step)
         self.assertIn("        if: always()", upload_step)
 
+    def test_native_root_acquisition_controls_run_under_the_same_common_scope(self) -> None:
+        marker = "      - name: Test native root-confined reads\n"
+        self.assertIn(marker, self.job)
+        step = self.job.split(marker, 1)[1].split("      - name:", 1)[0]
+        self.assertIn("        if: ${{ " + IDENTITY_SELECTED + " }}", step)
+        self.assertIn("cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib root_read_tests", step)
+        self.assertNotIn("continue-on-error", step)
+
     def test_actual_source_tests_fixtures_and_dependencies_select_existing_windows_job(self) -> None:
         for path in (
             "crates/morphir-common/src/config/observation/identity.rs",
             "crates/morphir-common/src/config/observation/identity/identity_tests.rs",
+            "crates/morphir-common/src/config/observation/root_read.rs",
+            "crates/morphir-common/src/config/observation/root_read_tests.rs",
             "crates/morphir-common/tests/source_read_content_file.rs",
             "crates/morphir-common/tests/source_observation_fixtures/primary.json",
             "crates/morphir-common/Cargo.toml",

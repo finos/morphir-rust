@@ -21,7 +21,8 @@
 //! # Ok(()) }
 //! ```
 use cap_std::fs::{Dir, OpenOptions};
-use same_file::Handle;
+mod identity;
+use identity::FileIdentity;
 use std::{
     fs::File,
     io::{self, Read},
@@ -131,7 +132,7 @@ impl ReadCounts {
 }
 #[derive(Debug)]
 struct RegisteredFile {
-    identity: Handle,
+    identity: FileIdentity,
     counts: ReadCounts,
 }
 #[derive(Debug, Clone, Copy)]
@@ -174,7 +175,7 @@ pub struct SourceReadScope {
     directory: Dir,
     issued_label: PathBuf,
     label: PathBuf,
-    identity: Handle,
+    identity: FileIdentity,
     shared: Arc<Shared>,
 }
 /// Cloneable read-only view. It exposes no event setters or directory grants.
@@ -305,7 +306,7 @@ impl SourceReadScope {
         label: &Path,
         limits: ReadLimits,
     ) -> Result<Self, ObservationError> {
-        let identity = Handle::from_file(
+        let identity = FileIdentity::from_file(
             held.try_clone()
                 .map_err(|_| ObservationError::RootIdentity)?
                 .into_std_file(),
@@ -315,7 +316,9 @@ impl SourceReadScope {
             std::path::absolute(label).map_err(|_| ObservationError::RootIdentity)?;
         let canonical =
             std::fs::canonicalize(&issued_label).map_err(|_| ObservationError::RootIdentity)?;
-        if identity != Handle::from_path(&canonical).map_err(|_| ObservationError::RootIdentity)? {
+        if identity
+            != FileIdentity::from_path(&canonical).map_err(|_| ObservationError::RootIdentity)?
+        {
             return Err(ObservationError::RootIdentity);
         }
         Ok(Self {
@@ -368,7 +371,7 @@ impl SourceReadScope {
             .open(relative)
             .map_err(|_| ObservationError::FileIdentity)?;
         let identity =
-            Handle::from_file(file.into_std()).map_err(|_| ObservationError::FileIdentity)?;
+            FileIdentity::from_file(file.into_std()).map_err(|_| ObservationError::FileIdentity)?;
         if let Some(index) = state
             .files
             .iter()
@@ -401,7 +404,7 @@ impl SourceReadScope {
     }
     fn root_is_current(&self) -> bool {
         [&self.issued_label, &self.label].into_iter().all(|label| {
-            Handle::from_path(label)
+            FileIdentity::from_path(label)
                 .ok()
                 .is_some_and(|identity| identity == self.identity)
         })
@@ -421,7 +424,7 @@ impl SourceReadScope {
         let Some(identity) = directory_identity(held) else {
             return DirectoryLocation::Unclassified;
         };
-        if Handle::from_path(label).ok().as_ref() != Some(&identity) {
+        if FileIdentity::from_path(label).ok().as_ref() != Some(&identity) {
             return DirectoryLocation::Unclassified;
         }
         let Some(relative) = self.relative_route(label) else {
@@ -447,8 +450,8 @@ impl SourceReadScope {
         if !self.root_is_current() || !path.is_absolute() {
             return None;
         }
-        let actual = Handle::from_file(file.try_clone().ok()?).ok()?;
-        if actual != Handle::from_path(path).ok()? {
+        let actual = FileIdentity::from_file(file.try_clone().ok()?).ok()?;
+        if actual != FileIdentity::from_path(path).ok()? {
             return None;
         }
         // Native fallback can establish Ambient, never Workspace: the latter
@@ -460,8 +463,8 @@ impl SourceReadScope {
         (!target.starts_with(&self.label)).then_some(ReadClass::AmbientContent)
     }
 }
-fn directory_identity(directory: &Dir) -> Option<Handle> {
-    Handle::from_file(directory.try_clone().ok()?.into_std_file()).ok()
+fn directory_identity(directory: &Dir) -> Option<FileIdentity> {
+    FileIdentity::from_file(directory.try_clone().ok()?.into_std_file()).ok()
 }
 #[derive(Clone, Copy)]
 enum DirectoryLocation {
@@ -590,7 +593,7 @@ impl<'a> Attempt<'a> {
         let identity = file
             .try_clone()
             .ok()
-            .and_then(|file| Handle::from_file(file.into_std()).ok());
+            .and_then(|file| FileIdentity::from_file(file.into_std()).ok());
         let mut state = self.scope.shared.state();
         if self.class.is_none() || identity.is_none() {
             state.fault.get_or_insert(ObservationError::FileIdentity);

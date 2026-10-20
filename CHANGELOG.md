@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   must be registered before the first content attempt. Generic reads through
   proper descendant directory grants remain Partial; only actual selected-root
   acquisitions certify workspace content. A closed read-only descendant route
-  and whole-host composition remain pending.
+  and whole-host composition remain pending. Windows observations retain real
+  handles and compare complete 128-bit file identities; unavailable identity
+  queries cannot certify complete coverage or issue a file witness.
 - Opt-in bounded physical YAML decoding shares the JSON source ledger while
   preserving the existing YAML profile. Resource credit precedes AST ownership
   and scalar resolution; parser nesting is configured before parsing. Typed

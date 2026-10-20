@@ -1,6 +1,7 @@
 pub mod cache_maintenance;
 pub mod codegen;
 pub mod config;
+pub mod file_identity;
 pub mod home;
 pub mod ir_transport;
 pub mod loader;

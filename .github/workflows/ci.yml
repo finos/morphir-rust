@@ -187,19 +187,16 @@ jobs:
       - name: Install native source observation target
         if: ${{ needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.crates), 'morphir-common') }}
         run: rustup target add ${{ matrix.target }}
-      - name: Test native full file identities
+      - name: Test native common unit controls
         if: ${{ needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.crates), 'morphir-common') }}
-        run: cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib identity_tests
-      - name: Test native root-confined reads
-        if: ${{ needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.crates), 'morphir-common') }}
-        run: cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib root_read_tests
+        run: cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib
       - name: Test native observed read routes
         if: ${{ needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.crates), 'morphir-common') }}
         run: >-
           cargo test --locked --target ${{ matrix.target }} -p morphir-common -p morphir-devkit
           --test source_read_observation --test source_read_scope_adversarial
           --test source_read_late_registration --test source_read_alias_route
-          --test source_read_content_file
+          --test source_read_content_file --test file_identity_public
       - name: Build and execute under a separate standard-user account
         shell: pwsh
         env:

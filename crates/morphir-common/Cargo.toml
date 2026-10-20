@@ -51,7 +51,13 @@ tar = "0.4"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Security", "Win32_System_IO"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 cucumber = "0.23"

@@ -1,7 +1,7 @@
 //! Discovery rooted in a directory capability already owned by the host.
 use anyhow::{Context, anyhow, bail};
 use cap_std::fs::Dir;
-use same_file::Handle;
+use morphir_common::file_identity::FileIdentity;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -36,7 +36,7 @@ pub struct WorkspaceDiscoveryRoot {
     directory: Dir,
     granted_root: PathBuf,
     canonical_root: PathBuf,
-    identity: Handle,
+    identity: FileIdentity,
 }
 impl WorkspaceDiscoveryRoot {
     /// Capture the same confined discovery request while observing real reads.
@@ -97,14 +97,14 @@ impl WorkspaceDiscoveryRoot {
                 granted_root.display()
             )
         })?;
-        let identity = Handle::from_file(
+        let identity = FileIdentity::from_file(
             directory
                 .try_clone()
                 .context("Failed to clone bound development root capability")?
                 .into_std_file(),
         )
         .context("Failed to inspect bound development root identity")?;
-        let canonical_identity = Handle::from_path(&canonical_root).map_err(|error| anyhow!(
+        let canonical_identity = FileIdentity::from_path(&canonical_root).map_err(|error| anyhow!(
             "workspace.path.not-confined: development root changed after binding `{}` while verifying `{}`: {error}",granted_root.display(),canonical_root.display()))?;
         if identity != canonical_identity {
             bail!(
@@ -210,7 +210,7 @@ impl WorkspaceDiscoveryRoot {
     }
     fn verify_current(&self) -> anyhow::Result<()> {
         for label in [&self.granted_root, &self.canonical_root] {
-            let identity = Handle::from_path(label).map_err(|error| anyhow!(
+            let identity = FileIdentity::from_path(label).map_err(|error| anyhow!(
                 "workspace.path.not-confined: development root changed after binding `{}` while verifying `{}`: {error}", self.granted_root.display(), label.display()))?;
             if identity != self.identity {
                 bail!(

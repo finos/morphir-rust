@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- An opaque `morphir_common::file_identity::FileIdentity` retains the actual
+  file owner for equality without exposing a reader or primitive identifier.
+  Source observations, native root reads and capability-bound devkit discovery
+  share the same platform implementation. Windows compares full FileIdInfo
+  identities; Unix ambient identity queries use nonblocking, no-controlling-
+  terminal opens so FIFO labels do not wait for content peers. Identity remains
+  separate from content revision, confinement and access authority.
 - Opt-in native SDK configuration-read observations bind a held workspace
   identity, retain bounded actual-read counters and file-identity witnesses,
   and distinguish workspace reads from permitted ambient mounts. Existing

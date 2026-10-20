@@ -42,14 +42,14 @@ class WindowsSourceIdentityTests(unittest.TestCase):
 
     def test_native_identity_and_real_observation_steps_use_same_architecture(self) -> None:
         target_step = self.job.split("      - name: Install native source observation target\n", 1)[1].split("      - name:", 1)[0]
-        identity_step = self.job.split("      - name: Test native full file identities\n", 1)[1].split("      - name:", 1)[0]
+        identity_step = self.job.split("      - name: Test native common unit controls\n", 1)[1].split("      - name:", 1)[0]
         observed_step = self.job.split("      - name: Test native observed read routes\n", 1)[1].split("      - name:", 1)[0]
         for step in (target_step, identity_step, observed_step):
             self.assertIn("        if: ${{ " + IDENTITY_SELECTED + " }}", step)
         self.assertIn("rustup target add ${{ matrix.target }}", target_step)
-        self.assertIn("cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib identity_tests", identity_step)
+        self.assertIn("cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib\n", identity_step)
         self.assertIn("cargo test --locked --target ${{ matrix.target }} -p morphir-common -p morphir-devkit", observed_step)
-        for test in ("source_read_observation", "source_read_scope_adversarial", "source_read_late_registration", "source_read_alias_route", "source_read_content_file"):
+        for test in ("source_read_observation", "source_read_scope_adversarial", "source_read_late_registration", "source_read_alias_route", "source_read_content_file", "file_identity_public"):
             self.assertIn("--test " + test, observed_step)
         self.assertNotIn("continue-on-error", self.job)
 
@@ -60,20 +60,26 @@ class WindowsSourceIdentityTests(unittest.TestCase):
         self.assertIn("        if: always()", upload_step)
 
     def test_native_root_acquisition_controls_run_under_the_same_common_scope(self) -> None:
-        marker = "      - name: Test native root-confined reads\n"
+        marker = "      - name: Test native common unit controls\n"
         self.assertIn(marker, self.job)
         step = self.job.split(marker, 1)[1].split("      - name:", 1)[0]
         self.assertIn("        if: ${{ " + IDENTITY_SELECTED + " }}", step)
-        self.assertIn("cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib root_read_tests", step)
+        self.assertIn("cargo test --locked --target ${{ matrix.target }} -p morphir-common --lib\n", step)
+        # The complete unit suite covers private full identities, root readers,
+        # Windows UTF-16 name controls and future helpers without filter gaps.
+        self.assertNotIn("--lib identity_tests", self.job)
+        self.assertNotIn("--lib root_read_tests", self.job)
         self.assertNotIn("continue-on-error", step)
 
     def test_actual_source_tests_fixtures_and_dependencies_select_existing_windows_job(self) -> None:
         for path in (
             "crates/morphir-common/src/config/observation/identity.rs",
+            "crates/morphir-common/src/file_identity.rs",
             "crates/morphir-common/src/config/observation/identity/identity_tests.rs",
             "crates/morphir-common/src/config/observation/root_read.rs",
             "crates/morphir-common/src/config/observation/root_read_tests.rs",
             "crates/morphir-common/tests/source_read_content_file.rs",
+            "crates/morphir-common/tests/file_identity_public.rs",
             "crates/morphir-common/tests/source_observation_fixtures/primary.json",
             "crates/morphir-common/Cargo.toml",
             "crates/morphir-core/src/lib.rs",

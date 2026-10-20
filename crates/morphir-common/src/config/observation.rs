@@ -21,8 +21,12 @@
 //! # Ok(()) }
 //! ```
 use cap_std::fs::{Dir, OpenOptions};
-mod identity;
+pub(crate) mod identity;
+mod root_read;
 use identity::FileIdentity;
+pub use root_read::{
+    ReadOnlyRootPlan, RootAcquiredRead, RootReadError, RootRelativeDirectory, RootRelativeFile,
+};
 use std::{
     fs::File,
     io::{self, Read},
@@ -368,7 +372,7 @@ impl SourceReadScope {
             return Err(ObservationError::RegistrationClosed);
         }
         let file = held
-            .open(relative)
+            .open_with(relative, &identity::metadata_query_options())
             .map_err(|_| ObservationError::FileIdentity)?;
         let identity =
             FileIdentity::from_file(file.into_std()).map_err(|_| ObservationError::FileIdentity)?;
@@ -633,6 +637,12 @@ impl<'a> Attempt<'a> {
         }
     }
     fn charge(&self, increment: Increment) {
+        // Once an attempt is omitted, its calls/bytes cannot extend the
+        // retained prefix beyond the bounded attempt history. Business I/O
+        // still runs; Attempt::begin has already latched incomplete coverage.
+        if matches!(self.recording, AttemptRecording::Omitted) {
+            return;
+        }
         let mut state = self.scope.shared.state();
         let next = match increment {
             Increment::ReadCall => state
@@ -653,9 +663,6 @@ impl<'a> Attempt<'a> {
         match increment {
             Increment::ReadCall => state.total.calls = next,
             Increment::ReturnedBytes(_) => state.total.bytes = next,
-        }
-        if matches!(self.recording, AttemptRecording::Omitted) {
-            return;
         }
         let add = |counts: &mut ReadCounts| match increment {
             Increment::ReadCall => counts.calls += 1,
@@ -727,5 +734,8 @@ pub fn read_native_file(scope: &SourceReadScope, path: &Path, limit: u64) -> io:
     read_bytes(ObservedContentFile { file, attempt }, limit)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod acquisition_boundary_tests;
+
+#[cfg(test)]
+mod root_read_tests;

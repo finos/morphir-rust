@@ -19,6 +19,7 @@ pub mod merge {
     pub use morphir_config::merge::*;
 }
 pub mod model;
+pub mod observation;
 pub mod redact;
 /// External secret-reference recognition.
 pub mod secret {
@@ -84,6 +85,31 @@ impl From<legacy::LegacyProjectConfig> for MorphirConfig {
 /// ```
 pub fn load_config_value(path: &Path) -> crate::Result<Value> {
     let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read Morphir config: {}", path.display()))?;
+    Ok(morphir_config::parse_config(
+        &path.to_string_lossy(),
+        &content,
+    )?)
+}
+
+/// Load the same configuration while observing actual native content reads.
+///
+/// Observation limits bound evidence, not the read or parser. Seal the supplied
+/// owner only after the synchronous SDK prefix finishes; this is not host or
+/// worker-completion evidence.
+pub fn load_config_value_observed(
+    path: &Path,
+    scope: &observation::SourceReadScope,
+) -> crate::Result<Value> {
+    let content = observation::read_native_file(scope, path, u64::MAX)
+        .and_then(|bytes| {
+            String::from_utf8(bytes).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "stream did not contain valid UTF-8",
+                )
+            })
+        })
         .with_context(|| format!("Failed to read Morphir config: {}", path.display()))?;
     Ok(morphir_config::parse_config(
         &path.to_string_lossy(),

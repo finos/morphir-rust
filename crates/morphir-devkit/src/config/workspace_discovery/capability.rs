@@ -39,6 +39,46 @@ pub struct WorkspaceDiscoveryRoot {
     identity: Handle,
 }
 impl WorkspaceDiscoveryRoot {
+    /// Capture the same confined discovery request while observing real reads.
+    /// Selected mounts outside the workspace count as ambient even when allowed
+    /// by the options. A sealed scope covers only this synchronous SDK prefix.
+    ///
+    /// ```no_run
+    /// use cap_std::{ambient_authority, fs::Dir};
+    /// use morphir_common::config::observation::{ReadLimits, SourceReadScope};
+    /// use morphir_devkit::{ConfigLoadOptions, WorkspaceDiscoveryRoot};
+    /// use std::path::Path;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let path = Path::new("/already-authorized/workspace");
+    /// let held = Dir::open_ambient_dir(path, ambient_authority())?;
+    /// let scope = SourceReadScope::bind_workspace(&held, path, ReadLimits::new(16, 128, 1_048_576, 1)?)?;
+    /// let root = WorkspaceDiscoveryRoot::from_directory(held, path)?;
+    /// let capture = root.capture_observed(&ConfigLoadOptions::project_only(), &scope);
+    /// scope.seal().require_complete()?;
+    /// let request = capture?;
+    /// # let _ = request;
+    /// # Ok(()) }
+    /// ```
+    pub fn capture_observed(
+        &self,
+        options: &super::ConfigLoadOptions,
+        scope: &morphir_common::config::observation::SourceReadScope,
+    ) -> anyhow::Result<CapturedWorkspaceDiscovery> {
+        self.verify_current()?;
+        let request = super::capture_request_with_reads(
+            &self.directory,
+            &self.canonical_root,
+            &self.granted_root,
+            options,
+            super::AliasBudgets::DEFAULT,
+            super::TraversalBudgets::DEFAULT,
+            Some(scope),
+        )?;
+        Ok(CapturedWorkspaceDiscovery {
+            canonical_root: self.canonical_root.clone(),
+            request,
+        })
+    }
     /// Bind an existing directory to the host-selected root label.
     ///
     /// Only directory identity metadata is read here. The label supplies no

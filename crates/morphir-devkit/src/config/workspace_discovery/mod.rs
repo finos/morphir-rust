@@ -36,11 +36,13 @@ use super::{
     sources::ConfigLoadOptions,
 };
 use aliases::AliasBudgets;
+use budget::NativeReads;
 use budget::PayloadBudget;
 use mounts::{
     apply_user_override_selection, config_payload_kind, selected_environment, selected_mount,
 };
-use traversal::{TraversalBudgets, build_tree_from_capability};
+use mounts::{apply_user_override_selection_with_reads, selected_mount_with_reads};
+use traversal::{TraversalBudgets, TreeCapturePolicy, build_tree_from_capability};
 
 /// Discover a workspace by adapting a confined native directory to the
 /// provider-neutral workspace protocol.
@@ -301,34 +303,91 @@ fn capture_request(
     alias_budgets: AliasBudgets,
     traversal_budgets: TraversalBudgets,
 ) -> Result<DiscoveryRequest> {
+    capture_request_with_reads(
+        root_capability,
+        canonical_root,
+        granted_root,
+        options,
+        alias_budgets,
+        traversal_budgets,
+        None,
+    )
+}
+
+fn capture_request_with_reads(
+    root_capability: &Dir,
+    canonical_root: &Path,
+    granted_root: &Path,
+    options: &ConfigLoadOptions,
+    alias_budgets: AliasBudgets,
+    traversal_budgets: TraversalBudgets,
+    scope: Option<&morphir_common::config::observation::SourceReadScope>,
+) -> Result<DiscoveryRequest> {
     let mut payload = PayloadBudget::new(traversal_budgets.config_bytes);
+    let reads = match scope {
+        Some(scope) => NativeReads::Observed(scope),
+        None => NativeReads::Unobserved,
+    };
     let classify_config = |path: &RelativePath| config_payload_kind(&options.user_override, path);
     let mut development_root = build_tree_from_capability(
         root_capability,
         canonical_root,
         granted_root,
-        alias_budgets,
-        traversal_budgets,
+        TreeCapturePolicy {
+            aliases: alias_budgets,
+            traversal: traversal_budgets,
+        },
         &mut payload,
         &classify_config,
+        reads,
     )?;
-    apply_user_override_selection(&mut development_root, &options.user_override, &mut payload)?;
+    match reads {
+        NativeReads::Unobserved => apply_user_override_selection(
+            &mut development_root,
+            &options.user_override,
+            &mut payload,
+        )?,
+        NativeReads::Observed(_) => apply_user_override_selection_with_reads(
+            &mut development_root,
+            &options.user_override,
+            &mut payload,
+            reads,
+        )?,
+    }
 
     let request = DiscoveryRequest {
         protocol_version: morphir_workspace::workspace_discovery_protocol(),
         development_root,
-        morphir_home: selected_mount(
-            &options.global,
-            native_global_config_candidates,
-            "global user",
-            &mut payload,
-        )?,
-        system_config: selected_mount(
-            &options.system,
-            || native_system_config_candidates().to_vec(),
-            "system",
-            &mut payload,
-        )?,
+        morphir_home: match reads {
+            NativeReads::Unobserved => selected_mount(
+                &options.global,
+                native_global_config_candidates,
+                "global user",
+                &mut payload,
+            )?,
+            NativeReads::Observed(_) => selected_mount_with_reads(
+                &options.global,
+                native_global_config_candidates,
+                "global user",
+                &mut payload,
+                reads,
+            )?,
+        },
+        system_config: match reads {
+            NativeReads::Unobserved => selected_mount(
+                &options.system,
+                || native_system_config_candidates().to_vec(),
+                "system",
+                &mut payload,
+            )?,
+            NativeReads::Observed(_) => selected_mount_with_reads(
+                &options.system,
+                || native_system_config_candidates().to_vec(),
+                "system",
+                &mut payload,
+                reads,
+            )?,
+        },
         environment: selected_environment(options),
         cli_overlay: serde_json::json!({}),
         purpose: DiscoveryPurpose::default(),

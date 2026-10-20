@@ -15,13 +15,28 @@ use super::super::{
     discovery::discover_config_candidates,
     sources::{ConfigLoadOptions, EnvSelection, SourceSelection},
 };
-use super::budget::{PayloadBudget, PayloadKind, read_utf8_file};
+use super::budget::{NativeReads, PayloadBudget, PayloadKind, read_utf8_file};
 
 pub(super) fn selected_mount(
     selection: &SourceSelection,
     candidates: impl FnOnce() -> Vec<PathBuf>,
     description: &str,
     payload: &mut PayloadBudget,
+) -> Result<Option<FileTree>> {
+    selected_mount_with_reads(
+        selection,
+        candidates,
+        description,
+        payload,
+        NativeReads::Unobserved,
+    )
+}
+pub(super) fn selected_mount_with_reads(
+    selection: &SourceSelection,
+    candidates: impl FnOnce() -> Vec<PathBuf>,
+    description: &str,
+    payload: &mut PayloadBudget,
+    reads: NativeReads<'_>,
 ) -> Result<Option<FileTree>> {
     let selected = match selection {
         SourceSelection::Skip => return Ok(None),
@@ -39,11 +54,16 @@ pub(super) fn selected_mount(
         SourceSelection::Discover => discover_config_candidates(&candidates())?,
     };
     selected
-        .map(|path| config_mount(&path, description, payload))
+        .map(|path| config_mount(&path, description, payload, reads))
         .transpose()
 }
 
-fn config_mount(path: &Path, description: &str, payload: &mut PayloadBudget) -> Result<FileTree> {
+fn config_mount(
+    path: &Path,
+    description: &str,
+    payload: &mut PayloadBudget,
+    reads: NativeReads<'_>,
+) -> Result<FileTree> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("Failed to inspect {description} config: {}", path.display()))?;
     let read_path = if metadata.file_type().is_symlink() {
@@ -63,6 +83,7 @@ fn config_mount(path: &Path, description: &str, payload: &mut PayloadBudget) -> 
         &read_path,
         &format!("{description} config selected at {}", path.display()),
         payload,
+        reads,
     )?;
     Ok(FileTree {
         entries: BTreeMap::from([
@@ -94,6 +115,14 @@ pub(super) fn apply_user_override_selection(
     selection: &SourceSelection,
     payload: &mut PayloadBudget,
 ) -> Result<()> {
+    apply_user_override_selection_with_reads(tree, selection, payload, NativeReads::Unobserved)
+}
+pub(super) fn apply_user_override_selection_with_reads(
+    tree: &mut FileTree,
+    selection: &SourceSelection,
+    payload: &mut PayloadBudget,
+    reads: NativeReads<'_>,
+) -> Result<()> {
     match selection {
         SourceSelection::Discover => Ok(()),
         SourceSelection::Skip => {
@@ -105,7 +134,7 @@ pub(super) fn apply_user_override_selection(
         SourceSelection::Explicit(source) => {
             let primary = modern_root_primary(tree, source)?;
             remove_user_override_files(tree, payload, is_root_user_override_path);
-            materialize_explicit_user_override(tree, source, &primary, payload)
+            materialize_explicit_user_override(tree, source, &primary, payload, reads)
         }
     }
 }
@@ -172,6 +201,7 @@ fn materialize_explicit_user_override(
     source: &Path,
     primary: &RelativePath,
     payload: &mut PayloadBudget,
+    reads: NativeReads<'_>,
 ) -> Result<()> {
     let source_name = source.display();
     let serialization = match source
@@ -188,7 +218,7 @@ fn materialize_explicit_user_override(
             )
         }
     };
-    let text = read_utf8_file(source, "explicit user override", payload)?;
+    let text = read_utf8_file(source, "explicit user override", payload, reads)?;
     morphir_config::parse_config(&source.to_string_lossy(), &text)
         .with_context(|| format!("Invalid explicit user override: {source_name}"))?;
 

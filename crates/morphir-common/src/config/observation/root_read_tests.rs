@@ -316,6 +316,7 @@ fn windows_parent_reparse_symlinks_are_refused_inside_and_outside_root() {
         let workspace = parent.path().join("workspace");
         let dest = workspace.join(".morphir/compile.dest");
         let saved = workspace.join(".morphir/old-dest");
+        let retained_model = workspace.join(".morphir/retained-model.json");
         let target = if outside {
             parent.path().join("target")
         } else {
@@ -329,6 +330,7 @@ fn windows_parent_reparse_symlinks_are_refused_inside_and_outside_root() {
         let relative = primary_path();
         let mut plan = scope.prepare_root_read(&output, &route, &relative).unwrap();
         let replace = || {
+            std::fs::rename(dest.join("model.json"), &retained_model).unwrap();
             std::fs::rename(&dest, &saved).unwrap();
             std::os::windows::fs::symlink_dir(&target, &dest).unwrap();
         };
@@ -599,4 +601,89 @@ fn unsupported_native_target_refuses_instead_of_generic_partial_success() {
         Err(_) => panic!("unsupported target must retain the explicit capability refusal"),
     }
     counts(scope.observation().snapshot().total_counts(), 0, 0, 0);
+}
+#[cfg(windows)]
+#[test]
+fn windows_retained_expected_child_blocks_parent_rename_before_any_data_open() {
+    const CHILD: &str = "MORPHIR_ROOT_PARENT_RENAME_CALIBRATION_CHILD";
+    const COMPLETION: &str = "MORPHIR_ROOT_PARENT_RENAME_CALIBRATION_COMPLETION";
+    if std::env::var_os(CHILD).is_some() {
+        let parent = fixture();
+        let workspace = parent.path().join("workspace");
+        let dest = workspace.join(".morphir/compile.dest");
+        let saved = workspace.join(".morphir/old-dest");
+        let scope = scope(&workspace);
+        let output = held(&workspace.join(".morphir"));
+        let route = output_route();
+        let relative = primary_path();
+        let plan = scope.prepare_root_read(&output, &route, &relative).unwrap();
+        // The genuine retained expected-file owner is the child whose live
+        // directory entry prevents the parent rename. No DATA is requested.
+        let error = std::fs::rename(&dest, &saved).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(error.raw_os_error(), Some(5));
+        counts(scope.observation().snapshot().total_counts(), 0, 0, 0);
+        assert_eq!(
+            scope.observation().snapshot().coverage(),
+            Coverage::Unobserved
+        );
+        assert!(dest.is_dir());
+        assert!(!saved.exists());
+        drop(plan);
+        // The actual directory becomes renameable after that owner is gone.
+        std::fs::rename(&dest, &saved).unwrap();
+        counts(scope.observation().snapshot().total_counts(), 0, 0, 0);
+        let snapshot = scope.seal();
+        assert_eq!(snapshot.coverage(), Coverage::Unobserved);
+        assert!(snapshot.require_complete().is_err());
+        std::fs::write(
+            std::env::var_os(COMPLETION).unwrap(),
+            b"actual-plan-rename-calibration-completed",
+        )
+        .unwrap();
+        return;
+    }
+    struct ChildOwner(Option<std::process::Child>);
+    impl Drop for ChildOwner {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.0.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    let completion = tempfile::tempdir().unwrap();
+    let completed = completion.path().join("completed");
+    let mut owner = ChildOwner(Some(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "config::observation::root_read_tests::windows_retained_expected_child_blocks_parent_rename_before_any_data_open",
+                "--nocapture",
+            ])
+            .env(CHILD, "owned-calibration")
+            .env(COMPLETION, &completed)
+            .spawn()
+            .unwrap(),
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(status) = owner.0.as_mut().unwrap().try_wait().unwrap() {
+            owner.0.take(); // try_wait reaped; never kill a subsequently reused PID.
+            assert!(
+                status.success(),
+                "actual parent rename calibration failed: {status}"
+            );
+            assert_eq!(
+                std::fs::read(&completed).unwrap(),
+                b"actual-plan-rename-calibration-completed"
+            );
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "actual rename calibration exceeded5s; owned child killed and reaped"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }

@@ -310,6 +310,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `ProcessChild::read_within`, or a `ProcessChannel`.
 
 ### Fixed
+- Concurrent first cache-maintenance saves and mutation leases share one
+  coordination file without macOS `NotFound` failures. Atomic creation and
+  existing-file opens retain directory confinement and no-follow checks.
 - Canonical YAML writer tests read the shared Gherkin kit's inline, doc-string,
   outline and referenced-file spellings after the Markdown case retirement.
   An explicit missing kit directory fails rather than silently skipping coverage.

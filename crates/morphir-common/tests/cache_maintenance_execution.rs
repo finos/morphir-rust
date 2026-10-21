@@ -24,6 +24,32 @@ fn a_policy_plan(entries: Vec<CacheEntry>) -> morphir_common::cache_maintenance:
 }
 
 #[test]
+fn concurrent_first_mutation_leases_share_the_coordination_file() {
+    let (_root, home) = a_morphir_home();
+    let start = std::sync::Arc::new(std::sync::Barrier::new(16));
+    let attempts = (0..16)
+        .map(|_| {
+            let home = home.clone();
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                CacheMutationGuard::acquire(&home)
+            })
+        })
+        .collect::<Vec<_>>();
+    // Join every contender before any assertion can drop its shared home.
+    let leases = attempts
+        .into_iter()
+        .map(|attempt| attempt.join().unwrap())
+        .collect::<Vec<_>>();
+    let errors = leases
+        .iter()
+        .filter_map(|lease| lease.as_ref().err())
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
 fn execution_removes_only_planner_selected_owned_entries() {
     let (_root, home) = a_morphir_home();
     std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();

@@ -524,15 +524,23 @@ fn open_coordination_file_from_home(
     }
     let mut options = CapOpenOptions::new();
     options
-        .create(true)
-        .truncate(false)
+        .create_new(true)
         .read(true)
         .write(true)
         .follow(FollowSymlinks::No);
-    let file = locks_dir
-        .open_with(filename, &options)
-        .map(cap_std::fs::File::into_std)
-        .map_err(|source| io_error(path, source))?;
+    // Concurrent initializers must distinguish the creator from later opens.
+    // A contended create-if-missing open can report NotFound on macOS.
+    let file = match locks_dir.open_with(filename, &options) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            options.create_new(false);
+            locks_dir
+                .open_with(filename, &options)
+                .map_err(|source| io_error(path, source))?
+        }
+        Err(source) => return Err(io_error(path, source)),
+    }
+    .into_std();
     Ok(file)
 }
 

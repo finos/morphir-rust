@@ -45,6 +45,47 @@ Agents should understand:
 
 When uncertain about Morphir-specific design decisions, consult the reference implementation and official documentation.
 
+## Issue Tracking with Beads
+
+Work is tracked with [beads](https://github.com/steveyegge/beads) (`bd`) in the **shared Morphir tracker**, not
+in a database of this repository. The database lives in finos/morphir and syncs over its `refs/dolt/data` ref.
+`.beads/config.yaml` points `bd` at it, so you do not need a finos/morphir checkout.
+
+Use bd 1.0.3 or later. Earlier releases do not find the main checkout's database from a git worktree.
+
+### Set up and sync
+
+```shell
+bd bootstrap          # first time on a machine: clones the shared database
+bd dolt pull          # before you start work
+bd dolt push          # after you change issues
+```
+
+The readable JSONL mirror on the `beads-sync` branch is published from finos/morphir, so pushing the database is
+all you need to do here. Run `bd prime` for the full command reference.
+
+### Worktrees
+
+All worktrees use one database: `.beads/embeddeddolt` in the main checkout. A worktree finds it through the git
+common directory, so it needs no `.beads/redirect` file.
+
+Run `bd bootstrap` in the main checkout before you open a worktree or start an agent session. Any `bd` command,
+including the SessionStart `bd prime` hook, makes an empty local database when it finds none. An empty database in
+the main checkout stops `bd bootstrap` ("Database already exists"), and a database in a worktree hides the shared
+one. To repair, use `bd count` to make sure the database is empty, move the empty `embeddeddolt` (and `backup`)
+directory aside, and run `bd bootstrap` in the main checkout again.
+
+### Find this repository's work
+
+Issues whose work happens here carry the label `repo:morphir-rust`. Add that label to each issue you create for
+this repository.
+
+```shell
+bd ready --label repo:morphir-rust        # unblocked work
+bd list --label repo:morphir-rust --all   # everything, including closed
+bd show <id> --long                       # description, design, notes and comments
+```
+
 ## Technology Stack
 
 ### Core Technologies
@@ -246,7 +287,7 @@ Use the `/release-manager` skill for guided release workflows:
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
+   bd dolt pull && bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```

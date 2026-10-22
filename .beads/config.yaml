@@ -1,3 +1,7 @@
-sync.branch: "beads-sync"
+# Beads issue tracking for this repository uses the shared Morphir tracker.
+# The database lives in finos/morphir (refs/dolt/data), not in this repository.
+# `bd bootstrap` clones it; `bd dolt pull` and `bd dolt push` keep it in sync.
+# Do not set sync.branch here: in this checkout it would commit issue data to a
+# branch of morphir-rust. finos/morphir publishes the readable JSONL mirror.
 sync:
     remote: "git+https://github.com/finos/morphir.git"

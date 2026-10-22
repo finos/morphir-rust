@@ -51,6 +51,8 @@ Work is tracked with [beads](https://github.com/steveyegge/beads) (`bd`) in the 
 in a database of this repository. The database lives in finos/morphir and syncs over its `refs/dolt/data` ref.
 `.beads/config.yaml` points `bd` at it, so you do not need a finos/morphir checkout.
 
+Use bd 1.0.3 or later. Earlier releases do not find the main checkout's database from a git worktree.
+
 ### Set up and sync
 
 ```shell

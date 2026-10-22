@@ -81,3 +81,6 @@ __pycache__/
 # neither is source.
 .dev/bin/
 .dev/out/
+
+# bd gate lock written beside .beads/ (runtime, per-machine)
+/.beads.gate.lock*

@@ -27,8 +27,8 @@ anyhow = { workspace = true }
 tempfile = { workspace = true }
 tokio = { version = "1", features = ["rt"] }
 package_tough = { package = "morphir-package-tough", path = "../../third_party/morphir-package-tough", default-features = false, features = ["experimental-storage"] }
-rusqlite = "=0.40.2"
-base64 = "0.22"
+rusqlite = "=0.41.0"
+base64 = "0.23"
 sha2 = "0.11"
 
 [dev-dependencies]

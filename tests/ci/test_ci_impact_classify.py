@@ -24,14 +24,14 @@ class ClassifyTests(unittest.TestCase):
         self.assertIsNone(classify.crate_for_path("docs/crates/morphir-core/x.md"))
 
     def test_leaf_binding_change_affects_only_itself(self) -> None:
-        plan = self.plan("crates/morphir-python-binding/src/lib.rs")
+        plan = self.plan("crates/morphir-rust-binding/src/lib.rs")
         self.assertFalse(plan.all)
-        self.assertEqual(("morphir-python-binding",), plan.crates)
-        self.assertEqual("-p morphir-python-binding", plan.cargo_packages)
+        self.assertEqual(("morphir-rust-binding",), plan.crates)
+        self.assertEqual("-p morphir-rust-binding", plan.cargo_packages)
         self.assertTrue(plan.rust)
         self.assertFalse(plan.jobs["kit-conformance"])
         self.assertFalse(plan.jobs["test-extism"])
-        self.assertEqual(("python",), tuple(item.short_id for item in plan.extensions))
+        self.assertEqual(("rust",), tuple(item.short_id for item in plan.extensions))
 
     def test_core_change_affects_dependents_and_all_extensions(self) -> None:
         plan = self.plan("crates/morphir-core/src/lib.rs")
@@ -41,11 +41,11 @@ class ClassifyTests(unittest.TestCase):
         self.assertIn("-p morphir-daemon", plan.cargo_packages)
         self.assertTrue(plan.jobs["kit-conformance"])
         self.assertTrue(plan.jobs["test-extism"])
-        self.assertEqual(("avro", "python"), tuple(item.short_id for item in plan.extensions))
+        self.assertEqual(("avro", "rust"), tuple(item.short_id for item in plan.extensions))
 
     def test_daemon_change_rebuilds_every_extension(self) -> None:
         plan = self.plan("crates/morphir-daemon/src/lib.rs")
-        self.assertEqual(("avro", "python"), tuple(item.short_id for item in plan.extensions))
+        self.assertEqual(("avro", "rust"), tuple(item.short_id for item in plan.extensions))
 
     def test_global_path_affects_everything(self) -> None:
         plan = self.plan("Cargo.lock")
@@ -53,7 +53,7 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual("", plan.cargo_packages)
         self.assertTrue(all(plan.jobs.values()))
         self.assertTrue(plan.rust)
-        self.assertEqual(("avro", "python"), tuple(item.short_id for item in plan.extensions))
+        self.assertEqual(("avro", "rust"), tuple(item.short_id for item in plan.extensions))
         self.assertTrue(any("Cargo.lock" in reason for reason in plan.reasons))
 
     def test_unclaimed_path_affects_everything(self) -> None:
@@ -106,7 +106,7 @@ class ClassifyTests(unittest.TestCase):
 
     def test_load_extensions_reads_the_repository_registry(self) -> None:
         loaded = classify.load_extensions(REPOSITORY_ROOT / ".github" / "extensions.toml")
-        self.assertIn(classify.Extension("python", "morphir-python-binding"), loaded)
+        self.assertIn(classify.Extension("rust", "morphir-rust-binding"), loaded)
 
 
 if __name__ == "__main__":

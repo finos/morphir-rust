@@ -31,8 +31,8 @@ class WorkspaceGraphTests(unittest.TestCase):
 
     def test_leaf_change_affects_only_itself(self) -> None:
         self.assertEqual(
-            frozenset({"morphir-python-binding"}),
-            graph.affected_closure(self.workspace, ["morphir-python-binding"]),
+            frozenset({"morphir-rust-binding"}),
+            graph.affected_closure(self.workspace, ["morphir-rust-binding"]),
         )
 
     def test_core_change_affects_every_dependent(self) -> None:

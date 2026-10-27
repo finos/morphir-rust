@@ -17,7 +17,7 @@ from ci_impact import config, graph, classify, outputs, cli  # noqa: E402
 def fake_metadata() -> dict:
     """A small workspace shaped like morphir-rust for graph tests.
 
-    core <- sdk <- {daemon, gleam, python}
+    core <- sdk <- {daemon, gleam, rust}
     core <- projection <- avro
     daemon dev-depends on avro (installed wasm tests)
     ext-example is a member but not a default member
@@ -40,7 +40,7 @@ def fake_metadata() -> dict:
         package("morphir-projection", [("morphir-core", "normal")]),
         package("morphir-daemon", [("morphir-extension-sdk", "normal"), ("morphir-avro-extension", "dev")]),
         package("morphir-gleam-binding", [("morphir-extension-sdk", "normal")]),
-        package("morphir-python-binding", [("morphir-extension-sdk", "normal")]),
+        package("morphir-rust-binding", [("morphir-extension-sdk", "normal")]),
         package("morphir-avro-extension", [("morphir-projection", "normal"), ("morphir-extension-sdk", "build")]),
         package("morphir-ext-example", [("morphir-extension-sdk", "normal")]),
     ]
@@ -73,5 +73,5 @@ def fake_config_data() -> dict:
 def fake_extensions() -> tuple[classify.Extension, ...]:
     return (
         classify.Extension(short_id="avro", package="morphir-avro-extension"),
-        classify.Extension(short_id="python", package="morphir-python-binding"),
+        classify.Extension(short_id="rust", package="morphir-rust-binding"),
     )

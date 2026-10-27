@@ -73,10 +73,11 @@ class PackageExtensionTests(unittest.TestCase):
     def test_a_frontend_without_the_registry_flag_claims_no_incremental_support(self) -> None:
         """An absent registry flag means the guest must not claim this capability."""
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        python = registry["extensions"]["python"]
-        self.assertNotIn("incremental", python)
+        rust = registry["extensions"]["rust"]
+        self.assertIn("languages", rust)
+        self.assertNotIn("incremental", rust)
 
-        descriptor = self._descriptor("python", python)
+        descriptor = self._descriptor("rust", rust)
 
         self.assertFalse(descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["incremental"])
 
@@ -114,10 +115,11 @@ class PackageExtensionTests(unittest.TestCase):
     def test_an_extension_without_the_flag_writes_no_workspace_key(self) -> None:
         """An absent registry flag means the guest must not claim this capability."""
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        python = registry["extensions"]["python"]
-        self.assertNotIn("workspace_discovery", python)
+        rust = registry["extensions"]["rust"]
+        self.assertIn("languages", rust)
+        self.assertNotIn("workspace_discovery", rust)
 
-        descriptor = self._descriptor("python", python)
+        descriptor = self._descriptor("rust", rust)
 
         self.assertNotIn("workspace", descriptor["artifacts"][0]["claims"]["capabilities"])
 

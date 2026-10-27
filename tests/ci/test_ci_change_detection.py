@@ -52,10 +52,10 @@ def _seed_repository(repository: Path) -> None:
         encoding="utf-8",
     )
     (repository / ".github" / "extensions.toml").write_text(
-        "[extensions.python]\npackage = 'morphir-python-binding'\n", encoding="utf-8"
+        "[extensions.rust]\npackage = 'morphir-rust-binding'\n", encoding="utf-8"
     )
-    (repository / "crates" / "morphir-python-binding" / "src").mkdir(parents=True)
-    (repository / "crates" / "morphir-python-binding" / "src" / "lib.rs").write_text("", encoding="utf-8")
+    (repository / "crates" / "morphir-rust-binding" / "src").mkdir(parents=True)
+    (repository / "crates" / "morphir-rust-binding" / "src" / "lib.rs").write_text("", encoding="utf-8")
     (repository / "README.md").write_text("base\n", encoding="utf-8")
     (repository / "Cargo.lock").write_text("base\n", encoding="utf-8")
 
@@ -124,7 +124,7 @@ class ClassifierCliTests(unittest.TestCase):
             _init_repository(repository)
             _seed_repository(repository)
             base = _commit(repository, "base")
-            (repository / "crates" / "morphir-python-binding" / "src" / "lib.rs").write_text("// change\n", encoding="utf-8")
+            (repository / "crates" / "morphir-rust-binding" / "src" / "lib.rs").write_text("// change\n", encoding="utf-8")
             head = _commit(repository, "head")
             output = Path(temporary) / "github-output"
             fake_cargo = _fake_cargo(Path(temporary) / "bin")
@@ -134,9 +134,9 @@ class ClassifierCliTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             lines = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
             self.assertEqual("false", lines["all"])
-            self.assertEqual("-p morphir-python-binding", lines["cargo_packages"])
+            self.assertEqual("-p morphir-rust-binding", lines["cargo_packages"])
             self.assertEqual("false", lines["job_kit_conformance"])
-            self.assertEqual([{"id": "python", "package": "morphir-python-binding"}], json.loads(lines["extensions"]))
+            self.assertEqual([{"id": "rust", "package": "morphir-rust-binding"}], json.loads(lines["extensions"]))
 
     def test_cli_writes_all_true_for_readme_plus_lockfile(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

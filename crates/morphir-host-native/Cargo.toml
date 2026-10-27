@@ -12,7 +12,7 @@ description = "Native channels for the Morphir extension host: processes, Extism
 morphir-common = { path = "../morphir-common" }
 morphir-core = { path = "../morphir-core", version = "0.2.0" }
 morphir-distribution = { path = "../morphir-distribution" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.2.0" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.3.0" }
 morphir-host = { path = "../morphir-host" }
 morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
 async-trait = "0.1"

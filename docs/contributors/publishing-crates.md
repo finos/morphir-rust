@@ -20,7 +20,7 @@ which publishes that one crate.
 | `morphir-json` | `0.2.0` | no workspace crates |
 | `morphir-core` | `0.2.0` | `morphir-json` |
 | `morphir-workspace` | `0.2.0` | `morphir-config` |
-| `morphir-extension-sdk` | `0.2.0` | `morphir-workspace`, `morphir-json` |
+| `morphir-extension-sdk` | `0.3.0` | `morphir-workspace`, `morphir-json` |
 | `morphir-projection` | `0.1.0` | `morphir-core` |
 
 The other crates in the workspace are not on crates.io. They keep the shared

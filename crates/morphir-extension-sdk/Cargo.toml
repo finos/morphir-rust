@@ -2,7 +2,7 @@
 name = "morphir-extension-sdk"
 # Published on its own 0.x.y line, not the shared workspace version.
 # See docs/contributors/publishing-crates.md.
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

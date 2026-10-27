@@ -86,6 +86,79 @@ bd list --label repo:morphir-rust --all   # everything, including closed
 bd show <id> --long                       # description, design, notes and comments
 ```
 
+## Specs and Changes with OpenSpec
+
+[OpenSpec](https://github.com/Fission-AI/OpenSpec) is a spec-driven change workflow. A change in
+`openspec/changes/<name>/` holds `proposal.md`, `design.html`, spec deltas and `tasks.md`. Archiving the change
+merges its deltas into `openspec/specs/`. OpenSpec changes and specs are committed. The setup matches
+finos/morphir-moonbit.
+
+### Skills and CLI
+
+The skills are `openspec-explore`, `openspec-propose`, `openspec-apply-change`, `openspec-update-change`,
+`openspec-sync-specs` and `openspec-archive-change`. Invoke them as `/openspec-propose`, or as `$openspec-propose`
+in Codex. `openspec init` wrote one copy for each agent:
+
+| Agent | Skill directory |
+|---|---|
+| Claude Code | `.claude/skills/openspec-*/` |
+| Codex, Antigravity and other `.agents` readers | `.agents/skills/openspec-*/` |
+| GitHub Copilot | `.github/skills/openspec-*/` |
+| Cursor | `.cursor/skills/openspec-*/` |
+| Grok Build | `.grok/skills/openspec-*/` |
+| Devin Desktop (formerly Windsurf) | `.devin/skills/openspec-*/` |
+| Gemini CLI | `.gemini/skills/openspec-*/` |
+| OpenCode | `.opencode/skills/openspec-*/` |
+
+The Copilot cloud coding-agent files are not installed, and `openspec/config.yaml` records `cloudAgent: false`.
+
+The skills run the `openspec` CLI. Install the version that generated them, which each skill records as
+`generatedBy` (now 1.14.3): `mise use -g npm:@fission-ai/openspec@1.14.3`. Do not add it to `mise.toml`:
+`mise run` installs every missing tool in that file, so each CI job would download it.
+
+The CLI generates the skills: do not edit them, and do not replace them with links. To change the version, install
+the new version, run `openspec update`, and commit the regenerated files.
+
+### Specs and plans are HTML documents
+
+Specs, plans and reports that a person reviews are HTML pages, not Markdown.
+
+- Start from [docs/templates/agent-document.html](docs/templates/agent-document.html). Keep its `<head>` as it is,
+  so every document looks the same and the effort goes into content.
+- Reference styles and scripts; do not embed them. They are files in `docs/templates/assets/`: the document
+  styles, the highlight.js setup and highlight.js 11.12.0 (vendored from `@highlightjs/cdn-assets`, with its
+  license and an `UPSTREAM.md` record). A document holds only its content, so an agent that reads it does not read
+  the CSS and JavaScript too. In a copy of the template, change each `assets/` prefix to the relative path from the
+  copy to `docs/templates/assets/`. Add no `<style>` element, no inline script, no other script and no external
+  resource. If the files do not load, the page shows unstyled content and plain code blocks.
+- Put code in `<pre><code class="language-rust">` (also `toml`, `json`, `yaml`, `bash`, `diff`).
+- The Jekyll site excludes `docs/templates/`, so the template is not a site page.
+
+OpenSpec changes follow this rule only for the design. The `openspec` CLI parses `proposal.md`, `tasks.md` and the
+`spec.md` files, so those stay Markdown: they are the contract the tool validates and merges, not the review page.
+The project schema `openspec/schemas/html-design/`, which `openspec/config.yaml` selects, makes each change write
+`design.html` from a copy of the template. Its `<head>` references the assets from `openspec/changes/<name>/`, and
+the archive guidance in `openspec/config.yaml` adds one `../` when the change moves to `openspec/changes/archive/`.
+When you change the template's `<head>`, copy the change into
+`openspec/schemas/html-design/templates/design.html`. The generated `openspec-*` skills say `design.md`; in this
+repository that file is `design.html`.
+
+### OpenSpec changes in beads
+
+Beads track OpenSpec changes:
+
+- Each change has an epic bead labelled `repo:morphir-rust` whose spec id is `openspec/changes/<name>`. The
+  proposal's `## Beads` section names it, with related beads, and the design's meta line names it too.
+- Each `## N.` group in `tasks.md` is a child task bead, with its id at the end of the group heading, for example
+  `## 1. Setup (morphir-abcd.1)`. Checkboxes do not get their own beads.
+- A requirement that comes from a bead ends with `(bead: <id>)`.
+- Apply claims a group bead when work on the group starts and closes it, with the commit range and the real test
+  result, when every checkbox of the group is done. Archive sets the epic's spec id to the archived path and closes
+  the epic.
+
+The `html-design` schema instructions and the archive guidance in `openspec/config.yaml` give the `bd` commands.
+Run `bd dolt push` after each bead change.
+
 ## Technology Stack
 
 ### Core Technologies

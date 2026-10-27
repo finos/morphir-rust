@@ -72,3 +72,5 @@ permalink: pretty
 exclude:
   - Gemfile
   - Gemfile.lock
+  # Agent document template and its assets: copied by agents, not site pages
+  - templates/

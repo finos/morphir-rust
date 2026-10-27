@@ -35,6 +35,7 @@ exact = [
 prefixes = [
   ".beads/",
   "docs/",
+  "openspec/",
   ".github/ISSUE_TEMPLATE/",
   ".github/PULL_REQUEST_TEMPLATE/",
 ]

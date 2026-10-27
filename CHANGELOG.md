@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- OpenSpec for the supported agents, with the project schema `html-design`: a
+  change's design is an HTML review page built from the new agent document
+  template (`docs/templates/`, with vendored highlight.js 11.12.0), and each
+  change links to an epic bead, with one task bead per `tasks.md` group. See
+  "Specs and Changes with OpenSpec" in `AGENTS.md`.
 - An opaque `morphir_common::file_identity::FileIdentity` retains the actual
   file owner for equality without exposing a reader or primitive identifier.
   Source observations, native root reads and capability-bound devkit discovery

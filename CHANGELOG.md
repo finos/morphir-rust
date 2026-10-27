@@ -214,6 +214,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#946).
 
 ### Changed
+- `morphir-extension-sdk` is `0.3.0`, a breaking release for crates.io: the
+  public `InitializeParams` and `ExtensionCapabilities` structs gained the
+  `model_transport` field, so Rust struct literals must set it (use `None` for
+  legacy behavior). The SDK now depends on `morphir-json` `0.2.0`, which is
+  published to crates.io first. Workspace crates that depend on the SDK now
+  require `0.3.0`.
 - Refactored devkit configuration loading into private ordered pure stages,
   retaining source precedence, per-layer normalization, provenance and existing
   project selection. Filesystem selection remains in the legacy loader.

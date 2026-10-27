@@ -10,7 +10,7 @@ description = "Portable Morphir extension host: MEP handshake, sessions and chan
 
 [dependencies]
 morphir-core = { path = "../morphir-core", version = "0.2.0" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.2.0" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.3.0" }
 morphir-workspace = { path = "../morphir-workspace", version = "0.2.0" }
 async-lock = "3"
 async-trait = "0.1"

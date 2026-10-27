@@ -12,8 +12,9 @@ feature is implemented for contributor testing but has not produced a public
 release.
 
 For an extension implementing both compilation and generation, see the
-[Python ADT extension](python-extension.md). It uses the same SDK and MEP
-transport for both capabilities.
+[Rust binding](https://github.com/finos/morphir-rust/tree/main/crates/morphir-rust-binding).
+It uses the same SDK and MEP transport for both capabilities. The Python
+extension now lives in [finos/morphir-python](https://github.com/finos/morphir-python).
 
 ## 1. Start from the reference backend
 

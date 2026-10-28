@@ -2,6 +2,7 @@
 //!
 //! This module provides the runtime container for loaded extensions.
 
+use crate::extism::RestrictedExtismPolicy;
 use crate::extism::host_functions::MorphirHostFunctions;
 use crate::process::MAX_MEP_PAYLOAD_BYTES;
 use extism::{Manifest, Plugin, PluginBuilder, Wasm};
@@ -64,9 +65,53 @@ pub struct ExtensionContainer {
     /// Request ID counter
     request_id: std::sync::atomic::AtomicU64,
     response_policy: GuestResponsePolicy,
+    execution_policy: Option<RestrictedExtismPolicy>,
 }
 
 impl ExtensionContainer {
+    /// Instantiate verified guest bytes with explicit denied ambient access and
+    /// tighter legacy limits, including metadata discovery before its host copy.
+    /// WASI is available without preopened paths or inherited environment.
+    /// The surrounding host should not set `EXTISM_ENABLE_WASI_OUTPUT`, which
+    /// Extism itself reserves for optional debug stdout/stderr forwarding.
+    pub fn from_bytes_with_execution_policy(
+        id: &str,
+        wasm_bytes: &[u8],
+        host_funcs: MorphirHostFunctions,
+        policy: RestrictedExtismPolicy,
+    ) -> Result<Self, HostError> {
+        Self::load(
+            id,
+            wasm_bytes,
+            host_funcs,
+            policy.call_timeout,
+            policy.fuel_per_call,
+            GuestResponsePolicy::Legacy,
+            Some(policy),
+        )
+    }
+
+    /// Instantiate a restricted guest on a blocking discovery worker. Dropping
+    /// this future does not terminate the worker; callers retain session/process
+    /// supervision in addition to the engine's finite call limits.
+    pub async fn from_bytes_with_execution_policy_async<B>(
+        id: String,
+        wasm_bytes: B,
+        host_funcs: MorphirHostFunctions,
+        policy: RestrictedExtismPolicy,
+    ) -> Result<Self, HostError>
+    where
+        B: AsRef<[u8]> + Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            Self::from_bytes_with_execution_policy(&id, wasm_bytes.as_ref(), host_funcs, policy)
+        })
+        .await
+        .map_err(|error| {
+            HostError::Invalid(format!("Extension discovery worker failed: {error}"))
+        })?
+    }
+
     /// Create a new extension container from a WASM file
     pub fn new(
         id: &str,
@@ -212,14 +257,42 @@ impl ExtensionContainer {
         fuel_limit: u64,
         response_policy: GuestResponsePolicy,
     ) -> Result<Self, HostError> {
-        let memory_bytes = match response_policy {
-            GuestResponsePolicy::Legacy => MAX_WASM_MEMORY_BYTES,
-            GuestResponsePolicy::GeneratedArtifacts => MAX_ARTIFACT_WASM_MEMORY_BYTES,
-        };
+        Self::load(
+            id,
+            wasm_bytes,
+            host_funcs,
+            execution_timeout,
+            fuel_limit,
+            response_policy,
+            None,
+        )
+    }
+
+    fn load(
+        id: &str,
+        wasm_bytes: &[u8],
+        host_funcs: MorphirHostFunctions,
+        execution_timeout: Duration,
+        fuel_limit: u64,
+        response_policy: GuestResponsePolicy,
+        execution_policy: Option<RestrictedExtismPolicy>,
+    ) -> Result<Self, HostError> {
+        let memory_bytes =
+            execution_policy
+                .map(|p| p.memory_bytes)
+                .unwrap_or(match response_policy {
+                    GuestResponsePolicy::Legacy => MAX_WASM_MEMORY_BYTES,
+                    GuestResponsePolicy::GeneratedArtifacts => MAX_ARTIFACT_WASM_MEMORY_BYTES,
+                });
         // Create manifest with memory limits
-        let manifest = Manifest::new([Wasm::data(wasm_bytes)])
+        let mut manifest = Manifest::new([Wasm::data(wasm_bytes)])
             .with_memory_max(wasm_pages_for_bytes(memory_bytes)?)
             .with_timeout(execution_timeout);
+        if execution_policy.is_some() {
+            manifest = manifest
+                .with_allowed_hosts(std::iter::empty())
+                .with_allowed_paths(std::iter::empty());
+        }
 
         // Create plugin with host functions
         let mut plugin = PluginBuilder::new(manifest)
@@ -233,8 +306,17 @@ impl ExtensionContainer {
         let info: ExtensionInfo = {
             let output = plugin
                 .call::<&[u8], &[u8]>("morphir_extension_info", &[])
-                .map_err(|e| HostError::Invalid(format!("Failed to get extension info: {}", e)))?;
+                .map_err(|e| {
+                    HostError::Invalid(if execution_policy.is_some() {
+                        format!("Failed to get extension info: {e:#}")
+                    } else {
+                        format!("Failed to get extension info: {e}")
+                    })
+                })?;
             ensure_payload_within_limit("response", output.len())?;
+            if let Some(policy) = execution_policy {
+                policy.check_response(output.len())?;
+            }
             serde_json::from_slice(output)?
         };
 
@@ -246,6 +328,7 @@ impl ExtensionContainer {
             info,
             request_id: std::sync::atomic::AtomicU64::new(1),
             response_policy,
+            execution_policy,
         })
     }
 
@@ -301,7 +384,10 @@ impl ExtensionContainer {
         &self,
         request: &ExtensionRequest,
     ) -> Result<Vec<u8>, HostError> {
-        let bytes = serde_json::to_vec(request)?;
+        let bytes = match self.execution_policy {
+            Some(policy) => policy.encode_request(request)?,
+            None => serde_json::to_vec(request)?,
+        };
         let limit = self.response_policy.response_limit(&request.method);
         self.call_raw_with_response_limit("handle", &bytes, limit)
             .await
@@ -314,14 +400,27 @@ impl ExtensionContainer {
         limit: ResponseByteLimit,
     ) -> Result<Vec<u8>, HostError> {
         ensure_payload_within_limit("request", input.len())?;
+        if let Some(policy) = self.execution_policy {
+            policy.check_request(input.len())?;
+        }
         let mut plugin = Arc::clone(&self.plugin).lock_owned().await;
         let func_name = func_name.to_owned();
         let input = input.to_vec();
+        let execution_policy = self.execution_policy;
         tokio::task::spawn_blocking(move || {
             let output = plugin
                 .call::<&[u8], &[u8]>(&func_name, &input)
-                .map_err(|e| HostError::Invalid(format!("Plugin call failed: {}", e)))?;
+                .map_err(|e| {
+                    HostError::Invalid(if execution_policy.is_some() {
+                        format!("Plugin call failed: {e:#}")
+                    } else {
+                        format!("Plugin call failed: {e}")
+                    })
+                })?;
             limit.check_len(output.len())?;
+            if let Some(policy) = execution_policy {
+                policy.check_response(output.len())?;
+            }
             Ok(output.to_vec())
         })
         .await

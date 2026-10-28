@@ -195,7 +195,7 @@ impl Channel for HttpChannel {
         let id = request.id;
         let method = request.method;
         let Value::Object(params) = request.params else {
-            self.reply = Some(ExtensionResponse::error(
+            self.reply = Some(ExtensionResponse::error_with_id(
                 id,
                 RpcError::invalid_params("Extension request parameters must be an object"),
             ));
@@ -209,13 +209,13 @@ impl Channel for HttpChannel {
             .await
         {
             Ok(result) => {
-                let reply = ExtensionResponse::success(id, result).map_err(|error| {
+                let reply = ExtensionResponse::success_with_id(id, result).map_err(|error| {
                     indeterminate(HostError::from(error).to_string(), ChannelCause::Json)
                 })?;
                 self.shutdown_acknowledged = method == methods::SHUTDOWN;
                 reply
             }
-            Err(ClientError::Call(error)) => ExtensionResponse::error(
+            Err(ClientError::Call(error)) => ExtensionResponse::error_with_id(
                 id,
                 RpcError {
                     code: error.code(),

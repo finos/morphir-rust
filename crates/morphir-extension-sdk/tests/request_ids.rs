@@ -92,3 +92,24 @@ fn initialized_sessions_preserve_ids_on_success_shutdown_and_errors() {
         }
     }
 }
+
+#[test]
+fn canonical_parameter_free_requests_use_empty_named_parameters() {
+    let native = NativeExtension::frontend_only(DocFrontend).unwrap();
+    let guest = __ProtocolSession::new();
+    for id in [json!(u64::MAX), json!("python-λ-1")] {
+        let request: ExtensionRequest = serde_json::from_value(json!({
+            "jsonrpc": "2.0", "id": id, "method": methods::PING,
+        }))
+        .expect("canonical transcripts omit parameters for unit methods");
+        assert_eq!(request.params, json!({}));
+        let native_response = native.protocol().handle(request.clone());
+        let guest_response = guest.dispatch(&request, || {
+            __dispatch_request::<DocFrontend>(&request, &[], &[ExtensionType::Frontend])
+        });
+        for response in [native_response, guest_response] {
+            assert!(response.error.is_none());
+            assert_eq!(serde_json::to_value(response).unwrap()["id"], id);
+        }
+    }
+}

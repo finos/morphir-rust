@@ -115,10 +115,17 @@ pub struct ExtensionRequest {
     /// Method name
     pub method: String,
     /// Method parameters
-    #[serde(deserialize_with = "crate::literal_json::deserialize")]
+    #[serde(
+        default = "empty_params",
+        deserialize_with = "crate::literal_json::deserialize"
+    )]
     pub params: serde_json::Value,
     /// Request ID
     pub id: RequestId,
+}
+
+fn empty_params() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 impl ExtensionRequest {

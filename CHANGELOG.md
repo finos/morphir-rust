@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RequestId` instead of `u64`, a breaking Rust API change; numeric JSON bytes
   remain unchanged. Struct literals should use `numeric_id.into()`; callers
   forwarding an opaque ID should use the `*_with_id` response constructors.
-  Fixes #316.
+  Parameter-free requests also accept omitted `params`, matching the canonical
+  MEP transcripts. Fixes #316.
 - An opt-in `RestrictedExtismPolicy` for shared native hosts denies HTTP and
   WASI workspace access, inherits no guest environment, and validates tighter
   legacy memory, per-call fuel/deadline and encoded request/response bounds.

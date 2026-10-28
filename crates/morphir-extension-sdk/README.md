@@ -18,7 +18,9 @@ use morphir_extension_sdk::prelude::*; // Extension, ExtensionInfo, ExtensionCap
 identifier without coercion. Numeric JSON encoding remains unchanged, including
 the full `u64` range. String `"007"` and numeric `7` are different identifiers.
 Null, booleans, arrays, objects, negative and fractional numbers are not request
-identifiers. Notifications still omit the identifier entirely.
+identifiers. Notifications still omit the identifier entirely. Parameter-free requests
+may omit `params`, as the canonical MEP transcripts do; the decoder supplies
+an empty named-parameter object.
 
 The public request and response `id` fields now use `RequestId`, so 0.4.0 is a
 breaking Rust API release. Existing numeric `ExtensionRequest::new` and

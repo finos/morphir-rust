@@ -66,7 +66,7 @@ impl DescribeFixture {
             _ => None,
         };
         if let Some(error) = error {
-            *response = ExtensionResponse::error(request.id, error);
+            *response = ExtensionResponse::error_with_id(request.id.clone(), error);
             return;
         }
         let result = response.result.as_mut().unwrap();

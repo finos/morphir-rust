@@ -227,7 +227,7 @@ fn malformed_callback_response_does_not_initialize_guest() {
             let mut response =
                 __dispatch_request::<DocFrontend>(&init, &[], &[ExtensionType::Frontend]);
             if bad_id {
-                response.id += 1;
+                response.id = "unexpected-response-id".into();
             } else {
                 response.jsonrpc = "1.0".into();
             }

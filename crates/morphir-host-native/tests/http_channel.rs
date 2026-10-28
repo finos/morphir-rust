@@ -14,7 +14,8 @@
 mod support;
 
 use morphir_extension_sdk::GenerateRequest;
-use morphir_host::{CallError, ChannelCause, ChannelState, HostError, Session};
+use morphir_extension_sdk::protocol::{ExtensionRequest, RequestId, methods};
+use morphir_host::{CallError, Channel, ChannelCause, ChannelState, HostError, Outgoing, Session};
 use morphir_host_native::http::{HttpChannel, HttpEndpoint};
 use serde_json::json;
 use std::path::PathBuf;
@@ -232,4 +233,45 @@ async fn marks_the_session_indeterminate_when_the_daemon_exceeds_the_request_tim
         .wait()
         .await
         .expect("the hung daemon should reap");
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-http-backend executable"]
+async fn preserves_opaque_request_ids_in_http_success_and_error_responses() {
+    let mut daemon = FixtureDaemon::start(&[]).await;
+    let mut channel = connect(daemon.endpoint(Duration::from_secs(2)));
+    for id in [
+        RequestId::from(u64::MAX),
+        RequestId::from("python-λ-1"),
+        RequestId::from("007"),
+    ] {
+        for (method, params, error) in [
+            (
+                methods::INITIALIZE,
+                json!({"protocolVersions":["0.1"],"host":{"name":"test","version":"1"}}),
+                false,
+            ),
+            (methods::INITIALIZE, json!(null), true),
+            ("missing.method", json!({}), true),
+        ] {
+            channel
+                .send(Outgoing::Request(
+                    ExtensionRequest::new_with_id(method, params, id.clone()).unwrap(),
+                ))
+                .await
+                .unwrap();
+            let response = channel.receive().await.unwrap();
+            assert_eq!(response.id, id);
+            assert_eq!(response.error.is_some(), error);
+        }
+    }
+    channel
+        .send(Outgoing::Request(
+            ExtensionRequest::new_with_id(methods::SHUTDOWN, json!({}), "shutdown".into()).unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(channel.receive().await.unwrap().error.is_none());
+    channel.close().await.unwrap();
+    daemon.wait_for_exit().await;
 }

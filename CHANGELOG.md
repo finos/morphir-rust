@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- An opt-in `RestrictedExtismPolicy` for shared native hosts denies HTTP and
+  WASI workspace access, inherits no guest environment, and validates tighter
+  legacy memory, per-call fuel/deadline and encoded request/response bounds.
+  Discovery uses the same limits, responses are bounded before host copies,
+  and request serialization stops at its byte limit. Existing constructors
+  and generated-artifact budgets remain unchanged.
 - OpenSpec for the supported agents, with the project schema `html-design`: a
   change's design is an HTML review page built from the new agent document
   template (`docs/templates/`, with vendored highlight.js 11.12.0), and each

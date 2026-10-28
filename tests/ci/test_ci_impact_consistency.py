@@ -74,11 +74,11 @@ class ImpactConsistencyTests(unittest.TestCase):
         self.assertIn("rust", all_extensions)
         cases = [
             ("crates/morphir-rust-binding/src/lib.rs", ("rust",)),
-            ("crates/morphir-python-binding/src/lib.rs", ("python",)),
+            ("crates/morphir-openapi-extension/src/lib.rs", ("openapi",)),
             ("crates/morphir-gleam-binding/src/lib.rs", ("gleam",)),
             ("README.md", ()),
             (".mise/tasks/extension/artifact/rust", ("rust",)),
-            (".mise/tasks/extension/artifact/python", ("python",)),
+            (".mise/tasks/extension/artifact/openapi", ("openapi",)),
             (".mise/tasks/extension/artifact/gleam", ("gleam",)),
             (".github/extensions.toml", all_extensions),
             ("scripts/package_extension.py", all_extensions),

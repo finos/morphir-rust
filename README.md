@@ -44,7 +44,6 @@ This table lists the crates in the Cargo workspace.
 | `morphir-openapi-extension` | OpenAPI and JSON Schema backend that projects Morphir v3/v4 specifications to OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents. |
 | `morphir-package` | Experimental model-package normalization, digests, offline schema validation, and closed Library-set verification. |
 | `morphir-projection` | Shared Morphir IR normalization that backend extensions project from. |
-| `morphir-python-binding` | Ruff-based frontend and backend for a Morphir IR v4 subset of Python ADTs, tuples and conditional functions, available natively and as a WebAssembly extension. |
 | `morphir-runtime` | Reserved runtime crate; currently a minimal scaffold. |
 | `morphir-rust-binding` | Syn-based Rust frontend and code generator for types, conditional functions, exhaustive pattern matching, calls and typed lambdas in Morphir IR v3 and v4, available natively and as a WebAssembly extension. |
 | `morphir-tests` | Shared acceptance and Cucumber test harness. |
@@ -75,8 +74,12 @@ This table lists independently releasable extensions. Registrations come from
 | `morphir-elm-native` | `morphir-elm-binding` | `0.2.0` | Compiles Elm type declarations to IR v3 and v4 and generates Elm back; incremental. |
 | `morphir-gleam` | `morphir-gleam-binding` | `0.3.0` | Native Gleam frontend and backend using the official Gleam parser; IR v3/v4 types and incremental compilation. |
 | `morphir-openapi` | `morphir-openapi-extension` | `0.2.0` | Generates OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents from Morphir specifications. |
-| `morphir-python` | `morphir-python-binding` | `0.4.0` | Compiles and generates Python ADTs, fixed tuples, conditional functions, typed calls and unary lambdas across multiple modules, using IR v3 or v4. |
 | `morphir-rust` | `morphir-rust-binding` | `0.3.0` | Compiles and generates Rust types, conditional functions, pattern matches, calls and typed lambdas using IR v3 and v4. |
+
+The Python extension (crate `morphir-python-binding`, bundle `morphir-python`) is now
+maintained and released from [finos/morphir-python](https://github.com/finos/morphir-python).
+The historical `extension/python/v0.1.0` to `extension/python/v0.4.0` bundles remain
+available in the [morphir-rust releases](https://github.com/finos/morphir-rust/releases).
 
 ### Read claims from a built extension
 

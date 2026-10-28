@@ -89,7 +89,7 @@ class WindowsSourceIdentityTests(unittest.TestCase):
                 self.assertFalse(plan.all)
                 self.assertIn("morphir-common", plan.crates)
                 self.assertTrue(plan.jobs["kit-conformance"])
-        for path in ("README.md", "docs/example.md", "crates/morphir-python-binding/src/lib.rs", "crates/morphir-devkit/src/lib.rs"):
+        for path in ("README.md", "docs/example.md", "crates/morphir-rust-binding/src/lib.rs", "crates/morphir-devkit/src/lib.rs"):
             with self.subTest(path=path):
                 plan = classify.plan_changes([path], self.impact, self.workspace, ())
                 self.assertFalse(plan.all)

@@ -288,6 +288,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#921).
 
 ### Removed
+- **Breaking:** The Python extension crate `morphir-python-binding` (bundle
+  `morphir-python`, short id `python`) moved to
+  [finos/morphir-python](https://github.com/finos/morphir-python), which now
+  maintains and releases it. This workspace no longer builds, tests or
+  releases it: the crate, its `.github/extensions.toml` registration, the
+  `extension:artifact:python` task, the `python` case of `test:cli-release`,
+  the CI step for generated Python functions and the Ruff workspace
+  dependencies are gone, and `docs/tutorials/python-extension.md` is now a
+  pointer. Anyone who built the crate from morphir-rust must build it from
+  finos/morphir-python. The `extension/python/v0.1.0` to
+  `extension/python/v0.4.0` releases stay published here.
 - From `morphir-daemon`, every duplicate of `morphir-host` and
   `morphir-host-native`, with the `activation`, `connected`, `container`,
   `host_functions`, `process`, `protocol`, `registry` and `session` modules

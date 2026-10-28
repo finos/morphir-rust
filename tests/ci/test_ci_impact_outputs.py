@@ -20,21 +20,21 @@ class OutputTests(unittest.TestCase):
 
     def test_render_github_for_a_leaf_change(self) -> None:
         plan = classify.plan_changes(
-            ["crates/morphir-python-binding/src/lib.rs"], self.config, self.workspace, self.extensions
+            ["crates/morphir-rust-binding/src/lib.rs"], self.config, self.workspace, self.extensions
         )
         rendered = outputs.render_github(plan)
         lines = dict(line.split("=", 1) for line in rendered.splitlines())
 
         self.assertEqual("false", lines["all"])
-        self.assertEqual(["morphir-python-binding"], json.loads(lines["crates"]))
-        self.assertEqual("-p morphir-python-binding", lines["cargo_packages"])
+        self.assertEqual(["morphir-rust-binding"], json.loads(lines["crates"]))
+        self.assertEqual("-p morphir-rust-binding", lines["cargo_packages"])
         self.assertEqual("true", lines["job_rust"])
         self.assertEqual("false", lines["job_kit_conformance"])
         self.assertEqual("false", lines["job_test_extism"])
         self.assertEqual("false", lines["job_lint_shell"])
         self.assertEqual("false", lines["job_docs_generated"])
         self.assertEqual(
-            [{"id": "python", "package": "morphir-python-binding"}],
+            [{"id": "rust", "package": "morphir-rust-binding"}],
             json.loads(lines["extensions"]),
         )
         self.assertTrue(rendered.endswith("\n"))

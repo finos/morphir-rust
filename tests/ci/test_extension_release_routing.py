@@ -121,7 +121,6 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
             "morphir-elm-binding": "0.1.0",
             "morphir-gleam-binding": "0.2.0",
             "morphir-openapi-extension": "0.1.0",
-            "morphir-python-binding": "0.1.0",
             "morphir-rust-binding": "0.1.0",
         }
 
@@ -130,7 +129,7 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            ["avro", "elm-native", "gleam", "openapi", "python", "rust"], release.short_ids
+            ["avro", "elm-native", "gleam", "openapi", "rust"], release.short_ids
         )
 
     def test_workspace_tag_selects_opted_in_extensions_in_sorted_order(self) -> None:

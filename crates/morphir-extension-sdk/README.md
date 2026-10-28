@@ -12,6 +12,29 @@ also compile on native targets, so a host can use them too.
 use morphir_extension_sdk::prelude::*; // Extension, ExtensionInfo, ExtensionCapabilities
 ```
 
+## Request identity in SDK 0.4.0
+
+`protocol::RequestId` preserves the canonical non-negative integer or string
+identifier without coercion. Numeric JSON encoding remains unchanged, including
+the full `u64` range. String `"007"` and numeric `7` are different identifiers.
+Null, booleans, arrays, objects, negative and fractional numbers are not request
+identifiers. Notifications still omit the identifier entirely.
+
+The public request and response `id` fields now use `RequestId`, so 0.4.0 is a
+breaking Rust API release. Existing numeric `ExtensionRequest::new` and
+`ExtensionResponse::success`, `error` and `from_extension_error` constructors
+retain their `u64` arguments. Use `new_with_id` and the corresponding response
+`*_with_id` constructors when forwarding an opaque identifier. Numeric struct
+literals should use `id: numeric_id.into()`.
+
+```rust
+use morphir_extension_sdk::protocol::{ExtensionRequest, RequestId, methods};
+let request = ExtensionRequest::new_with_id(
+    methods::PING, serde_json::json!({}), RequestId::from("python-λ-1"),
+).unwrap();
+assert_eq!(serde_json::to_value(request).unwrap()["id"], "python-λ-1");
+```
+
 ## Opt-in MorphirModel transport
 
 The SDK implements the exact MEP `0.2.0-draft.1` model-operation draft alongside

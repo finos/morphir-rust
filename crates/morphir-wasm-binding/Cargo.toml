@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Extension SDK
-morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.3.0" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", version = "0.4.0" }
 
 # WASM plugin development
 extism-pdk = "1.2"

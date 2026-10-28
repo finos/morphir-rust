@@ -39,13 +39,13 @@ impl SentLog {
     }
 
     /// The id of every request sent, in order. Notifications are skipped.
-    pub fn ids(&self) -> Vec<u64> {
+    pub fn ids(&self) -> Vec<morphir_extension_sdk::protocol::RequestId> {
         self.messages
             .lock()
             .expect("the log is never poisoned")
             .iter()
             .filter_map(|message| match message {
-                Outgoing::Request(request) => Some(request.id),
+                Outgoing::Request(request) => Some(request.id.clone()),
                 Outgoing::Notification(_) => None,
             })
             .collect()

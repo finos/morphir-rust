@@ -4,6 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod request_id;
+pub use request_id::RequestId;
+
 /// JSON-RPC version string
 pub const JSONRPC_VERSION: &str = "2.0";
 
@@ -115,12 +118,21 @@ pub struct ExtensionRequest {
     #[serde(deserialize_with = "crate::literal_json::deserialize")]
     pub params: serde_json::Value,
     /// Request ID
-    pub id: u64,
+    pub id: RequestId,
 }
 
 impl ExtensionRequest {
     /// Create a new request
     pub fn new<P: Serialize>(method: &str, params: P, id: u64) -> Result<Self, serde_json::Error> {
+        Self::new_with_id(method, params, RequestId::Numeric(id))
+    }
+
+    /// Create a request with an exact canonical numeric or string identifier.
+    pub fn new_with_id<P: Serialize>(
+        method: &str,
+        params: P,
+        id: RequestId,
+    ) -> Result<Self, serde_json::Error> {
         Ok(Self {
             jsonrpc: JSONRPC_VERSION.to_string(),
             method: method.to_string(),
@@ -174,12 +186,20 @@ pub struct ExtensionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RpcError>,
     /// Request ID this is responding to
-    pub id: u64,
+    pub id: RequestId,
 }
 
 impl ExtensionResponse {
     /// Create a success response
     pub fn success<R: Serialize>(id: u64, result: R) -> Result<Self, serde_json::Error> {
+        Self::success_with_id(RequestId::Numeric(id), result)
+    }
+
+    /// Create a successful response retaining the exact request identifier.
+    pub fn success_with_id<R: Serialize>(
+        id: RequestId,
+        result: R,
+    ) -> Result<Self, serde_json::Error> {
         Ok(Self {
             jsonrpc: JSONRPC_VERSION.to_string(),
             result: Some(serde_json::to_value(result)?),
@@ -190,6 +210,11 @@ impl ExtensionResponse {
 
     /// Create an error response
     pub fn error(id: u64, error: RpcError) -> Self {
+        Self::error_with_id(RequestId::Numeric(id), error)
+    }
+
+    /// Create an error response retaining the exact request identifier.
+    pub fn error_with_id(id: RequestId, error: RpcError) -> Self {
         Self {
             jsonrpc: JSONRPC_VERSION.to_string(),
             result: None,
@@ -200,7 +225,12 @@ impl ExtensionResponse {
 
     /// Create an error response from an extension error
     pub fn from_extension_error(id: u64, err: &crate::ExtensionError) -> Self {
-        Self::error(id, RpcError::from_extension_error(err))
+        Self::from_extension_error_with_id(RequestId::Numeric(id), err)
+    }
+
+    /// Convert an extension error while preserving canonical request identity.
+    pub fn from_extension_error_with_id(id: RequestId, err: &crate::ExtensionError) -> Self {
+        Self::error_with_id(id, RpcError::from_extension_error(err))
     }
 }
 

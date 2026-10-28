@@ -75,8 +75,8 @@ impl ProtocolSession {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(_) => {
-                return ExtensionResponse::error(
-                    request.id,
+                return ExtensionResponse::error_with_id(
+                    request.id.clone(),
                     RpcError::internal_error("Extension session lock poisoned"),
                 );
             }
@@ -92,14 +92,14 @@ impl ProtocolSession {
             Lifecycle::Shutdown => method == methods::EXIT,
         };
         if !allowed && lifecycle == Lifecycle::Initialized {
-            return ExtensionResponse::error(
-                request.id,
+            return ExtensionResponse::error_with_id(
+                request.id.clone(),
                 RpcError::invalid_request("Extension is already initialized"),
             );
         }
         if !allowed {
-            return ExtensionResponse::error(
-                request.id,
+            return ExtensionResponse::error_with_id(
+                request.id.clone(),
                 RpcError {
                     code: error_codes::NOT_INITIALIZED,
                     message: "Request is not allowed before initialization or after shutdown"
@@ -110,14 +110,17 @@ impl ProtocolSession {
         }
         if method == methods::EXIT {
             state.lifecycle = Lifecycle::Shutdown;
-            return ExtensionResponse::success(request.id, serde_json::json!({}))
+            return ExtensionResponse::success_with_id(request.id.clone(), serde_json::json!({}))
                 .expect("empty object is serializable");
         }
         if method == methods::CAPABILITIES
             && let Some(initialized) = &state.initialized
         {
-            return ExtensionResponse::success(request.id, &initialized.capabilities)
-                .expect("capabilities serialize");
+            return ExtensionResponse::success_with_id(
+                request.id.clone(),
+                &initialized.capabilities,
+            )
+            .expect("capabilities serialize");
         }
         if let Some(initialized) = &state.initialized {
             let allowed = match method {
@@ -134,8 +137,8 @@ impl ProtocolSession {
                 _ => true,
             };
             if !allowed {
-                return ExtensionResponse::error(
-                    request.id,
+                return ExtensionResponse::error_with_id(
+                    request.id.clone(),
                     RpcError {
                         code: error_codes::CAPABILITY_UNAVAILABLE,
                         message: "Operation was not advertised".into(),
@@ -147,8 +150,8 @@ impl ProtocolSession {
         let is_model = matches!(method, methods::COMPILE_MODEL | methods::GENERATE_MODEL);
         if is_model {
             let Some(model) = &state.model else {
-                return ExtensionResponse::error(
-                    request.id,
+                return ExtensionResponse::error_with_id(
+                    request.id.clone(),
                     RpcError {
                         code: error_codes::CAPABILITY_UNAVAILABLE,
                         message: "Model method was not negotiated".into(),
@@ -167,8 +170,8 @@ impl ProtocolSession {
                 .iter()
                 .any(|tuple| tuple.operation == operation)
             {
-                return ExtensionResponse::error(
-                    request.id,
+                return ExtensionResponse::error_with_id(
+                    request.id.clone(),
                     RpcError {
                         code: error_codes::CAPABILITY_UNAVAILABLE,
                         message: "Model method was not negotiated".into(),
@@ -186,16 +189,16 @@ impl ProtocolSession {
                 method,
                 &request.params,
             ) {
-                return ExtensionResponse::error(
-                    request.id,
+                return ExtensionResponse::error_with_id(
+                    request.id.clone(),
                     RpcError::invalid_params(error.to_string()),
                 );
             }
         }
         let response = dispatch();
         if response.jsonrpc != crate::protocol::JSONRPC_VERSION || response.id != request.id {
-            return ExtensionResponse::error(
-                request.id,
+            return ExtensionResponse::error_with_id(
+                request.id.clone(),
                 RpcError::internal_error("Invalid dispatch response envelope"),
             );
         }
@@ -208,14 +211,14 @@ impl ProtocolSession {
                         &request.params,
                         result,
                     ) {
-                        return ExtensionResponse::error(
-                            request.id,
+                        return ExtensionResponse::error_with_id(
+                            request.id.clone(),
                             RpcError::internal_error(error.to_string()),
                         );
                     }
                 } else {
-                    return ExtensionResponse::error(
-                        request.id,
+                    return ExtensionResponse::error_with_id(
+                        request.id.clone(),
                         RpcError::internal_error("Missing model result"),
                     );
                 }
@@ -255,8 +258,8 @@ impl ProtocolSession {
                             state.lifecycle = Lifecycle::Initialized;
                         }
                         Err(error) => {
-                            return ExtensionResponse::error(
-                                request.id,
+                            return ExtensionResponse::error_with_id(
+                                request.id.clone(),
                                 RpcError::invalid_params(error),
                             );
                         }

@@ -305,7 +305,7 @@ pub fn __dispatch_request<E: Extension + Default>(
 
     match request.method.as_str() {
         methods::DESCRIBE => dispatch_response(
-            request.id,
+            &request.id,
             dispatch_describe_with_metadata(
                 request,
                 &__extension_info::<E>(declared_types),
@@ -313,20 +313,20 @@ pub fn __dispatch_request<E: Extension + Default>(
             ),
         ),
         methods::INITIALIZE => dispatch_response(
-            request.id,
+            &request.id,
             dispatch_initialize::<E>(request, declared_types),
         ),
-        methods::PING => dispatch_response(request.id, Ok(serde_json::json!({ "ok": true }))),
+        methods::PING => dispatch_response(&request.id, Ok(serde_json::json!({ "ok": true }))),
         methods::INFO => dispatch_response(
-            request.id,
+            &request.id,
             serde_json::to_value(__extension_info::<E>(declared_types))
                 .map_err(ExtensionError::from),
         ),
         methods::CAPABILITIES => dispatch_response(
-            request.id,
+            &request.id,
             serde_json::to_value(E::capabilities()).map_err(ExtensionError::from),
         ),
-        methods::SHUTDOWN => dispatch_response(request.id, Ok(serde_json::json!({}))),
+        methods::SHUTDOWN => dispatch_response(&request.id, Ok(serde_json::json!({}))),
         _ => __dispatch_request_with(&E::default(), request, dispatchers, declared_types),
     }
 }
@@ -347,7 +347,7 @@ pub fn __dispatch_request_with<E: Extension>(
 
     match request.method.as_str() {
         methods::DESCRIBE => dispatch_response(
-            request.id,
+            &request.id,
             dispatch_describe_with_metadata(
                 request,
                 &__extension_info::<E>(declared_types),
@@ -358,21 +358,21 @@ pub fn __dispatch_request_with<E: Extension>(
             let info = __extension_info::<E>(declared_types);
             let capabilities = E::capabilities();
             dispatch_response(
-                request.id,
+                &request.id,
                 dispatch_initialize_with_metadata(request, &info, &capabilities),
             )
         }
-        methods::PING => dispatch_response(request.id, Ok(serde_json::json!({ "ok": true }))),
+        methods::PING => dispatch_response(&request.id, Ok(serde_json::json!({ "ok": true }))),
         methods::INFO => dispatch_response(
-            request.id,
+            &request.id,
             serde_json::to_value(__extension_info::<E>(declared_types))
                 .map_err(ExtensionError::from),
         ),
         methods::CAPABILITIES => dispatch_response(
-            request.id,
+            &request.id,
             serde_json::to_value(E::capabilities()).map_err(ExtensionError::from),
         ),
-        methods::SHUTDOWN => dispatch_response(request.id, Ok(serde_json::json!({}))),
+        methods::SHUTDOWN => dispatch_response(&request.id, Ok(serde_json::json!({}))),
         _ => dispatch_capability_response(extension, request, dispatchers),
     }
 }
@@ -383,11 +383,11 @@ fn dispatch_role_response(
 ) -> protocol::ExtensionResponse {
     for dispatch in dispatchers {
         if let Some(result) = dispatch(request) {
-            return dispatch_response(request.id, result);
+            return dispatch_response(&request.id, result);
         }
     }
-    protocol::ExtensionResponse::error(
-        request.id,
+    protocol::ExtensionResponse::error_with_id(
+        request.id.clone(),
         protocol::RpcError::method_not_found(&request.method),
     )
 }
@@ -410,7 +410,7 @@ pub(crate) fn dispatch_request_with_roles(
         _ => return dispatch_role_response(request, dispatchers),
     };
 
-    dispatch_response(request.id, result)
+    dispatch_response(&request.id, result)
 }
 
 fn dispatch_capability_response<E>(
@@ -419,9 +419,9 @@ fn dispatch_capability_response<E>(
     dispatchers: &[DispatchFn<E>],
 ) -> protocol::ExtensionResponse {
     match dispatch_capability_request(extension, request, dispatchers) {
-        Some(result) => dispatch_response(request.id, result),
-        None => protocol::ExtensionResponse::error(
-            request.id,
+        Some(result) => dispatch_response(&request.id, result),
+        None => protocol::ExtensionResponse::error_with_id(
+            request.id.clone(),
             protocol::RpcError::method_not_found(&request.method),
         ),
     }
@@ -438,7 +438,7 @@ fn dispatch_capability_request<E>(
 }
 
 fn dispatch_response(
-    request_id: u64,
+    request_id: &protocol::RequestId,
     result: std::result::Result<serde_json::Value, ExtensionError>,
 ) -> protocol::ExtensionResponse {
     match result {
@@ -446,9 +446,11 @@ fn dispatch_response(
             jsonrpc: "2.0".to_string(),
             result: Some(value),
             error: None,
-            id: request_id,
+            id: request_id.clone(),
         },
-        Err(error) => protocol::ExtensionResponse::from_extension_error(request_id, &error),
+        Err(error) => {
+            protocol::ExtensionResponse::from_extension_error_with_id(request_id.clone(), &error)
+        }
     }
 }
 

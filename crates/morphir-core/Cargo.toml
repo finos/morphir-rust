@@ -30,7 +30,7 @@ serde = { version = "1.0", features = ["derive"] }
 # `arbitrary_precision` keeps a number's lexeme, which a DocumentLiteral carries verbatim.
 # `unbounded_depth` lets the JSON reader turn off serde_json's own 128-level recursion limit so
 # the nesting ceiling it reports is the profile's, not the parser's.
-serde_json = { version = "1.0", features = [
+serde_json = { version = "1.0.152", features = [
     "preserve_order",
     "arbitrary_precision",
     "unbounded_depth",

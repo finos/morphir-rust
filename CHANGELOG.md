@@ -354,6 +354,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `ProcessChild::read_within`, or a `ProcessChannel`.
 
 ### Fixed
+- The YAML reader keeps the sign of `-0`: the stored number lexeme is now `-0`,
+  as in the source. `morphir-core` requires `serde_json` 1.0.152, the first
+  release whose arbitrary-precision scanner preserves it.
 - Concurrent first cache-maintenance saves and mutation leases share one
   coordination file without macOS `NotFound` failures. Atomic creation and
   existing-file opens retain directory confinement and no-follow checks.

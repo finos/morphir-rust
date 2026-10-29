@@ -234,13 +234,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#946).
 
 ### Changed
-- Renovate groups updates by risk and opens or refreshes its PRs on Mondays
-  (UTC). GitHub Actions, mise tools, npm packages and docs gems share one
-  `tooling` PR, with their major updates in `major-tooling`; Cargo updates keep
-  their patch, minor and major groups; the gleam-core digest is monthly. The
-  `wasm-bindgen-cli` version in the workspace-wasm task now updates with the
-  `wasm-bindgen` crate: Renovate read it as a Cargo range, which 0.2.129
-  already satisfied.
+- Renovate groups updates by risk and opens or refreshes its PRs on Monday and
+  Thursday mornings (UTC). GitHub Actions, mise tools, npm packages and docs
+  gems share one `tooling` PR, with their major updates in `major-tooling`;
+  Cargo updates keep their patch, minor and major groups; the gleam-core digest
+  is monthly. The `wasm-bindgen-cli` version in the workspace-wasm task now
+  updates with the `wasm-bindgen` crate: Renovate read it as a Cargo range,
+  which 0.2.129 already satisfied.
 - `morphir-extension-sdk` is `0.3.0`, a breaking release for crates.io: the
   public `InitializeParams` and `ExtensionCapabilities` structs gained the
   `model_transport` field, so Rust struct literals must set it (use `None` for

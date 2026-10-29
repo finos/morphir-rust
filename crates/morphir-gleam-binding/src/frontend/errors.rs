@@ -125,7 +125,7 @@ pub(crate) fn from_upstream(
 
 pub(crate) fn located_error(
     message: &str,
-    location: gleam_core::ast::SrcSpan,
+    location: src_span::SrcSpan,
     source: &str,
 ) -> ParseError {
     let start = clamped_char_boundary(source, location.start as usize);

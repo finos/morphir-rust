@@ -115,7 +115,7 @@ fn expr(value: &gleam::UntypedExpr, source: &str) -> Result<(), ParseError> {
             expr(left, source)?;
             expr(right, source)?;
         }
-        G::PipeLine { expressions } => {
+        G::Pipeline { expressions } => {
             for value in expressions {
                 expr(value, source)?;
             }
@@ -246,7 +246,7 @@ fn constant(value: &gleam::UntypedConstant, source: &str) -> Result<(), ParseErr
                 }
             }
         }
-        G::StringConcatenation { left, right, .. } => {
+        G::BinaryOperator { left, right, .. } => {
             constant(left, source)?;
             constant(right, source)?;
         }

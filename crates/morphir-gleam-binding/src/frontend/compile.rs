@@ -46,7 +46,7 @@ fn analyze_typed_module(
     parsed: &ModuleIR,
     package: &str,
     dependencies: &IndexMap<String, morphir_core::ir::v4::PackageSpecification>,
-    typed_interfaces: &im::HashMap<EcoString, ModuleInterface>,
+    typed_interfaces: &imbl::HashMap<EcoString, ModuleInterface>,
 ) -> std::result::Result<TypedModule, String> {
     let mut interfaces = typed_interfaces.clone();
     for import in &parsed.imports {
@@ -170,7 +170,7 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
             .cloned(),
     );
     let mut available: IndexMap<String, AccessControlled<ModuleDefinition>> = IndexMap::new();
-    let mut typed_interfaces: im::HashMap<EcoString, ModuleInterface> = im::HashMap::new();
+    let mut typed_interfaces: imbl::HashMap<EcoString, ModuleInterface> = imbl::HashMap::new();
     let mut modules = IndexMap::new();
     let mut results = Vec::new();
     let output_dir = request

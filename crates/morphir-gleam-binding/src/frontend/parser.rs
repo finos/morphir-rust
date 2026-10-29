@@ -75,7 +75,7 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
                     .collect(),
                 body: type_expr(&alias.type_ast, source)?,
                 doc: documentation(alias.documentation.as_ref().map(|(_, text)| text.as_str())),
-                span: span(gleam::SrcSpan::new(
+                span: span(src_span::SrcSpan::new(
                     alias.location.start,
                     alias.type_ast.location().end,
                 )),
@@ -137,7 +137,7 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
                 module.values.push(function_definition(function, source)?)
             }
             gleam::Definition::ModuleConstant(constant) => module.values.push(ValueDef {
-                span: span(gleam::SrcSpan::new(
+                span: span(src_span::SrcSpan::new(
                     constant.location.start,
                     constant.value.location().end,
                 )),
@@ -158,11 +158,17 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
                 body: match constant.annotation.as_ref() {
                     None => unsupported(
                         "unannotated constant declarations require type inference",
-                        gleam::SrcSpan::new(constant.location.start, constant.value.location().end),
+                        src_span::SrcSpan::new(
+                            constant.location.start,
+                            constant.value.location().end,
+                        ),
                     ),
                     Some(gleam::TypeAst::Fn(_)) => unsupported(
                         "function-typed constant declarations require distinct constant lowering",
-                        gleam::SrcSpan::new(constant.location.start, constant.value.location().end),
+                        src_span::SrcSpan::new(
+                            constant.location.start,
+                            constant.value.location().end,
+                        ),
                     ),
                     Some(_) => constant_expr(&constant.value, source)?,
                 },
@@ -173,7 +179,7 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
     Ok(module)
 }
 
-fn span(location: gleam::SrcSpan) -> Span {
+fn span(location: src_span::SrcSpan) -> Span {
     Span {
         start: location.start as usize,
         end: location.end as usize,
@@ -186,7 +192,7 @@ fn documentation(text: Option<&str>) -> Option<String> {
 
 fn access(
     publicity: gleam::Publicity,
-    location: gleam::SrcSpan,
+    location: src_span::SrcSpan,
     source: &str,
 ) -> Result<Access, ParseError> {
     match publicity {
@@ -275,7 +281,7 @@ fn function_definition(
         param_labels: function
             .arguments
             .iter()
-            .map(|arg| arg.names.get_label().map(ToString::to_string))
+            .map(|arg| arg.names.get_label().map(|(label, _)| label.to_string()))
             .collect(),
         doc: documentation(
             function
@@ -314,7 +320,7 @@ fn optional_annotation(
         .map(|annotation| annotation.unwrap_or(TypeExpr::Hole { name: "_".into() }))
 }
 
-fn unsupported(feature: &str, location: gleam::SrcSpan) -> Expr {
+fn unsupported(feature: &str, location: src_span::SrcSpan) -> Expr {
     Expr::Unsupported {
         feature: feature.into(),
         span: span(location),
@@ -438,7 +444,7 @@ fn expression(value: &gleam::UntypedExpr, source: &str) -> Result<Expr, ParseErr
             left: Box::new(expression(left, source)?),
             right: Box::new(expression(right, source)?),
         },
-        G::PipeLine { expressions } => {
+        G::Pipeline { expressions } => {
             let mut expressions = expressions.iter();
             let first = expressions.next().expect("upstream pipeline is nonempty");
             expressions.try_fold(expression(first, source)?, |left, right| {
@@ -537,7 +543,7 @@ fn expression(value: &gleam::UntypedExpr, source: &str) -> Result<Expr, ParseErr
     })
 }
 
-fn float_literal(value: f64, location: gleam::SrcSpan) -> Expr {
+fn float_literal(value: f64, location: src_span::SrcSpan) -> Expr {
     if value.is_finite() {
         Expr::Literal {
             value: Literal::Float { value },
@@ -579,7 +585,7 @@ fn field<T>(label: Option<&str>, item: T) -> Field<T> {
     }
 }
 
-type UnsupportedPattern = (&'static str, gleam::SrcSpan);
+type UnsupportedPattern = (&'static str, src_span::SrcSpan);
 
 fn case_branches(
     clauses: &[gleam::UntypedClause],
@@ -762,9 +768,12 @@ fn constant_expr(value: &gleam::UntypedConstant, source: &str) -> Result<Expr, P
         }
         G::Record { location, .. } => unsupported("constant constructor resolution", *location),
         G::Var { location, .. } => unsupported("constant value references", *location),
-        G::StringConcatenation { location, .. } => {
-            unsupported("constant string concatenation", *location)
-        }
+        G::BinaryOperator {
+            location, operator, ..
+        } => match operator {
+            gleam::BinOp::Concatenate => unsupported("constant string concatenation", *location),
+            _ => unsupported("constant binary operators", *location),
+        },
         G::RecordUpdate { location, .. } => unsupported("constant record updates", *location),
         G::BitArray { location, .. } => unsupported("constant bit arrays", *location),
         G::Todo { location, .. } => unsupported("todo constants", *location),

@@ -3,10 +3,9 @@
 use ecow::EcoString;
 use gleam_core::{
     analyse::{ModuleAnalyzerConstructor, TargetSupport},
-    ast::{Publicity, SrcSpan, TypedModule},
+    ast::{Publicity, TypedModule},
     build::{Origin, Outcome, Target},
     config::PackageConfig,
-    line_numbers::LineNumbers,
     type_::{
         ModuleInterface, Type as GleamType, TypeConstructor, TypeVar, build_prelude, generic_var,
         named,
@@ -14,12 +13,13 @@ use gleam_core::{
     uid::UniqueIdGenerator,
     warning::{TypeWarningEmitter, WarningEmitter},
 };
-use im::HashMap;
+use imbl::HashMap;
 use morphir_core::ir::v4::PackageSpecification;
 use morphir_core::{
     ir::v4::{Type as MorphirType, TypeAttributes},
     naming::{FQName, ModuleName, Name, PackageName},
 };
+use src_span::{LineNumbers, SrcSpan};
 use std::collections::{HashMap as StdHashMap, HashSet};
 use std::sync::Arc;
 

@@ -234,6 +234,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#946).
 
 ### Changed
+- The Gleam binding builds on the Gleam v1.19.2 release, pinned by tag, instead
+  of v1.18.1. Constant expressions with a binary operator other than `<>` are
+  now reported as unsupported "constant binary operators"; `<>` keeps its
+  "constant string concatenation" message.
 - Renovate groups updates by risk and opens or refreshes its PRs on Monday and
   Thursday mornings (UTC). GitHub Actions, mise tools, npm packages and docs
   gems share one `tooling` PR, with their major updates in `major-tooling`;

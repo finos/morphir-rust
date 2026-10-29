@@ -5,7 +5,7 @@ use serde_json::Value;
 use serde_saphyr::budget::BudgetBreach;
 use serde_saphyr::granit_parser::{Event, Parser, ScalarStyle};
 use serde_saphyr::options::{DuplicateKeyPolicy, MergeKeyPolicy};
-use serde_saphyr::{Error as YamlError, alias_limits, budget, options};
+use serde_saphyr::{Error as YamlError, NonFiniteFloatPolicy, alias_limits, budget, options};
 use thiserror::Error;
 
 const MAX_YAML_INPUT_BYTES: usize = 512 * 1024 * 1024;
@@ -126,10 +126,9 @@ fn yaml_options() -> serde_saphyr::Options {
             max_replay_stack_depth: 0,
             max_alias_expansions_per_anchor: 0,
         },
-        emit_comments: false,
         strict_booleans: true,
         legacy_octal_numbers: false,
-        reject_non_finite_typeless_float: true,
+        non_finite_float_policy: NonFiniteFloatPolicy::Reject,
         with_snippet: false,
     }
 }

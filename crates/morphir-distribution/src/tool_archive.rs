@@ -58,7 +58,10 @@ pub(crate) fn extract_zip(
         let mut entry = archive
             .by_index(index)
             .map_err(|source| unsafe_archive("", format!("invalid ZIP entry: {source}")))?;
-        let raw_name = entry.name().to_owned();
+        let raw_name = entry
+            .name()
+            .map_err(|source| unsafe_archive("", format!("invalid ZIP entry name: {source}")))?
+            .into_owned();
         let enclosed = entry.enclosed_name().ok_or_else(|| {
             unsafe_archive(&raw_name, "entry escapes the package root".to_owned())
         })?;

@@ -3,6 +3,7 @@
   "extends": ["config:recommended"],
   "timezone": "UTC",
   "schedule": ["* 0-5 * * 1"],
+  "updateNotScheduled": false,
   "customManagers": [
     {
       "description": "The wasm-bindgen-cli version the workspace-wasm build task installs. It must equal the wasm-bindgen crate version in Cargo.lock.",

@@ -1,6 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
+  "timezone": "UTC",
+  "schedule": ["* 0-5 * * 1,4"],
+  "updateNotScheduled": false,
   "customManagers": [
     {
       "description": "The wasm-bindgen-cli version the workspace-wasm build task installs. It must equal the wasm-bindgen crate version in Cargo.lock.",
@@ -8,32 +11,41 @@
       "managerFilePatterns": ["/^\\.mise/tasks/build/workspace-wasm$/"],
       "matchStrings": ["WASM_BINDGEN_VERSION=\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "wasm-bindgen-cli",
-      "datasourceTemplate": "crate"
+      "datasourceTemplate": "crate",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
     {
-      "description": "Group all GitHub Actions updates together",
-      "matchManagers": ["github-actions"],
-      "groupName": "github-actions"
+      "description": "Tooling that does not change Rust code: GitHub Actions and runners, the mise toolchain (Rust, Bun, wasm-tools and others), the scripts' npm packages and the docs site's gems. Their non-major updates share one PR (renovate/tooling), so the updates that pass are not held back by Cargo updates that need code changes. Their major updates share a second PR (renovate/major-tooling), because they can need workflow or script changes.",
+      "matchManagers": ["github-actions", "mise", "npm", "bundler"],
+      "groupName": "tooling"
     },
     {
-      "description": "Group Cargo major updates together",
+      "description": "Cargo patch updates share one PR. They seldom need code changes, so they stay apart from minor and major updates.",
       "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["major"],
-      "groupName": "rust-major"
+      "matchUpdateTypes": ["patch"],
+      "groupName": "rust-patch"
     },
     {
-      "description": "Group Cargo minor updates together",
+      "description": "Cargo minor updates share one PR. A 0.x minor update is a breaking release under Cargo's rules, so this PR can need code changes.",
       "matchManagers": ["cargo"],
       "matchUpdateTypes": ["minor"],
       "groupName": "rust-minor"
     },
     {
-      "description": "Group Cargo patch updates together",
+      "description": "Cargo major updates share one PR.",
       "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["patch"],
-      "groupName": "rust-patch"
+      "matchUpdateTypes": ["major"],
+      "groupName": "rust-major"
+    },
+    {
+      "description": "gleam-core is a git dependency pinned to a commit. Its digest updates track the Gleam compiler and need changes in morphir-gleam-binding, so they get their own PR, once a month.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["gleam-core"],
+      "matchUpdateTypes": ["digest"],
+      "groupName": "gleam-core",
+      "schedule": ["* 0-5 1 * *"]
     },
     {
       "description": "wasm-bindgen and the crates that must match it move together, in their own PR. The runtime crate is pinned exactly and the workspace-wasm build task installs the same wasm-bindgen-cli version, so a partial update fails the build. Listed after the Cargo groups so it takes precedence over them.",
@@ -52,24 +64,6 @@
       "prBodyNotes": [
         "The `workspace-wasm` build task pins `WASM_BINDGEN_VERSION` to the same release as the `wasm-bindgen` crate and fails if they differ; this group updates both. Check the `Build (workspace discovery WASM)` job: a new wasm-bindgen release can change the generated JS glue that the task greps for."
       ]
-    },
-    {
-      "description": "Group npm major updates together",
-      "matchManagers": ["npm"],
-      "matchUpdateTypes": ["major"],
-      "groupName": "node-major"
-    },
-    {
-      "description": "Group npm minor updates together",
-      "matchManagers": ["npm"],
-      "matchUpdateTypes": ["minor"],
-      "groupName": "node-minor"
-    },
-    {
-      "description": "Group npm patch updates together",
-      "matchManagers": ["npm"],
-      "matchUpdateTypes": ["patch"],
-      "groupName": "node-patch"
     }
   ]
 }

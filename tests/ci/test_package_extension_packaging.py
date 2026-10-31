@@ -3,30 +3,6 @@
 from package_extension_test_support import *
 
 class PackageExtensionTests(unittest.TestCase):
-    def test_avro_registry_entry_is_independently_versioned(self) -> None:
-        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        avro = registry["extensions"]["avro"]
-
-        self.assertEqual("morphir-avro-extension", avro["package"])
-        self.assertEqual("morphir-avro-extension", avro["artifact"])
-        self.assertEqual("morphir-avro", avro["extension_id"])
-        self.assertEqual(["0.1"], avro["mep_versions"])
-        self.assertEqual(["avro"], avro["targets"])
-        self.assertEqual(["3", "4"], avro["ir_versions"])
-        self.assertTrue(avro["release_with_workspace"])
-
-    def test_openapi_registry_entry_is_independently_versioned(self) -> None:
-        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        openapi = registry["extensions"]["openapi"]
-
-        self.assertEqual("morphir-openapi-extension", openapi["package"])
-        self.assertEqual("morphir-openapi-extension", openapi["artifact"])
-        self.assertEqual("morphir-openapi", openapi["extension_id"])
-        self.assertEqual(["0.1"], openapi["mep_versions"])
-        self.assertEqual(["openapi", "json-schema"], openapi["targets"])
-        self.assertEqual(["3", "4"], openapi["ir_versions"])
-        self.assertTrue(openapi["release_with_workspace"])
-
     def test_a_multi_target_registry_entry_reaches_the_release_descriptor(self) -> None:
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
         elm = {**registry["extensions"]["elm-native"], "targets": ["elm", "json-schema"]}

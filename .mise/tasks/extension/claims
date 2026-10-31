@@ -1,6 +1,6 @@
 #!/bin/sh
 #MISE description="Print capability claims from a staged WASM extension"
-#USAGE arg "<id>" help="Extension short ID, for example avro or elm-native"
+#USAGE arg "<id>" help="Extension short ID, for example rust or elm-native"
 
 set -eu
 

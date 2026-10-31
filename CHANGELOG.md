@@ -310,6 +310,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#921).
 
 ### Removed
+- **Breaking:** The Avro extension crate `morphir-avro-extension` (bundle
+  `morphir-avro`, short id `avro`) and the OpenAPI extension crate
+  `morphir-openapi-extension` (bundle `morphir-openapi`, short id `openapi`)
+  moved to
+  [finos/morphir-extensions](https://github.com/finos/morphir-extensions),
+  which now maintains and releases them from `extension/avro/v0.3.0` and
+  `extension/openapi/v0.3.0`. This workspace no longer builds, tests or
+  releases them: the crates, their `.github/extensions.toml` registrations,
+  the `extension:artifact:avro`, `extension:artifact:openapi` and
+  `test:avro-idl` tasks, the `avro` and `openapi` cases of
+  `test:cli-release` and the `morphir-avro-extension` dev-dependency of
+  `morphir-host-native` are gone. The host tests that used the Avro guest as
+  a sample now use the Rust binding or a local fixture. Anyone who built the
+  crates from morphir-rust must build them from finos/morphir-extensions. The
+  `extension/avro/v0.1.0` to `extension/avro/v0.2.0` and
+  `extension/openapi/v0.1.0` to `extension/openapi/v0.2.0` releases stay
+  published here.
 - **Breaking:** The Python extension crate `morphir-python-binding` (bundle
   `morphir-python`, short id `python`) moved to
   [finos/morphir-python](https://github.com/finos/morphir-python), which now

@@ -12,5 +12,5 @@ fi
 
 cargo build --locked --release -p morphir-wasm-binding --target "$TARGET"
 cargo test --locked -p morphir-host-native --test extism_extension -- --ignored
-cargo build --locked --release -p morphir-avro-extension --target "$TARGET"
+cargo build --locked --release -p morphir-rust-binding --target "$TARGET"
 cargo test --locked -p morphir-host-native --test installed_wasm_extension -- --ignored

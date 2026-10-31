@@ -106,10 +106,10 @@ class VersionTwoBundleTests(unittest.TestCase):
     def test_frontend_workspace_claims_must_match_declared_capabilities(self):
         from extension_claims_test_support import claims_for_extension
         from extension_packaging.model import descriptor_bytes as build_descriptor
-        extension = tomllib.loads(EXTENSIONS_TOML.read_text())["extensions"]["gleam"]
+        extension = tomllib.loads(EXTENSIONS_TOML.read_text())["extensions"]["elm-native"]
         claims = claims_for_extension(extension, "0.2.0")
         mutations = [
-            ("frontend", "languages", [{"id": "gleam", "fileExtensions": [".wrong"]}]),
+            ("frontend", "languages", [{"id": "elm", "fileExtensions": [".wrong"]}]),
             ("frontend", "irVersions", ["4"]),
             ("frontend", "incremental", False),
             ("workspace", "discover", False),
@@ -119,10 +119,10 @@ class VersionTwoBundleTests(unittest.TestCase):
                 changed = deepcopy(claims)
                 changed["capabilities"][kind][member] = value
                 with self.assertRaisesRegex(PackageError, member):
-                    build_descriptor("gleam", extension, "0.2.0", "gleam.wasm", "0" * 64, None, changed)
+                    build_descriptor("elm-native", extension, "0.2.0", "elm-native.wasm", "0" * 64, None, changed)
         del claims["capabilities"]["workspace"]
         with self.assertRaisesRegex(PackageError, "kinds"):
-            build_descriptor("gleam", extension, "0.2.0", "gleam.wasm", "0" * 64, None, claims)
+            build_descriptor("elm-native", extension, "0.2.0", "elm-native.wasm", "0" * 64, None, claims)
 
     def test_transfer_and_asset_selection_reject_non_packager_shapes(self):
         from extension_release_test_support import AssetFixture, select_extension_assets
@@ -155,16 +155,16 @@ class VersionTwoBundleTests(unittest.TestCase):
 
     def test_optional_language_metadata_survives(self):
         from extension_packaging.model import descriptor_bytes as build_descriptor
-        extension = tomllib.loads(EXTENSIONS_TOML.read_text())["extensions"]["gleam"]
+        extension = tomllib.loads(EXTENSIONS_TOML.read_text())["extensions"]["elm-native"]
         claims = claims_for_extension(extension, "0.2.0")
-        claims["capabilities"]["frontend"]["languages"][0]["displayName"] = "Gleam"
-        descriptor = json.loads(build_descriptor("gleam", extension, "0.2.0", "gleam.wasm",
+        claims["capabilities"]["frontend"]["languages"][0]["displayName"] = "Elm"
+        descriptor = json.loads(build_descriptor("elm-native", extension, "0.2.0", "elm-native.wasm",
                                                  "0" * 64, None, claims))
         self.assertEqual(claims, descriptor["artifacts"][0]["claims"])
 
     def test_malformed_known_capability_members_refuse(self):
         from extension_packaging.model import descriptor_bytes as build_descriptor
-        extension = tomllib.loads(EXTENSIONS_TOML.read_text())["extensions"]["gleam"]
+        extension = tomllib.loads(EXTENSIONS_TOML.read_text())["extensions"]["elm-native"]
         cases = [("frontend", "fragments", "false"), ("frontend", "multiDocument", 1),
                  ("workspace", "protocolVersions", 42), ("workspace", "protocolVersions", ["0.1"])]
         for kind, member, value in cases:
@@ -172,7 +172,7 @@ class VersionTwoBundleTests(unittest.TestCase):
                 claims = claims_for_extension(extension, "0.2.0")
                 claims["capabilities"][kind][member] = value
                 with self.assertRaisesRegex(PackageError, member):
-                    build_descriptor("gleam", extension, "0.2.0", "gleam.wasm", "0" * 64, None, claims)
+                    build_descriptor("elm-native", extension, "0.2.0", "elm-native.wasm", "0" * 64, None, claims)
 
     def test_asset_selection_preserves_optional_claims_and_rejects_registry_drift(self):
         from extension_release_test_support import AssetFixture, select_extension_assets

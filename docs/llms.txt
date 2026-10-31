@@ -4,7 +4,7 @@
 
 > Rust-based CLI tools and libraries for the Morphir ecosystem. Morphir enables functional domain modeling where you write business logic once and consume it through visualizations, code generation, type checking, and execution.
 
-Morphir Rust provides tools for working with Morphir IR (Intermediate Representation), including format migration, validation, and code generation. It supports language bindings for Gleam and includes an extension system for adding new languages and targets.
+Morphir Rust provides tools for working with Morphir IR (Intermediate Representation), including format migration, validation, and code generation. It supports language bindings for Elm and Rust and includes an extension system for adding new languages and targets.
 
 ## Getting Started
 
@@ -13,9 +13,8 @@ Morphir Rust provides tools for working with Morphir IR (Intermediate Representa
 ## Tutorials
 
 - [Getting Started Tutorial](https://finos.github.io/morphir-rust/tutorials/getting-started-tutorial): This tutorial will walk you through setting up your first Morphir project and using the CLI to compile and generate code.
-- [Gleam Language Binding Tutorial](https://finos.github.io/morphir-rust/tutorials/gleam-tutorial): This tutorial covers using Morphir with Gleam, including compilation, code generation, and roundtrip testing.
 - [Configuration Guide](https://finos.github.io/morphir-rust/tutorials/configuration-guide): Morphir uses `morphir.toml` or `morphir.yaml` (or the legacy `morphir.json`) for project and workspace configuration. Both serializations describe the same configuration model.
-- [Complete Workflow](https://finos.github.io/morphir-rust/tutorials/complete-workflow): This guide walks through a complete end-to-end workflow using Morphir with Gleam.
+- [Complete Workflow](https://finos.github.io/morphir-rust/tutorials/complete-workflow): This guide walks through a complete end-to-end workflow using Morphir with Gleam. The Gleam extension is released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
 - [Tutorials](https://finos.github.io/morphir-rust/tutorials/): Step-by-step guides for using Morphir Rust.
 - [Extension Development Tutorial](https://finos.github.io/morphir-rust/tutorials/extension-tutorial): This tutorial follows the current Extism and MEP JSON-RPC extension model. The feature is implemented for contributor testing but has not produced a public release.
 - [Python ADT extension](https://finos.github.io/morphir-rust/tutorials/python-extension): The Python extension (crate `morphir-python-binding`, bundle `morphir-python`) is now maintained and released from [finos/morphir-python](https://github.com/finos/morphir-python). Its source, tests...

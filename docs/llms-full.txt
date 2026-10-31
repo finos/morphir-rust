@@ -4,7 +4,7 @@
 
 > Rust-based CLI tools and libraries for the Morphir ecosystem. Morphir enables functional domain modeling where you write business logic once and consume it through visualizations, code generation, type checking, and execution.
 
-Morphir Rust provides tools for working with Morphir IR (Intermediate Representation), including format migration, validation, and code generation. It supports language bindings for Gleam and includes an extension system for adding new languages and targets.
+Morphir Rust provides tools for working with Morphir IR (Intermediate Representation), including format migration, validation, and code generation. It supports language bindings for Elm and Rust and includes an extension system for adding new languages and targets.
 
 ---
 
@@ -172,6 +172,7 @@ This tutorial will walk you through setting up your first Morphir project and us
 ## Prerequisites
 
 - Morphir CLI installed (see [Installation Guide](../install))
+- The Gleam extension. It is released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
 - A terminal
 - Basic familiarity with command-line tools
 
@@ -308,113 +309,9 @@ The `out/` directory should be added to `.gitignore`:
 
 ## Next Steps
 
-- Learn about [Gleam Language Binding](gleam-tutorial)
+- Learn about the Gleam extension in [finos/morphir-gleam](https://github.com/finos/morphir-gleam)
 - Explore [Configuration Options](configuration-guide)
 - See [Complete Workflow Examples](complete-workflow)
-
----
-
-## Gleam Language Binding Tutorial
-Source: https://finos.github.io/morphir-rust/tutorials/gleam-tutorial
-
-# Gleam Language Binding Tutorial
-
-This tutorial covers using Morphir with Gleam, including compilation, code generation, and roundtrip testing.
-
-## Overview
-
-The Gleam binding provides:
-- **Frontend**: Parse Gleam source → Morphir IR V4
-- **Backend**: Morphir IR V4 → Generate Gleam source
-
-## Setting Up a Gleam Project
-
-### Option 1: New Gleam Project
-
-If you're starting fresh:
-
-```bash
-mkdir my-gleam-project
-cd my-gleam-project
-mkdir src
-```
-
-Create `src/main.gleam`:
-
-```gleam
-pub fn main() {
-  "Hello, Morphir!"
-}
-```
-
-### Option 2: Existing Gleam Project
-
-If you have an existing Gleam project, just add a `morphir.toml` file to the root.
-
-## Configuration
-
-Create `morphir.toml`:
-
-```toml
-[project]
-name = "my-gleam-package"
-version = "0.1.0"
-source_directory = "src"
-
-[frontend]
-language = "gleam"
-```
-
-## Compiling Gleam to Morphir IR
-
-### Basic Compilation
-
-```bash
-morphir gleam compile
-```
-
-This uses the configuration from `morphir.toml` to:
-- Find source files in `src/`
-- Compile to Morphir IR V4
-- Output to `.morphir/out/my-gleam-package/compile/gleam/`
-
-### Custom Input/Output
-
-```bash
-morphir gleam compile --input src/ --output custom-output/
-```
-
-## Generating Gleam Code from IR
-
-### Basic Generation
-
-```bash
-morphir gleam generate
-```
-
-This reads from the default compile output and generates to `.morphir/out/my-gleam-package/generate/gleam/`.
-
-## Roundtrip Testing
-
-Roundtrip testing verifies that compiling and generating preserves semantics:
-
-```bash
-morphir gleam roundtrip --input src/
-```
-
-## JSON Output
-
-For programmatic use:
-
-```bash
-morphir gleam compile --json
-morphir gleam compile --json-lines
-```
-
-## Next Steps
-
-- Learn about [Configuration](configuration-guide)
-- See [Complete Workflow](complete-workflow)
 
 ---
 
@@ -501,6 +398,7 @@ Source: https://finos.github.io/morphir-rust/tutorials/complete-workflow
 # Complete Workflow
 
 This guide walks through a complete end-to-end workflow using Morphir with Gleam.
+The Gleam extension is released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
 
 ## Scenario: Building a Business Logic Library
 
@@ -758,7 +656,7 @@ Error: Compilation failed
 - **Solution**: Create `morphir.toml` in project root or use `--config`
 
 **Issue**: "Extension not found"
-- **Solution**: Ensure Gleam binding is built and bundled
+- **Solution**: Install the Gleam extension from the [finos/morphir-gleam](https://github.com/finos/morphir-gleam) releases
 
 **Issue**: "Path does not exist"
 - **Solution**: Check `source_directory` in config matches your project structure
@@ -784,7 +682,9 @@ Step-by-step guides for using Morphir Rust.
 
 ## Language Bindings
 
-- [Gleam Language Binding](gleam-tutorial) - Using Morphir with Gleam
+- The Gleam extension and its tutorial are in [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
+  The extension is released from there, starting with
+  [`extension/gleam/v0.4.0`](https://github.com/finos/morphir-gleam/releases/tag/extension/gleam/v0.4.0).
 
 ## Configuration
 
@@ -1771,9 +1671,8 @@ cargo test
 # Specific crate
 cargo test -p morphir-common
 
-# BDD acceptance tests
-cd crates/morphir-gleam-binding
-cargo test --test acceptance
+# BDD acceptance tests of one crate
+cargo test -p morphir-elm-binding --test acceptance
 ```
 
 ## Project Structure
@@ -1784,7 +1683,7 @@ morphir-rust/
 │   ├── morphir-devkit/       # Devkit: workspace, config, and extension discovery
 │   ├── morphir-common/       # Shared infrastructure
 │   ├── morphir-daemon/       # Runtime services
-│   ├── morphir-gleam-binding/ # Gleam extension
+│   ├── morphir-elm-binding/  # Elm extension
 │   └── ...
 ├── docs/                     # Documentation site
 └── ...

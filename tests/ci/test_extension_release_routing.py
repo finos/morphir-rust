@@ -3,21 +3,21 @@
 from extension_release_test_support import *
 
 class ExtensionReleaseRoutingTests(unittest.TestCase):
-    def test_gleam_tag_preserves_frontend_backend_and_incremental_capabilities(self) -> None:
+    def test_elm_native_tag_preserves_frontend_backend_and_incremental_capabilities(self) -> None:
         from package_extension_test_support import descriptor_bytes
 
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
         release = extension_release.resolve_release(
-            "extension/gleam/v0.2.0", registry, "0.2.0", {"morphir-gleam-binding": "0.2.0"}
+            "extension/elm-native/v0.2.0", registry, "0.2.0", {"morphir-elm-binding": "0.2.0"}
         )
-        self.assertEqual(["gleam"], release.short_ids)
+        self.assertEqual(["elm-native"], release.short_ids)
         descriptor = json.loads(descriptor_bytes(
-            "gleam", registry["extensions"]["gleam"], "0.2.0",
-            "morphir-gleam-binding-0.2.0.wasm", "0" * 64, RELEASE_COMMIT,
+            "elm-native", registry["extensions"]["elm-native"], "0.2.0",
+            "morphir-elm-binding-0.2.0.wasm", "0" * 64, RELEASE_COMMIT,
         ))
-        self.assertEqual("morphir-gleam", descriptor["extensionId"])
-        self.assertEqual(["gleam"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
-        self.assertEqual([{"id": "gleam", "fileExtensions": [".gleam"]}], descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["languages"])
+        self.assertEqual("morphir-elm-native", descriptor["extensionId"])
+        self.assertEqual(["elm"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
+        self.assertEqual([{"id": "elm", "fileExtensions": [".elm"]}], descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["languages"])
         self.assertEqual(["3", "4"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["irVersions"])
         self.assertTrue(descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["incremental"])
         self.assertTrue(descriptor["artifacts"][0]["claims"]["capabilities"]["workspace"]["discover"])
@@ -36,7 +36,6 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
 
         for short_id, package, version in (
             ("elm-native", "morphir-elm-binding", "0.2.0"),
-            ("gleam", "morphir-gleam-binding", "0.2.0"),
         ):
             with self.subTest(short_id=short_id):
                 extension = registry["extensions"][short_id]
@@ -106,7 +105,6 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
         package_versions = {
             "morphir-elm-binding": "0.1.0",
-            "morphir-gleam-binding": "0.2.0",
             "morphir-rust-binding": "0.1.0",
         }
 
@@ -115,7 +113,7 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            ["elm-native", "gleam", "rust"], release.short_ids
+            ["elm-native", "rust"], release.short_ids
         )
 
     def test_workspace_tag_selects_opted_in_extensions_in_sorted_order(self) -> None:

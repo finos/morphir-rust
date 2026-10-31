@@ -15,7 +15,9 @@ Step-by-step guides for using Morphir Rust.
 
 ## Language Bindings
 
-- [Gleam Language Binding](gleam-tutorial) - Using Morphir with Gleam
+- The Gleam extension and its tutorial are in [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
+  The extension is released from there, starting with
+  [`extension/gleam/v0.4.0`](https://github.com/finos/morphir-gleam/releases/tag/extension/gleam/v0.4.0).
 
 ## Configuration
 

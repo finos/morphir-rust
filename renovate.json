@@ -40,14 +40,6 @@
       "groupName": "rust-major"
     },
     {
-      "description": "gleam-core is a git dependency pinned to a commit. Its digest updates track the Gleam compiler and need changes in morphir-gleam-binding, so they get their own PR, once a month.",
-      "matchManagers": ["cargo"],
-      "matchPackageNames": ["gleam-core"],
-      "matchUpdateTypes": ["digest"],
-      "groupName": "gleam-core",
-      "schedule": ["* 0-5 1 * *"]
-    },
-    {
       "description": "wasm-bindgen and the crates that must match it move together, in their own PR. The runtime crate is pinned exactly and the workspace-wasm build task installs the same wasm-bindgen-cli version, so a partial update fails the build. Listed after the Cargo groups so it takes precedence over them.",
       "matchPackageNames": [
         "wasm-bindgen",

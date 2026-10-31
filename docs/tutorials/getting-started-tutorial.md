@@ -12,6 +12,7 @@ This tutorial will walk you through setting up your first Morphir project and us
 ## Prerequisites
 
 - Morphir CLI installed (see [Installation Guide](../install))
+- The Gleam extension. It is released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
 - A terminal
 - Basic familiarity with command-line tools
 
@@ -148,6 +149,6 @@ The `out/` directory should be added to `.gitignore`:
 
 ## Next Steps
 
-- Learn about [Gleam Language Binding](gleam-tutorial)
+- Learn about the Gleam extension in [finos/morphir-gleam](https://github.com/finos/morphir-gleam)
 - Explore [Configuration Options](configuration-guide)
 - See [Complete Workflow Examples](complete-workflow)

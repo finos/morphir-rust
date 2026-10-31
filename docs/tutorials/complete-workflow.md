@@ -8,6 +8,7 @@ parent: Tutorials
 # Complete Workflow
 
 This guide walks through a complete end-to-end workflow using Morphir with Gleam.
+The Gleam extension is released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
 
 ## Scenario: Building a Business Logic Library
 
@@ -265,7 +266,7 @@ Error: Compilation failed
 - **Solution**: Create `morphir.toml` in project root or use `--config`
 
 **Issue**: "Extension not found"
-- **Solution**: Ensure Gleam binding is built and bundled
+- **Solution**: Install the Gleam extension from the [finos/morphir-gleam](https://github.com/finos/morphir-gleam) releases
 
 **Issue**: "Path does not exist"
 - **Solution**: Check `source_directory` in config matches your project structure

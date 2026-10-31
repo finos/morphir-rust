@@ -74,11 +74,9 @@ class ImpactConsistencyTests(unittest.TestCase):
         self.assertIn("rust", all_extensions)
         cases = [
             ("crates/morphir-rust-binding/src/lib.rs", ("rust",)),
-            ("crates/morphir-openapi-extension/src/lib.rs", ("openapi",)),
             ("crates/morphir-gleam-binding/src/lib.rs", ("gleam",)),
             ("README.md", ()),
             (".mise/tasks/extension/artifact/rust", ("rust",)),
-            (".mise/tasks/extension/artifact/openapi", ("openapi",)),
             (".mise/tasks/extension/artifact/gleam", ("gleam",)),
             (".github/extensions.toml", all_extensions),
             ("scripts/package_extension.py", all_extensions),
@@ -94,7 +92,8 @@ class ImpactConsistencyTests(unittest.TestCase):
                 if path.startswith("crates/morphir-rust-binding/"):
                     self.assertEqual(("morphir-rust-binding",), plan.crates)
                     self.assertTrue(plan.rust)
-                    self.assertFalse(plan.jobs["test-extism"])
+                    # test:extism runs the installed WASM lifecycle test on the Rust guest.
+                    self.assertTrue(plan.jobs["test-extism"])
 
     @unittest.skipUnless(shutil.which("cargo"), "cargo is not installed")
     def test_published_crates_and_their_dependencies_route_to_packaging(self) -> None:

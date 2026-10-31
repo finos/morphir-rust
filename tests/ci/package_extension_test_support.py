@@ -39,12 +39,8 @@ def descriptor_bytes(short_id, extension, version, artifact_name, digest, git_co
 EXTENSIONS_TOML = REPOSITORY_ROOT / ".github" / "extensions.toml"
 PACKAGER = REPOSITORY_ROOT / "scripts" / "package_extension.py"
 PACKAGER_MODULES = REPOSITORY_ROOT / "scripts" / "extension_packaging"
-AVRO_ARTIFACT_TASK = (
-    REPOSITORY_ROOT / ".mise" / "tasks" / "extension" / "artifact" / "avro"
-)
-OPENAPI_ARTIFACT_TASK = (
-    REPOSITORY_ROOT / ".mise" / "tasks" / "extension" / "artifact" / "openapi"
-)
+ARTIFACT_TASKS = REPOSITORY_ROOT / ".mise" / "tasks" / "extension" / "artifact"
+RUST_ARTIFACT_TASK = ARTIFACT_TASKS / "rust"
 
 AVRO_REGISTRY = """\
 [extensions.avro]
@@ -53,6 +49,19 @@ artifact = "morphir-avro-extension"
 extension_id = "morphir-avro"
 mep_versions = ["0.1"]
 targets = ["avro"]
+ir_versions = ["3", "4"]
+release_with_workspace = true
+"""
+
+RUST_REGISTRY = """\
+[extensions.rust]
+package = "morphir-rust-binding"
+artifact = "morphir-rust-binding"
+extension_id = "morphir-rust"
+name = "Morphir Rust"
+mep_versions = ["0.1"]
+targets = ["rust"]
+languages = [{ id = "rust", file_extensions = [".rs"] }]
 ir_versions = ["3", "4"]
 release_with_workspace = true
 """
@@ -73,13 +82,16 @@ class PackageFixture:
         registry: str = AVRO_REGISTRY,
         cargo_package: str = "morphir-avro-extension",
         cargo_version: str = "0.1.0",
+        short_id: str = "avro",
+        crate_dir: str = "morphir-avro-extension",
     ) -> None:
         self.root = root.resolve()
+        self.short_id = short_id
         self.wasm = self.root / "input" / "guest.wasm"
         self.output = self.root / "stage"
         (self.root / "scripts").mkdir(parents=True)
         (self.root / ".github").mkdir()
-        (self.root / "crates" / "morphir-avro-extension").mkdir(parents=True)
+        (self.root / "crates" / crate_dir).mkdir(parents=True)
         self.wasm.parent.mkdir()
 
         shutil.copy2(PACKAGER, self.root / "scripts" / "package_extension.py")
@@ -91,14 +103,14 @@ class PackageFixture:
         (self.root / ".github" / "extensions.toml").write_text(
             registry, encoding="utf-8", newline="\n"
         )
-        (self.root / "crates" / "morphir-avro-extension" / "Cargo.toml").write_text(
+        (self.root / "crates" / crate_dir / "Cargo.toml").write_text(
             f'[package]\nname = "{cargo_package}"\nversion = "{cargo_version}"\n',
             encoding="utf-8",
             newline="\n",
         )
         self.wasm.write_bytes(b"\x00asm\x01\x00\x00\x00fixture")
 
-        claims = claims_for_extension(tomllib.loads(registry)["extensions"]["avro"], cargo_version)
+        claims = claims_for_extension(tomllib.loads(registry)["extensions"][short_id], cargo_version)
         self.claims_file = self.root / "guest-claims.json"
         self.claims_file.write_text(json.dumps(claims), encoding="utf-8")
         tools = self.root / "claims-bin"
@@ -109,7 +121,7 @@ class PackageFixture:
 
     def package(
         self,
-        short_id: str = "avro",
+        short_id: str | None = None,
         *,
         wasm: Path | None = None,
         git_commit: str | None = None,
@@ -118,7 +130,7 @@ class PackageFixture:
             sys.executable,
             str(self.root / "scripts" / "package_extension.py"),
             "--short-id",
-            short_id,
+            short_id or self.short_id,
             "--wasm",
             str(wasm or self.wasm),
             "--output",
@@ -155,23 +167,29 @@ class PackageFixture:
 
 
 class ArtifactTaskFixture:
-    """Run the artifact task in a local Git sandbox with stubbed build tools."""
+    """Run the Rust artifact task in a local Git sandbox with stubbed build tools."""
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
         self.log = self.root.parent / "artifact-task.log"
         self.snapshot_marker = self.root.parent / "archived-task-ran"
-        PackageFixture(self.root)
-        task = self.root / ".mise" / "tasks" / "extension" / "artifact" / "avro"
+        PackageFixture(
+            self.root,
+            registry=RUST_REGISTRY,
+            cargo_package="morphir-rust-binding",
+            short_id="rust",
+            crate_dir="morphir-rust-binding",
+        )
+        task = self.root / ".mise" / "tasks" / "extension" / "artifact" / "rust"
         task.parent.mkdir(parents=True)
-        shutil.copy2(AVRO_ARTIFACT_TASK, task)
+        shutil.copy2(RUST_ARTIFACT_TASK, task)
         task.write_text(
             task.read_text(encoding="utf-8").replace(
                 "set -eu\n",
                 """\
 set -eu
 
-if [ "${MORPHIR_AVRO_SNAPSHOT_MODE:-}" = "1" ] && [ -n "${ARTIFACT_SNAPSHOT_MARKER:-}" ]; then
+if [ "${MORPHIR_RUST_SNAPSHOT_MODE:-}" = "1" ] && [ -n "${ARTIFACT_SNAPSHOT_MARKER:-}" ]; then
     printf '%s\n' "$0" > "$ARTIFACT_SNAPSHOT_MARKER"
 fi
 """,
@@ -183,7 +201,7 @@ fi
         self.task = task
 
         (self.root / "Cargo.toml").write_text(
-            '[workspace]\nmembers = ["crates/morphir-avro-extension"]\n',
+            '[workspace]\nmembers = ["crates/morphir-rust-binding"]\n',
             encoding="utf-8",
             newline="\n",
         )
@@ -193,24 +211,26 @@ fi
         (self.root / "mise.toml").write_text(
             "[tools]\n", encoding="utf-8", newline="\n"
         )
-        avro_idl_task = self.root / ".mise/tasks/test/avro-idl"
-        avro_idl_task.parent.mkdir(parents=True, exist_ok=True)
-        avro_idl_task.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
-        avro_idl_task.chmod(0o755)
-        avro_crate = self.root / "crates/morphir-avro-extension"
-        (avro_crate / "src").mkdir()
-        (avro_crate / "src/lib.rs").write_text(
+        rust_crate = self.root / "crates/morphir-rust-binding"
+        (rust_crate / "src").mkdir()
+        (rust_crate / "src/lib.rs").write_text(
             "// fixture source\n", encoding="utf-8", newline="\n"
         )
-        (avro_crate / "tests").mkdir()
-        (avro_crate / "tests/guest.rs").write_text(
+        (rust_crate / "tests").mkdir()
+        (rust_crate / "tests/pipeline.rs").write_text(
             "// fixture test\n", encoding="utf-8", newline="\n"
+        )
+        distribution_source = self.root / "crates/morphir-distribution/src"
+        distribution_source.mkdir(parents=True)
+        (distribution_source / "lib.rs").write_text(
+            "// fixture distribution source\n", encoding="utf-8", newline="\n"
         )
         packaging_tests = (
             "tests/ci/test_package_extension.py",
             "tests/ci/package_extension_test_support.py",
             "tests/ci/test_package_extension_packaging.py",
             "tests/ci/test_package_extension_task.py",
+            "tests/ci/test_extension_release_routing.py",
         )
         for relative in packaging_tests:
             packaging_test = self.root / relative
@@ -219,8 +239,7 @@ fi
                 "# fixture packaging test\n", encoding="utf-8", newline="\n"
             )
         installed_guest_test = (
-            self.root
-            / "crates/morphir-host-native/tests/installed_wasm_extension.rs"
+            self.root / "crates/morphir-host-native/tests/rust_extension.rs"
         )
         installed_guest_test.parent.mkdir(parents=True)
         installed_guest_test.write_text(
@@ -245,7 +264,7 @@ fi
         )
 
         (self.root / ".gitignore").write_text(
-            ".morphir/\ntarget/\ncrates/morphir-avro-extension/ignored-source.rs\n",
+            ".morphir/\ntarget/\ncrates/morphir-rust-binding/ignored-source.rs\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -256,16 +275,16 @@ fi
             "cargo",
             """
             printf '%s | %s\n' "$(pwd -P)" "cargo $*" >> "$ARTIFACT_TASK_LOG"
-            if [ -f crates/morphir-avro-extension/ignored-source.rs ]; then
+            if [ -f crates/morphir-rust-binding/ignored-source.rs ]; then
                 printf '%s\n' "ignored-source-present" >> "$ARTIFACT_TASK_LOG"
             fi
             case "$*" in
                 'run --quiet --locked -p morphir-host-native --bin extension-claims -- '*)
                     cat guest-claims.json
                     ;;
-                'build --locked --release -p morphir-avro-extension --target wasm32-unknown-unknown')
-                    mkdir -p target/wasm32-unknown-unknown/release
-                    printf '\\000asm\\001\\000\\000\\000' > target/wasm32-unknown-unknown/release/morphir_avro_extension.wasm
+                'build --locked --release -p morphir-rust-binding --target wasm32-unknown-unknown')
+                    mkdir -p "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release"
+                    printf '\\000asm\\001\\000\\000\\000' > "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/morphir_rust_binding.wasm"
                     ;;
             esac
             """,
@@ -278,7 +297,6 @@ fi
             "wasm-tools",
             'test -f "$2"\nprintf \'%s | %s\\n\' "$(pwd -P)" "wasm-tools $*" >> "$ARTIFACT_TASK_LOG"\n',
         )
-        self._write_tool("java", 'echo \'openjdk version "17.0.12"\' >&2\n')
 
         self._git("init", "-q")
         self._git("config", "user.name", "Task Fixture")
@@ -312,6 +330,8 @@ fi
         environment = os.environ.copy()
         environment.pop("PYTHONPYCACHEPREFIX", None)
         environment.pop("PYTHONDONTWRITEBYTECODE", None)
+        # The task defaults its target directory to the sandbox's own target/.
+        environment.pop("CARGO_TARGET_DIR", None)
         environment["PATH"] = f"{self.root / 'test-bin'}{os.pathsep}{environment['PATH']}"
         environment["ARTIFACT_TASK_LOG"] = str(self.log)
         environment["ARTIFACT_SNAPSHOT_MARKER"] = str(self.snapshot_marker)
@@ -328,7 +348,7 @@ fi
     def descriptor(self) -> dict[str, object]:
         return json.loads(
             (
-                self.root / ".morphir/build/extensions/avro/release.json"
+                self.root / ".morphir/build/extensions/rust/release.json"
             ).read_text(encoding="utf-8")
         )
 

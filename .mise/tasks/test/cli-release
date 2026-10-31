@@ -1,6 +1,6 @@
 #!/bin/sh
 #MISE description="Publish, install and use an extension bundle through the released morphir CLI"
-#USAGE arg "<id>" help="Extension short id: avro, elm-native, gleam, openapi or rust"
+#USAGE arg "<id>" help="Extension short id: elm-native, gleam or rust"
 
 # The extension bundles built here are hosted by the morphir CLI, which finos/morphir releases.
 # This task is the compatibility check between the two: it takes the bundle that
@@ -15,13 +15,11 @@ set -eu
 
 ID="${usage_id:-${1:-}}"
 case "$ID" in
-    avro) EXTENSION_ID=morphir-avro ;;
     elm-native) EXTENSION_ID=morphir-elm-native ;;
     gleam) EXTENSION_ID=morphir-gleam ;;
-    openapi) EXTENSION_ID=morphir-openapi ;;
     rust) EXTENSION_ID=morphir-rust ;;
     *)
-        echo "usage: mise run test:cli-release <avro|elm-native|gleam|openapi|rust>" >&2
+        echo "usage: mise run test:cli-release <elm-native|gleam|rust>" >&2
         exit 2
         ;;
 esac
@@ -31,8 +29,6 @@ cd "$REPO_ROOT"
 
 VERSION=$(cat .config/morphir-cli-version)
 BUNDLE="${MORPHIR_EXTENSION_BUNDLE:-$REPO_ROOT/.morphir/build/extensions/$ID}"
-CLASSIC_IR="$REPO_ROOT/crates/morphir-core/tests/fixtures/ir/classic/greeting-example.json"
-CANONICAL_IR="$REPO_ROOT/crates/morphir-projection/tests/fixtures/canonical-customer-v4.json"
 
 [ -d "$BUNDLE" ] || {
     echo "no bundle at $BUNDLE; run 'mise run extension:artifact:$ID' first." >&2
@@ -120,40 +116,6 @@ morphir extension list
 # ---- use the extension -----------------------------------------------------------------------
 
 case "$ID" in
-    avro | openapi)
-        # `generate` reads a project configuration even when --input names the IR.
-        cat >"$PROJECT/morphir.toml" <<'TOML'
-[project]
-name = "Morphir.Example"
-version = "1.0.0"
-TOML
-        ;;
-esac
-
-case "$ID" in
-    avro)
-        morphir generate --target avro --input "$CLASSIC_IR" --output out/avro
-        [ -n "$(find "$PROJECT/out/avro" -type f | head -n 1)" ] || {
-            echo "generate --target avro wrote nothing" >&2
-            exit 1
-        }
-        morphir generate --target avro --input "$CANONICAL_IR" --output out/avro-v4 \
-            --option representation=json --option projection=schemas
-        require_file out/avro-v4/examples/customer/domain/Customer.avsc
-        ;;
-    openapi)
-        for target in openapi json-schema; do
-            morphir generate --target "$target" --input "$CLASSIC_IR" --output "out/$target"
-            [ -n "$(find "$PROJECT/out/$target" -type f | head -n 1)" ] || {
-                echo "generate --target $target wrote nothing" >&2
-                exit 1
-            }
-        done
-        morphir generate --target json-schema --input "$CANONICAL_IR" --output out/json-schema-v4
-        require_file out/json-schema-v4/domain.Customer.schema.json
-        morphir generate --target openapi --input "$CANONICAL_IR" --output out/openapi-v4
-        require_file out/openapi-v4/openapi.json
-        ;;
     elm-native)
         mkdir -p "$PROJECT/src/Acme"
         cat >"$PROJECT/morphir.toml" <<'TOML'

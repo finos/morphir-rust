@@ -1,12 +1,40 @@
 //! CLI conformance for claims read from exact WASM bytes.
 
-use morphir_avro_extension::AvroExtension;
-use morphir_extension_sdk::Extension;
 use morphir_extension_sdk::claims::CapabilityClaimSet;
 use morphir_extension_sdk::protocol::SUPPORTED_MEP_VERSIONS;
+use morphir_extension_sdk::{
+    BackendCapability, Extension, ExtensionCapabilities, ExtensionInfo, ExtensionType,
+};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Command, Output};
+
+/// A backend whose native metadata the fixture guests report as their own.
+#[derive(Default)]
+struct BackendFixture;
+
+impl Extension for BackendFixture {
+    fn info() -> ExtensionInfo {
+        ExtensionInfo {
+            id: "morphir-claims-fixture".into(),
+            name: "Morphir Claims Fixture".into(),
+            version: "0.1.0".into(),
+            types: vec![ExtensionType::Backend],
+            ..Default::default()
+        }
+    }
+
+    fn capabilities() -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            backend: Some(BackendCapability {
+                targets: vec!["fixture".into()],
+                ir_versions: vec!["3".into(), "4".into()],
+                generate: true,
+            }),
+            ..Default::default()
+        }
+    }
+}
 
 fn run_claims(path: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_extension-claims"))
@@ -23,12 +51,12 @@ fn assert_failure(output: Output, message: &str) {
     assert!(!stderr.contains("panicked"), "unexpected panic: {stderr}");
 }
 
-fn avro_claims() -> Value {
+fn fixture_claims() -> Value {
     serde_json::to_value(
         CapabilityClaimSet::from_metadata(
             SUPPORTED_MEP_VERSIONS.iter().map(|v| (*v).into()).collect(),
-            AvroExtension::info(),
-            &AvroExtension::capabilities(),
+            BackendFixture::info(),
+            &BackendFixture::capabilities(),
         )
         .unwrap(),
     )
@@ -61,7 +89,7 @@ fn a_guest_answering(response: Option<Value>) -> Vec<u8> {
     }
     let info = export(
         "morphir_extension_info",
-        &serde_json::to_string(&AvroExtension::info()).unwrap(),
+        &serde_json::to_string(&BackendFixture::info()).unwrap(),
     );
     let handle = response
         .map(|value| export("handle", &value.to_string()))
@@ -86,7 +114,7 @@ fn run_fixture(bytes: &[u8]) -> Output {
 
 #[test]
 fn prints_only_the_claim_set() {
-    let claims = avro_claims();
+    let claims = fixture_claims();
     let output = run_fixture(&a_guest_answering(Some(json!({
         "jsonrpc": "2.0", "id": 1, "result": claims
     }))));
@@ -125,7 +153,7 @@ fn reports_describe_rpc_errors() {
 #[test]
 fn rejects_malformed_responses() {
     for response in [
-        json!({"jsonrpc": "2.0", "id": 2, "result": avro_claims()}),
+        json!({"jsonrpc": "2.0", "id": 2, "result": fixture_claims()}),
         json!({"jsonrpc": "2.0", "id": 1, "result": {}}),
         json!({"jsonrpc": "2.0", "id": 1}),
     ] {
@@ -142,30 +170,4 @@ fn requires_exactly_one_path() {
             .unwrap();
         assert_failure(output, "Usage:");
     }
-}
-
-#[test]
-#[ignore = "requires cargo build --locked --release -p morphir-avro-extension --target wasm32-unknown-unknown"]
-fn avro_wasm_claims_equal_native_metadata() {
-    let metadata = Command::new(env!("CARGO"))
-        .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
-        .arg("--manifest-path")
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml"))
-        .output()
-        .unwrap();
-    assert!(metadata.status.success());
-    let metadata: Value = serde_json::from_slice(&metadata.stdout).unwrap();
-    let path = Path::new(metadata["target_directory"].as_str().unwrap())
-        .join("wasm32-unknown-unknown/release/morphir_avro_extension.wasm");
-    assert!(
-        path.is_file(),
-        "build the Avro guest first: {}",
-        path.display()
-    );
-    let output = run_claims(&path);
-    assert!(output.status.success(), "{:?}", output);
-    assert_eq!(
-        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
-        avro_claims()
-    );
 }

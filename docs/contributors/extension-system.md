@@ -11,8 +11,10 @@ Morphir extensions provide frontends, backends, validators, and transforms
 through the Morphir Extension Protocol (MEP). The current host uses JSON-RPC
 2.0 envelopes for both supported runtime kinds: `process` and `wasm`.
 
-The extension and Avro release work described here is available for contributor
-testing but has not produced a public release.
+The Avro and OpenAPI backends now live in
+[finos/morphir-extensions](https://github.com/finos/morphir-extensions), which builds and
+releases them. Their releases up to 0.2.0 remain in the
+[morphir-rust releases](https://github.com/finos/morphir-rust/releases).
 
 ## Runtime boundary
 
@@ -80,14 +82,14 @@ The portable protocol types and extension traits in
 guest exports compile only for `wasm32`. Keep generation logic in native Rust
 and use a thin exported guest adapter.
 
-The Avro backend is the complete in-tree example. From the `morphir-rust`
+The Rust binding is a complete in-tree example. From the `morphir-rust`
 repository root:
 
 ```console
 cargo test -p morphir-extension-sdk
-cargo test -p morphir-avro-extension
-cargo build --release -p morphir-avro-extension --target wasm32-unknown-unknown
-mise run extension:artifact:avro
+cargo test -p morphir-rust-binding
+cargo build --release -p morphir-rust-binding --target wasm32-unknown-unknown
+mise run extension:artifact:rust
 ```
 
 The artifact task creates a local bundle. It does not create an install index,

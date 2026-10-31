@@ -62,9 +62,11 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         from package_extension_test_support import PackageError, descriptor_bytes
 
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        avro = {**registry["extensions"]["avro"], "workspace_discovery": True}
-        self.assertNotIn("languages", avro)
-        arguments = ("avro", avro, "0.1.0", "morphir-avro-extension-0.1.0.wasm", "0" * 64)
+        backend_only = {
+            key: value for key, value in registry["extensions"]["rust"].items() if key != "languages"
+        }
+        backend_only["workspace_discovery"] = True
+        arguments = ("rust", backend_only, "0.1.0", "morphir-rust-binding-0.1.0.wasm", "0" * 64)
 
         with self.assertRaisesRegex(PackageError, "workspace_discovery"):
             descriptor_bytes(*arguments, RELEASE_COMMIT)
@@ -100,27 +102,11 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         self.assertEqual("0.1.0", release.version)
         self.assertEqual("extension", release.kind)
 
-    def test_openapi_tag_selects_only_the_openapi_extension(self) -> None:
-        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        package_versions = {
-            "morphir-avro-extension": "0.1.0",
-            "morphir-openapi-extension": "0.1.0",
-        }
-
-        release = extension_release.resolve_release(
-            "extension/openapi/v0.1.0", registry, "0.2.0", package_versions
-        )
-
-        self.assertEqual(["openapi"], release.short_ids)
-        self.assertEqual("0.1.0", release.version)
-
     def test_workspace_tag_selects_every_registered_extension(self) -> None:
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
         package_versions = {
-            "morphir-avro-extension": "0.1.0",
             "morphir-elm-binding": "0.1.0",
             "morphir-gleam-binding": "0.2.0",
-            "morphir-openapi-extension": "0.1.0",
             "morphir-rust-binding": "0.1.0",
         }
 
@@ -129,7 +115,7 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            ["avro", "elm-native", "gleam", "openapi", "rust"], release.short_ids
+            ["elm-native", "gleam", "rust"], release.short_ids
         )
 
     def test_workspace_tag_selects_opted_in_extensions_in_sorted_order(self) -> None:

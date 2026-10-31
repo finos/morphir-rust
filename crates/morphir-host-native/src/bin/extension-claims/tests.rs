@@ -1,19 +1,46 @@
 use super::validate_claims;
 use morphir_extension_sdk::claims::CapabilityClaimSet;
-use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
+use morphir_extension_sdk::{
+    BackendCapability, Extension, ExtensionCapabilities, ExtensionInfo, ExtensionType,
+};
 use serde_json::{Value, json};
+
+/// A backend whose native metadata the fixture guests report as their own.
+#[derive(Default)]
+struct BackendFixture;
+
+impl Extension for BackendFixture {
+    fn info() -> ExtensionInfo {
+        ExtensionInfo {
+            id: "morphir-claims-fixture".into(),
+            name: "Morphir Claims Fixture".into(),
+            version: "0.1.0".into(),
+            types: vec![ExtensionType::Backend],
+            ..Default::default()
+        }
+    }
+
+    fn capabilities() -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            backend: Some(BackendCapability {
+                targets: vec!["fixture".into()],
+                ir_versions: vec!["3".into(), "4".into()],
+                generate: true,
+            }),
+            ..Default::default()
+        }
+    }
+}
 
 #[test]
 fn describe_request_is_accepted_by_the_sdk_dispatcher() {
-    use morphir_avro_extension::AvroExtension;
-    use morphir_extension_sdk::Extension;
     use morphir_extension_sdk::protocol::{ExtensionRequest, SUPPORTED_MEP_VERSIONS, methods};
 
     let request = ExtensionRequest::new(methods::DESCRIBE, super::describe_params(), 1).unwrap();
-    let response = morphir_extension_sdk::__dispatch_request::<AvroExtension>(
+    let response = morphir_extension_sdk::__dispatch_request::<BackendFixture>(
         &request,
         &[],
-        &AvroExtension::info().types,
+        &BackendFixture::info().types,
     );
     assert!(response.error.is_none(), "{:?}", response.error);
     let expected = CapabilityClaimSet::from_metadata(
@@ -21,8 +48,8 @@ fn describe_request_is_accepted_by_the_sdk_dispatcher() {
             .iter()
             .map(|version| (*version).into())
             .collect(),
-        AvroExtension::info(),
-        &AvroExtension::capabilities(),
+        BackendFixture::info(),
+        &BackendFixture::capabilities(),
     )
     .unwrap();
     assert_eq!(

@@ -3,49 +3,33 @@
 from package_extension_test_support import *
 
 class PackageExtensionTests(unittest.TestCase):
-    def test_avro_registry_entry_is_independently_versioned(self) -> None:
-        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        avro = registry["extensions"]["avro"]
-
-        self.assertEqual("morphir-avro-extension", avro["package"])
-        self.assertEqual("morphir-avro-extension", avro["artifact"])
-        self.assertEqual("morphir-avro", avro["extension_id"])
-        self.assertEqual(["0.1"], avro["mep_versions"])
-        self.assertEqual(["avro"], avro["targets"])
-        self.assertEqual(["3", "4"], avro["ir_versions"])
-        self.assertTrue(avro["release_with_workspace"])
-
-    def test_openapi_registry_entry_is_independently_versioned(self) -> None:
-        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        openapi = registry["extensions"]["openapi"]
-
-        self.assertEqual("morphir-openapi-extension", openapi["package"])
-        self.assertEqual("morphir-openapi-extension", openapi["artifact"])
-        self.assertEqual("morphir-openapi", openapi["extension_id"])
-        self.assertEqual(["0.1"], openapi["mep_versions"])
-        self.assertEqual(["openapi", "json-schema"], openapi["targets"])
-        self.assertEqual(["3", "4"], openapi["ir_versions"])
-        self.assertTrue(openapi["release_with_workspace"])
-
     def test_a_multi_target_registry_entry_reaches_the_release_descriptor(self) -> None:
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        elm = {**registry["extensions"]["elm-native"], "targets": ["elm", "json-schema"]}
 
         descriptor = json.loads(
             descriptor_bytes(
-                "openapi",
-                registry["extensions"]["openapi"],
+                "elm-native",
+                elm,
                 "0.1.0",
-                "morphir_openapi_extension.wasm",
+                "morphir_elm_binding.wasm",
                 "0" * 64,
                 None,
             )
         )
 
-        self.assertEqual(["openapi", "json-schema"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
-        self.assertEqual("morphir-openapi", descriptor["extensionId"])
+        self.assertEqual(["elm", "json-schema"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
+        self.assertEqual("morphir-elm-native", descriptor["extensionId"])
         # The guest reports this exact spelling at initialization; a
         # repository record derived from the identifier would not match it.
-        self.assertEqual("Morphir OpenAPI", descriptor["artifacts"][0]["claims"]["extension"]["name"])
+        self.assertEqual("Morphir Elm (native)", descriptor["artifacts"][0]["claims"]["extension"]["name"])
+
+    @staticmethod
+    def _backend_only(registry: dict) -> dict:
+        """The registered Rust entry without its frontend languages."""
+        rust = dict(registry["extensions"]["rust"])
+        del rust["languages"]
+        return rust
 
     @staticmethod
     def _descriptor(short_id: str, extension: dict) -> dict:
@@ -84,14 +68,13 @@ class PackageExtensionTests(unittest.TestCase):
     def test_rejects_incremental_without_a_frontend(self) -> None:
         """Nothing honours the flag on a backend-only entry, so it is refused."""
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        avro = dict(registry["extensions"]["avro"])
-        self.assertNotIn("languages", avro)
-        avro["incremental"] = True
+        backend = self._backend_only(registry)
+        backend["incremental"] = True
 
         with self.assertRaises(PackageError) as refusal:
-            self._descriptor("avro", avro)
+            self._descriptor("rust", backend)
 
-        self.assertIn("avro", str(refusal.exception))
+        self.assertIn("rust", str(refusal.exception))
         self.assertIn("incremental", str(refusal.exception))
 
     def test_the_discovery_providers_reach_the_release_descriptor(self) -> None:
@@ -126,14 +109,13 @@ class PackageExtensionTests(unittest.TestCase):
     def test_rejects_workspace_discovery_without_a_frontend(self) -> None:
         """Discovery synthesis needs the languages that name the sources."""
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        avro = dict(registry["extensions"]["avro"])
-        self.assertNotIn("languages", avro)
-        avro["workspace_discovery"] = True
+        backend = self._backend_only(registry)
+        backend["workspace_discovery"] = True
 
         with self.assertRaises(PackageError) as refusal:
-            self._descriptor("avro", avro)
+            self._descriptor("rust", backend)
 
-        self.assertIn("avro", str(refusal.exception))
+        self.assertIn("rust", str(refusal.exception))
         self.assertIn("workspace_discovery", str(refusal.exception))
 
     def test_rejects_a_non_boolean_workspace_discovery_flag(self) -> None:
@@ -153,10 +135,10 @@ class PackageExtensionTests(unittest.TestCase):
         declare workspace for extensions that cannot serve discovery.
         """
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        avro = registry["extensions"]["avro"]
-        self.assertIs(True, avro["release_with_workspace"])
+        backend = self._backend_only(registry)
+        self.assertIs(True, backend["release_with_workspace"])
 
-        descriptor = self._descriptor("avro", avro)
+        descriptor = self._descriptor("rust", backend)
 
         self.assertNotIn("workspace", descriptor["artifacts"][0]["claims"]["capabilities"])
 

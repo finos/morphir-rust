@@ -108,7 +108,7 @@ crates = [
   "morphir-host",
   "morphir-host-native",
   "morphir-wasm-binding",
-  "morphir-avro-extension",
+  "morphir-rust-binding",
 ]
 paths = [".mise/tasks/test/extism"]
 

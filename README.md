@@ -19,7 +19,6 @@ This table lists the crates in the Cargo workspace.
 
 | Crate | Description |
 | --- | --- |
-| `morphir-avro-extension` | Apache Avro backend that projects Morphir v3/v4 specifications to Avro JSON schemas, protocols, and IDL. |
 | `morphir-bdd` | Cucumber execution for Gherkin suites: a shared world, reusable step libraries and a suite runner with JSON and JUnit output. |
 | `morphir-builtins` | Bundled native and WebAssembly extensions, currently including Morphir IR migration. |
 | `morphir-common` | Shared IR transport, loading, virtual filesystem, remote, home, cache, and pipeline utilities. |
@@ -41,7 +40,6 @@ This table lists the crates in the Cargo workspace.
 | `morphir-kb` | Operational layer for OKF knowledge bundles. |
 | `morphir-mck-adapter` | The Morphir Compatibility Kit adapter: `mck-adapter-rust`, a JSON-lines transport for IR and opt-in package operations. |
 | `morphir-okf` | Pure OKF model, parsing, and loading support. |
-| `morphir-openapi-extension` | OpenAPI and JSON Schema backend that projects Morphir v3/v4 specifications to OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents. |
 | `morphir-package` | Experimental model-package normalization, digests, offline schema validation, and closed Library-set verification. |
 | `morphir-projection` | Shared Morphir IR normalization that backend extensions project from. |
 | `morphir-runtime` | Reserved runtime crate; currently a minimal scaffold. |
@@ -70,10 +68,8 @@ This table lists independently releasable extensions. Registrations come from
 
 | Extension | Package | Version | Description |
 | --- | --- | --- | --- |
-| `morphir-avro` | `morphir-avro-extension` | `0.2.0` | Generates Avro JSON schemas or protocols and Avro IDL from Morphir specifications. |
 | `morphir-elm-native` | `morphir-elm-binding` | `0.2.0` | Compiles Elm type declarations to IR v3 and v4 and generates Elm back; incremental. |
 | `morphir-gleam` | `morphir-gleam-binding` | `0.3.0` | Native Gleam frontend and backend using the official Gleam parser; IR v3/v4 types and incremental compilation. |
-| `morphir-openapi` | `morphir-openapi-extension` | `0.2.0` | Generates OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents from Morphir specifications. |
 | `morphir-rust` | `morphir-rust-binding` | `0.3.0` | Compiles and generates Rust types, conditional functions, pattern matches, calls and typed lambdas using IR v3 and v4. |
 
 The Python extension (crate `morphir-python-binding`, bundle `morphir-python`) is now
@@ -81,14 +77,21 @@ maintained and released from [finos/morphir-python](https://github.com/finos/mor
 The historical `extension/python/v0.1.0` to `extension/python/v0.4.0` bundles remain
 available in the [morphir-rust releases](https://github.com/finos/morphir-rust/releases).
 
+The Avro extension (crate `morphir-avro-extension`, bundle `morphir-avro`) and the OpenAPI
+extension (crate `morphir-openapi-extension`, bundle `morphir-openapi`) are now maintained and
+released from [finos/morphir-extensions](https://github.com/finos/morphir-extensions).
+The historical `extension/avro/v0.1.0` to `extension/avro/v0.2.0` and
+`extension/openapi/v0.1.0` to `extension/openapi/v0.2.0` bundles remain available in the
+[morphir-rust releases](https://github.com/finos/morphir-rust/releases).
+
 ### Read claims from a built extension
 
 Build an extension bundle with `mise run extension:artifact:<id>`, then read the
 guest's capability claims from its staged `.wasm`:
 
 ```sh
-mise run extension:artifact:avro
-mise run extension:claims avro
+mise run extension:artifact:rust
+mise run extension:claims rust
 ```
 
 `extension:claims` reads the sole `.wasm` in `.morphir/build/extensions/<id>/`.
@@ -108,12 +111,6 @@ responses and invalid guests exit non-zero with an error on stderr.
 
 Use these claims for the exact artifact being packaged into a version-2 bundle
 descriptor. The tool does not modify the descriptor or packaging pipeline.
-The real-guest comparison test is opt-in because it requires a release WASM build:
-
-```sh
-cargo build --locked --release -p morphir-avro-extension --target wasm32-unknown-unknown
-cargo test --locked -p morphir-host-native --test extension_claims -- --ignored
-```
 
 ## Prerequisites
 

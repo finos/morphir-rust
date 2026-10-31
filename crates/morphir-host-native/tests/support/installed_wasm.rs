@@ -1,12 +1,12 @@
 //! Shared install/activate fixtures for installed-WebAssembly-extension
 //! lifecycle conformance tests.
 //!
-//! Each backend extension gets its own `tests/installed_wasm_extension_*.rs`
-//! integration-test binary so the two extensions' pipelines stay isolated:
-//! running one extension's `cargo test --test <binary> -- --ignored` never
-//! requires the other extension's release `.wasm` guest to exist. This
-//! module holds only the parts that do not depend on which extension is
-//! under test — install, activate, and locate the compiled guest.
+//! Each guest gets its own `tests/installed_wasm_extension*.rs`
+//! integration-test binary, so running one guest's
+//! `cargo test --test <binary> -- --ignored` never requires another guest's
+//! release `.wasm` to exist. This module holds only the parts that do not
+//! depend on which extension is under test — install, activate, and locate
+//! the compiled guest.
 
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
@@ -32,6 +32,11 @@ pub struct InstalledWasmMother {
 impl InstalledWasmMother {
     /// Build a controlled local index around one release-built guest and
     /// resolve a fresh `MorphirHome` to install it into.
+    ///
+    /// The record always declares a backend. Pass `frontend` (the record's
+    /// `frontend` member) when the guest is also a frontend, because
+    /// negotiation rejects a guest whose capability kinds differ from the
+    /// ones it was discovered with.
     pub fn from_path(
         guest_path: impl AsRef<Path>,
         extension_id: &str,
@@ -39,6 +44,7 @@ impl InstalledWasmMother {
         version: &str,
         targets: &[&str],
         ir_versions: &[&str],
+        frontend: Option<serde_json::Value>,
     ) -> Self {
         let guest_path = guest_path.as_ref();
         let bytes = fs::read(guest_path).unwrap_or_else(|error| {
@@ -64,14 +70,19 @@ impl InstalledWasmMother {
         let extension_id_value =
             ExtensionId::parse(extension_id).expect("fixture ID should be valid");
         let digest = Sha256Digest::of_bytes(&bytes);
-        let record = json!({
+        let capabilities = if frontend.is_some() {
+            json!(["frontend", "backend"])
+        } else {
+            json!(["backend"])
+        };
+        let mut record = json!({
             "schemaVersion": "1.0",
             "id": extension_id_value,
             "name": display_name,
             "version": version,
             "channels": ["stable"],
             "mepVersions": ["0.1"],
-            "capabilities": ["backend"],
+            "capabilities": capabilities,
             "backend": { "targets": targets, "irVersions": ir_versions },
             "artifacts": [{
                 "runtime": "wasm",
@@ -80,6 +91,9 @@ impl InstalledWasmMother {
                 "filename": artifact_name
             }]
         });
+        if let Some(frontend) = frontend {
+            record["frontend"] = frontend;
+        }
         fs::write(
             index.join(format!("extensions/{extension_id}.jsonl")),
             format!("{record}\n"),

@@ -18,8 +18,10 @@ The host bounds each WASM guest to 256 MiB of linear memory, a 30-second and
 100-million-instruction call budget, and 64 MiB MEP requests and responses.
 Discovery and invocation are isolated from Tokio runtime workers.
 
-The extension and Avro release work is available for contributor testing but
-has not produced a public release.
+The Avro and OpenAPI backends now live in
+[finos/morphir-extensions](https://github.com/finos/morphir-extensions), which builds and
+releases them. Their releases up to 0.2.0 remain in the
+[morphir-rust releases](https://github.com/finos/morphir-rust/releases).
 
 ## SDK boundary
 
@@ -33,7 +35,7 @@ targets. The Extism PDK, guest exports, and imported host functions compile
 only for `wasm32`. Keep domain logic in native Rust and use a thin guest adapter
 for the MEP dispatcher.
 
-The in-tree `morphir-avro-extension` crate is the reference implementation.
+The in-tree `morphir-rust-binding` crate is a reference implementation.
 
 ## Build and test
 
@@ -41,14 +43,14 @@ From the repository root:
 
 ```console
 cargo test -p morphir-extension-sdk
-cargo test -p morphir-avro-extension
-cargo build --release -p morphir-avro-extension --target wasm32-unknown-unknown
+cargo test -p morphir-rust-binding
+cargo build --release -p morphir-rust-binding --target wasm32-unknown-unknown
 ```
 
-To create and validate the local Avro release bundle:
+To create and validate the local Rust release bundle:
 
 ```console
-mise run extension:artifact:avro
+mise run extension:artifact:rust
 ```
 
 This task creates a local bundle only. It does not create an index, tag, or

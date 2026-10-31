@@ -12,8 +12,10 @@ Morphir extensions provide frontends, backends, validators, and transforms
 through the Morphir Extension Protocol (MEP). The current implementation uses
 JSON-RPC 2.0 request and response envelopes for every runtime.
 
-The extension and Avro release work described here is implemented for
-contributor testing but has not produced a public release.
+The Avro and OpenAPI backends now live in
+[finos/morphir-extensions](https://github.com/finos/morphir-extensions), which builds and
+releases them. Their releases up to 0.2.0 remain in the
+[morphir-rust releases](https://github.com/finos/morphir-rust/releases).
 
 ## Current architecture
 
@@ -49,8 +51,9 @@ capabilities. A backend also implements `Backend` and accepts the exact
 `GenerateRequest { ir, options }` operation. The SDK export macro adds the
 WASM guest entry points and MEP dispatcher.
 
-The [Avro backend implementation](../../../../crates/morphir-avro-extension/src/lib.rs)
-is the complete in-tree example. Its shape is:
+The [Rust binding implementation](../../../../crates/morphir-rust-binding/src/lib.rs)
+is a complete in-tree example. It is also a frontend, so it exports
+`frontend, backend`. A backend-only extension has this shape:
 
 ```text
 Extension::info() -> stable identity and version
@@ -70,8 +73,8 @@ building a guest:
 
 ```console
 cargo test -p morphir-extension-sdk
-cargo test -p morphir-avro-extension
-cargo build --release -p morphir-avro-extension --target wasm32-unknown-unknown
+cargo test -p morphir-rust-binding
+cargo build --release -p morphir-rust-binding --target wasm32-unknown-unknown
 ```
 
 The SDK conformance fixtures exercise initialization, capability negotiation,
@@ -108,26 +111,25 @@ These distribution versions are independent of Morphir IR versions.
 For a tested Avro build-to-index example, see the root repository's
 [Avro generation guide](https://github.com/finos/morphir/blob/main/docs/generate/avro.md#build-and-install-the-local-extension).
 
-## Avro WASM artifacts
+## WASM artifacts
 
-Create and validate a local Avro release bundle with:
+Create and validate a local release bundle for an extension with:
 
 ```console
-mise run extension:artifact:avro
+mise run extension:artifact:rust
 ```
 
-The task tests the native crate, builds and validates the WASM guest, checks the
-Avro IDL goldens, and writes the WASM file, checksum, and `release.json` under
-`.morphir/build/extensions/avro/`. It does not create an install index, Git tag,
-or GitHub release. The root Avro guide shows how to turn that local bundle into
-a version-2 local index record using CLI `0.4.0-beta.7` or later.
+The task tests the native crate, builds and validates the WASM guest, and writes
+the WASM file, checksum, and `release.json` under
+`.morphir/build/extensions/rust/`. It does not create an install index, Git tag,
+or GitHub release.
 
 ## Create versus publish
 
 Artifact creation, Git tag creation, and release publication are separate
 operations:
 
-- `mise run extension:artifact:avro` creates a local bundle only.
+- `mise run extension:artifact:<id>` creates a local bundle only.
 - `git tag ...` creates a local Git reference only.
 - Pushing an eligible tag or manually dispatching the release workflow starts
   publication.
@@ -139,10 +141,10 @@ rebuild an extension.
 
 ## Release tags
 
-An independent extension release uses the Avro crate version:
+An independent extension release uses the extension crate version:
 
 ```console
-git tag extension/avro/v0.1.0
+git tag extension/rust/v0.3.0
 ```
 
 A workspace release uses the workspace version:
@@ -159,4 +161,3 @@ workspace tags skip it. Either setting still permits an independent
 the authoritative Cargo version fails before the build starts.
 
 Do not push a tag or dispatch the workflow merely to test artifact creation.
-The Avro extension has not been publicly released.

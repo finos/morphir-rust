@@ -15,11 +15,15 @@ For an extension implementing both compilation and generation, see the
 [Rust binding](https://github.com/finos/morphir-rust/tree/main/crates/morphir-rust-binding).
 It uses the same SDK and MEP transport for both capabilities. The Python
 extension now lives in [finos/morphir-python](https://github.com/finos/morphir-python).
+The Avro and OpenAPI backends now live in
+[finos/morphir-extensions](https://github.com/finos/morphir-extensions), which builds and
+releases them. Their releases up to 0.2.0 remain in the
+[morphir-rust releases](https://github.com/finos/morphir-rust/releases).
 
 ## 1. Start from the reference backend
 
-Use `crates/morphir-avro-extension` as the working example. It separates the
-native projection and rendering pipeline from a thin `wasm32` guest adapter.
+Use `crates/morphir-rust-binding` as the working example. It separates the
+native frontend and backend pipelines from a thin `wasm32` guest adapter.
 That boundary keeps backend behavior testable without starting a WASM runtime.
 
 An extension implements `Extension` to declare identity and typed
@@ -34,7 +38,7 @@ guest:
 
 ```console
 cargo test -p morphir-extension-sdk
-cargo test -p morphir-avro-extension
+cargo test -p morphir-rust-binding
 ```
 
 Keep parsing, normalization, projection, and rendering in native Rust. Test
@@ -45,18 +49,18 @@ diagnostics and artifact paths there as ordinary values.
 Build the guest for the current Extism runtime:
 
 ```console
-cargo build --release -p morphir-avro-extension --target wasm32-unknown-unknown
+cargo build --release -p morphir-rust-binding --target wasm32-unknown-unknown
 ```
 
 The guest has no direct filesystem or network access. It receives MEP requests
 and returns diagnostics and artifacts. The host rejects unsafe or conflicting
 paths before writing output.
 
-For the Avro backend, the repository task runs the native tests, builds and
-validates the guest, checks IDL goldens, and creates a local bundle:
+For the Rust binding, the repository task runs the native tests, builds and
+validates the guest, and creates a local bundle:
 
 ```console
-mise run extension:artifact:avro
+mise run extension:artifact:rust
 ```
 
 The task does not publish a release or create an install index.
@@ -90,9 +94,9 @@ isolated `MORPHIR_HOME`.
 After installation, select a target through the root CLI:
 
 ```console
-morphir generate --target avro \
+morphir generate --target rust \
   --input morphir-ir.json \
-  --output generated/avro
+  --output generated/rust
 ```
 
 Backend-specific defaults live under `[codegen.<target>]` in `morphir.toml`.

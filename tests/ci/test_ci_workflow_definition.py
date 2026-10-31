@@ -265,7 +265,7 @@ if ($process.ExitCode -ne 0) { throw 'environment fixture subprocess failed' }
             bundle.mkdir()
             (bundle / "stub.release.json").write_text("{}", encoding="utf-8")
             result = subprocess.run(
-                ["sh", str(task), "avro"],
+                ["sh", str(task), "rust"],
                 cwd=REPOSITORY_ROOT,
                 env={
                     **os.environ,

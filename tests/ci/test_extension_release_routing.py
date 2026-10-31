@@ -62,9 +62,11 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         from package_extension_test_support import PackageError, descriptor_bytes
 
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
-        avro = {**registry["extensions"]["avro"], "workspace_discovery": True}
-        self.assertNotIn("languages", avro)
-        arguments = ("avro", avro, "0.1.0", "morphir-avro-extension-0.1.0.wasm", "0" * 64)
+        backend_only = {
+            key: value for key, value in registry["extensions"]["rust"].items() if key != "languages"
+        }
+        backend_only["workspace_discovery"] = True
+        arguments = ("rust", backend_only, "0.1.0", "morphir-rust-binding-0.1.0.wasm", "0" * 64)
 
         with self.assertRaisesRegex(PackageError, "workspace_discovery"):
             descriptor_bytes(*arguments, RELEASE_COMMIT)

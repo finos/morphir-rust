@@ -205,7 +205,7 @@ def generate_llms_txt(docs: list[DocPage], base_url: str) -> str:
         "",
         "Morphir Rust provides tools for working with Morphir IR (Intermediate Representation), "
         "including format migration, validation, and code generation. It supports language bindings "
-        "for Gleam and includes an extension system for adding new languages and targets.",
+        "for Elm and Rust and includes an extension system for adding new languages and targets.",
         "",
     ]
 
@@ -260,7 +260,7 @@ def generate_llms_full_txt(docs: list[DocPage], base_url: str) -> str:
         "",
         "Morphir Rust provides tools for working with Morphir IR (Intermediate Representation), "
         "including format migration, validation, and code generation. It supports language bindings "
-        "for Gleam and includes an extension system for adding new languages and targets.",
+        "for Elm and Rust and includes an extension system for adding new languages and targets.",
         "",
         "---",
         "",

@@ -33,7 +33,6 @@ This table lists the crates in the Cargo workspace.
 | `morphir-ext-example` | Example TEA counter WebAssembly component extension. |
 | `morphir-extension-sdk` | SDK and MEP contracts for WebAssembly extensions. |
 | `morphir-gherkin` | Gherkin document model for `.feature` and `.feature.md` files: spans, navigation, prose, and tag, fence and prose extensions. |
-| `morphir-gleam-binding` | Gleam frontend and backend extension integration. |
 | `morphir-host` | Portable Morphir extension host: MEP handshake, sessions and channels. |
 | `morphir-host-native` | Native channels for the Morphir extension host: processes, Extism and in-process guests. |
 | `morphir-json` | Serde-backed literal JSON traversal with caller-owned resource checks. |
@@ -69,7 +68,6 @@ This table lists independently releasable extensions. Registrations come from
 | Extension | Package | Version | Description |
 | --- | --- | --- | --- |
 | `morphir-elm-native` | `morphir-elm-binding` | `0.2.0` | Compiles Elm type declarations to IR v3 and v4 and generates Elm back; incremental. |
-| `morphir-gleam` | `morphir-gleam-binding` | `0.3.0` | Native Gleam frontend and backend using the official Gleam parser; IR v3/v4 types and incremental compilation. |
 | `morphir-rust` | `morphir-rust-binding` | `0.3.0` | Compiles and generates Rust types, conditional functions, pattern matches, calls and typed lambdas using IR v3 and v4. |
 
 The Python extension (crate `morphir-python-binding`, bundle `morphir-python`) is now
@@ -82,6 +80,12 @@ extension (crate `morphir-openapi-extension`, bundle `morphir-openapi`) are now 
 released from [finos/morphir-extensions](https://github.com/finos/morphir-extensions).
 The historical `extension/avro/v0.1.0` to `extension/avro/v0.2.0` and
 `extension/openapi/v0.1.0` to `extension/openapi/v0.2.0` bundles remain available in the
+[morphir-rust releases](https://github.com/finos/morphir-rust/releases).
+
+The Gleam extension (crate `morphir-gleam-binding`, bundle `morphir-gleam`) is now maintained
+and released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam), starting with
+[`extension/gleam/v0.4.0`](https://github.com/finos/morphir-gleam/releases/tag/extension/gleam/v0.4.0).
+The historical `extension/gleam/v0.3.0` bundle remains available in the
 [morphir-rust releases](https://github.com/finos/morphir-rust/releases).
 
 ### Read claims from a built extension

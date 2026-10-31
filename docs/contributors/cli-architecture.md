@@ -15,7 +15,6 @@ The Morphir CLI owns command parsing, configuration use, provider registration, 
 morphir
 ├── compile          # Language-neutral compilation
 ├── generate         # Language-neutral code generation
-├── gleam            # Gleam compile, generate, and roundtrip workflows
 ├── extension        # Verified extension repository and installation management
 ├── ir               # IR operations
 └── ...
@@ -23,7 +22,9 @@ morphir
 
 ## Provider registry
 
-The CLI constructs a fresh transport-neutral provider registry, represented by `morphir_host::Registry`, for each operation that needs a provider. It registers the native Gleam extension as a built-in and then adds validated installed-state snapshots. Built-in registration belongs to the CLI because the executable decides which implementations it links. `morphir-host` has no Gleam dependency.
+The CLI constructs a fresh transport-neutral provider registry, represented by `morphir_host::Registry`, for each operation that needs a provider. It registers the built-ins that the executable links and then adds validated installed-state snapshots. Built-in registration belongs to the CLI because the executable decides which implementations it links. `morphir-host` has no dependency on a language extension.
+
+The CLI does not build Gleam in and has no `gleam` subcommand. Gleam is an extension released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam), starting with [`extension/gleam/v0.4.0`](https://github.com/finos/morphir-gleam/releases/tag/extension/gleam/v0.4.0). That release is a core-Wasm guest for the MoonBit CLI.
 
 The registry records two independent properties:
 
@@ -58,7 +59,7 @@ The general compile path performs these steps:
 7. Validate diagnostics and the returned IR, then write `morphir-ir.json` from the host.
 8. Format human, JSON, or JSON Lines output.
 
-The single-file Elm compatibility path still launches its configured process extension directly. It does not use the built-in Gleam route.
+The single-file Elm compatibility path still launches its configured process extension directly. It does not use the provider registry.
 
 ## Generate flow
 

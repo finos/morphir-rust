@@ -21,16 +21,3 @@ incremental = true
 workspace_discovery = true
 ir_versions = ["3", "4"]
 release_with_workspace = true
-
-[extensions.gleam]
-package = "morphir-gleam-binding"
-artifact = "morphir-gleam-binding"
-extension_id = "morphir-gleam"
-name = "Morphir Gleam"
-mep_versions = ["0.1"]
-targets = ["gleam"]
-languages = [{ id = "gleam", file_extensions = [".gleam"] }]
-incremental = true
-workspace_discovery = true
-ir_versions = ["3", "4"]
-release_with_workspace = true

@@ -1,6 +1,6 @@
 #!/bin/sh
 #MISE description="Publish, install and use an extension bundle through the released morphir CLI"
-#USAGE arg "<id>" help="Extension short id: elm-native, gleam or rust"
+#USAGE arg "<id>" help="Extension short id: elm-native or rust"
 
 # The extension bundles built here are hosted by the morphir CLI, which finos/morphir releases.
 # This task is the compatibility check between the two: it takes the bundle that
@@ -16,10 +16,9 @@ set -eu
 ID="${usage_id:-${1:-}}"
 case "$ID" in
     elm-native) EXTENSION_ID=morphir-elm-native ;;
-    gleam) EXTENSION_ID=morphir-gleam ;;
     rust) EXTENSION_ID=morphir-rust ;;
     *)
-        echo "usage: mise run test:cli-release <elm-native|gleam|rust>" >&2
+        echo "usage: mise run test:cli-release <elm-native|rust>" >&2
         exit 2
         ;;
 esac
@@ -83,15 +82,6 @@ require_file() {
         echo "expected the CLI to write $1" >&2
         exit 1
     }
-}
-
-same_json() {
-    python3 - "$PROJECT/$1" "$PROJECT/$2" <<'PY'
-import json, sys
-left, right = (json.load(open(path, encoding="utf-8")) for path in sys.argv[1:3])
-if left != right:
-    raise SystemExit(f"{sys.argv[1]} and {sys.argv[2]} differ")
-PY
 }
 
 format_version() {
@@ -160,33 +150,6 @@ decision = outcome["typeExp"]["Record"]["fields"]["decision"]
 if decision != {"Reference": {"fqname": "acme/example:acme/types#decision"}}:
     raise SystemExit(f"Outcome.decision does not refer to Acme.Types.Decision: {decision}")
 PY
-        ;;
-    gleam)
-        mkdir -p "$PROJECT/src/domain"
-        cat >"$PROJECT/morphir.toml" <<'TOML'
-[project]
-name = "acme/example"
-version = "0.1.0"
-source_directory = "src"
-[frontend]
-language = "gleam"
-emit_parse_stage = false
-TOML
-        cat >"$PROJECT/src/domain/models.gleam" <<'GLEAM'
-pub type Decision {
-  Accept(value: Int)
-  Reject
-}
-pub type Pair = #(Int, Bool)
-GLEAM
-        for version in 3 4; do
-            morphir compile --language gleam --ir-version "$version" --input src --output "compiled-v$version"
-            [ "$(format_version "compiled-v$version/morphir-ir.json")" = "$version" ]
-            morphir generate --target gleam --input "compiled-v$version/morphir-ir.json" --output "generated-v$version"
-            require_file "generated-v$version/domain/models.gleam"
-            morphir compile --language gleam --ir-version "$version" --input "generated-v$version" --output "recompiled-v$version"
-            same_json "compiled-v$version/morphir-ir.json" "recompiled-v$version/morphir-ir.json"
-        done
         ;;
     rust)
         mkdir -p "$PROJECT/src"

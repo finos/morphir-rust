@@ -86,7 +86,7 @@ class PackageExtensionTests(unittest.TestCase):
         """
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
 
-        for short_id in ("elm-native", "gleam"):
+        for short_id in ("elm-native",):
             with self.subTest(short_id=short_id):
                 extension = registry["extensions"][short_id]
                 self.assertIs(True, extension["workspace_discovery"])

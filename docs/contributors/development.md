@@ -34,9 +34,8 @@ cargo test
 # Specific crate
 cargo test -p morphir-common
 
-# BDD acceptance tests
-cd crates/morphir-gleam-binding
-cargo test --test acceptance
+# BDD acceptance tests of one crate
+cargo test -p morphir-elm-binding --test acceptance
 ```
 
 ## Project Structure
@@ -47,7 +46,7 @@ morphir-rust/
 │   ├── morphir-devkit/       # Devkit: workspace, config, and extension discovery
 │   ├── morphir-common/       # Shared infrastructure
 │   ├── morphir-daemon/       # Runtime services
-│   ├── morphir-gleam-binding/ # Gleam extension
+│   ├── morphir-elm-binding/  # Elm extension
 │   └── ...
 ├── docs/                     # Documentation site
 └── ...

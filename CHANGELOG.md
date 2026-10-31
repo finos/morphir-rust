@@ -310,6 +310,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#921).
 
 ### Removed
+- **Breaking:** The Gleam extension crate `morphir-gleam-binding` (bundle
+  `morphir-gleam`, short id `gleam`) moved with its history to
+  [finos/morphir-gleam](https://github.com/finos/morphir-gleam)
+  (finos/morphir-gleam#23), which now maintains and releases it from
+  `extension/gleam/v0.4.0`. This workspace no longer builds, tests or
+  releases it: the crate, its `.github/extensions.toml` registration, the
+  `extension:artifact:gleam` task, the `gleam` case of `test:cli-release`,
+  the packaged-bundle test `morphir-host-native/tests/gleam_extension.rs`,
+  the `gleam-core` Renovate rule and the Gleam CLI reference and tutorial
+  pages are gone. Anyone who built the crate from morphir-rust must build it
+  from finos/morphir-gleam. The `extension/gleam/v0.3.0` release stays
+  published here.
 - **Breaking:** The Avro extension crate `morphir-avro-extension` (bundle
   `morphir-avro`, short id `avro`) and the OpenAPI extension crate
   `morphir-openapi-extension` (bundle `morphir-openapi`, short id `openapi`)

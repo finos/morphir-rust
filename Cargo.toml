@@ -21,7 +21,6 @@ default-members = [
     "crates/morphir-ext-core",
     "crates/morphir-extension-sdk",
     "crates/morphir-gherkin",
-    "crates/morphir-gleam-binding",
     "crates/morphir-host",
     "crates/morphir-host-native",
     "crates/morphir-kb",

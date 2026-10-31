@@ -30,16 +30,16 @@ exit 0
 def _descriptor(**extra: object) -> str:
     fields = {
         "schemaVersion": "2.0.0-draft.2",
-        "shortId": "gleam",
-        "extensionId": "morphir-gleam",
+        "shortId": "rust",
+        "extensionId": "morphir-rust",
         "version": "0.1.0",
-        "artifacts": [{"runtime": "wasm", "filename": "morphir-gleam.wasm",
+        "artifacts": [{"runtime": "wasm", "filename": "morphir-rust.wasm",
                        "sha256": "0" * 64, "claims": {
                            "claimsVersion": "0.1.0-draft.2",
                            "protocolVersions": ["0.1"],
-                           "extension": {"id": "morphir-gleam", "name": "Morphir Gleam",
+                           "extension": {"id": "morphir-rust", "name": "Morphir Rust",
                                          "version": "0.1.0", "types": ["backend"]},
-                           "capabilities": {"backend": {"targets": ["gleam"],
+                           "capabilities": {"backend": {"targets": ["rust"],
                                                        "irVersions": ["3", "4"], "generate": True}},
                        }}],
     }
@@ -54,12 +54,13 @@ class CliReleaseTaskTests(unittest.TestCase):
         self.assertNotIn("fetch_cli()", task)
         self.assertNotIn("sha256_of()", task)
 
-    def test_gleam_selection_reaches_bundle_validation(self) -> None:
+    def test_the_moved_gleam_extension_is_not_selectable(self) -> None:
+        """The Gleam extension is released from finos/morphir-gleam, not from here."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             bundle = Path(temporary_directory) / "missing-bundle"
             result = _run_task("gleam", bundle=bundle, cwd=temporary_directory)
-            self.assertEqual(1, result.returncode, result.stderr)
-            self.assertIn(f"no bundle at {bundle}", result.stderr)
+            self.assertEqual(2, result.returncode, result.stderr)
+            self.assertIn("usage: mise run test:cli-release <elm-native|rust>", result.stderr)
 
     def test_elm_native_selection_reaches_bundle_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -124,9 +125,9 @@ class PublishTests(unittest.TestCase):
             cli.chmod(0o755)
             bundle = root / "bundle"
             bundle.mkdir()
-            (bundle / "morphir-gleam.release.json").write_text(descriptor, encoding="utf-8")
-            (bundle / "morphir-gleam.tar.gz").write_text("artifact", encoding="utf-8")
-            return _run_task("gleam", bundle=bundle, cwd=REPOSITORY_ROOT, cli=cli)
+            (bundle / "morphir-rust.release.json").write_text(descriptor, encoding="utf-8")
+            (bundle / "morphir-rust.tar.gz").write_text("artifact", encoding="utf-8")
+            return _run_task("rust", bundle=bundle, cwd=REPOSITORY_ROOT, cli=cli)
 
 
 def _run_task(

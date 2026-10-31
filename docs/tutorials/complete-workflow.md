@@ -8,6 +8,12 @@ parent: Tutorials
 # Complete Workflow
 
 This guide walks through a complete end-to-end workflow using Morphir with Gleam.
+The Gleam extension is released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
+
+> **Note:** The Rust CLI no longer builds Gleam in and has no `gleam` subcommand. Gleam is the
+> [`extension/gleam/v0.4.0`](https://github.com/finos/morphir-gleam/releases/tag/extension/gleam/v0.4.0)
+> core-Wasm guest for the MoonBit CLI, released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
+> The commands below are kept for reference until this tutorial moves there.
 
 ## Scenario: Building a Business Logic Library
 
@@ -265,7 +271,7 @@ Error: Compilation failed
 - **Solution**: Create `morphir.toml` in project root or use `--config`
 
 **Issue**: "Extension not found"
-- **Solution**: Ensure Gleam binding is built and bundled
+- **Solution**: Install the Gleam extension from the [finos/morphir-gleam](https://github.com/finos/morphir-gleam) releases
 
 **Issue**: "Path does not exist"
 - **Solution**: Check `source_directory` in config matches your project structure

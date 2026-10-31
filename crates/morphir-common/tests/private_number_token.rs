@@ -125,16 +125,13 @@ fn neither_encoder_writes_the_private_number_token() {
 /// Every serializer crate a workspace crate may link, and who may link it.
 ///
 /// `serde_yaml` and `serde-saphyr` read and write YAML that is not IR (the knowledge base, the
-/// OKF bundles, the Gleam binding's fixtures, `morphir.toml`'s sibling `morphir.yaml`); `toml`
+/// OKF bundles, `morphir.toml`'s sibling `morphir.yaml`); `toml`
 /// reads configuration. The Elm binding's use of `toml` is likewise limited to parsing
 /// `preludes/*.toml` (prelude configuration, never an IR value). None of them may be handed an
 /// IR value, and the surest way to keep that true is for the IR crates not to depend on them at
 /// all.
 const ALLOWED: &[(&str, &[&str])] = &[
-    (
-        "serde_yaml",
-        &["morphir-kb", "morphir-okf", "morphir-gleam-binding"],
-    ),
+    ("serde_yaml", &["morphir-kb", "morphir-okf"]),
     ("serde-saphyr", &["morphir-config"]),
     (
         "toml",

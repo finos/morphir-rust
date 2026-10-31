@@ -104,7 +104,7 @@ The provider registry in `morphir-host` resolves providers by requested capabili
 
 Provider origin remains separate from invocation mode. A native built-in can run as `NativeDirect` under `PreferDirect` or as `NativeMep` under `ProtocolOnly`. Installed providers run as `ProcessMep` or `WasmMep` under either policy.
 
-The Morphir CLI owns the built-in Gleam registration. `morphir-host` stays language-neutral and does not depend on the Gleam extension.
+The Morphir CLI owns the registration of the built-ins it links. `morphir-host` stays language-neutral and does not depend on a language extension. The CLI does not build Gleam in: Gleam is an extension released from [finos/morphir-gleam](https://github.com/finos/morphir-gleam).
 
 ## Use in other tools
 

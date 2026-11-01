@@ -20,17 +20,17 @@
 
 ## 2. WASM guest, claims and release descriptor (morphir-0xtc.2)
 
-- [ ] 2.1 Set `mep_versions = ["0.1", "0.2.0-draft.1"]` for `rust` in `.github/extensions.toml`; verify
+- [x] 2.1 Set `mep_versions = ["0.1", "0.2.0-draft.1"]` for `rust` in `.github/extensions.toml`; verify
   `python3 -m unittest discover -s tests/ci` passes.
-- [ ] 2.2 Extend the ignored WASM host test (`tests/wasm.rs`) to describe the guest, run both model
+- [x] 2.2 Extend the ignored WASM host test (`tests/wasm.rs`) to describe the guest, run both model
   operations through the guest and compare with the native results; verify it passes against the release
   WASM.
-- [ ] 2.3 Verify the 0.1-only host paths still pass: the installed-bundle test
+- [x] 2.3 Verify the 0.1-only host paths still pass: the installed-bundle test
   `cargo test -p morphir-host-native --test rust_extension -- --ignored` (through
   `mise run extension:artifact:rust`) and `mise run test:cli-release rust`.
-- [ ] 2.4 Verify the built `release.json` claims hold `protocolVersions` `0.2.0-draft.1` and `0.1`,
+- [x] 2.4 Verify the built `release.json` claims hold `protocolVersions` `0.2.0-draft.1` and `0.1`,
   `claimsVersion` `0.1.0-draft.2` and the two model tuples.
-- [ ] 2.5 Add a `CHANGELOG.md` entry under `[Unreleased]`; verify `mise run release:changelog-validate`.
+- [x] 2.5 Add a `CHANGELOG.md` entry under `[Unreleased]`; verify `mise run release:changelog-validate`.
 
 ## 3. Qualify on the MoonBit worker host (morphir-0xtc.3)
 

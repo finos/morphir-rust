@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The Rust extension (`morphir-rust-binding`) speaks MEP `0.2.0-draft.1` as
+  well as MEP `0.1`. On the new line it serves `morphir.frontend.compileModel`
+  and `morphir.backend.generateModel` for the tuple `morphir-ir` /
+  `morphir-json` / envelope `0.1.0-draft.1` / IR `4.0.0`; the model payload is
+  the IR v4 document that `compile` returns. It offers no Ion tuple, because the
+  released guest is WASM and the SDK has no Ion reader for WASM targets. Hosts
+  that offer only MEP `0.1`, or no model transport, get the `0.1` line
+  unchanged. The bundle's capability claims and `.github/extensions.toml`
+  declare both protocol versions.
 - SDK 0.4.0 adds canonical numeric/string `RequestId` wire identity and explicit
   constructors that preserve string IDs through native and generated guest
   dispatch, including lifecycle errors. Numeric convenience constructors retain

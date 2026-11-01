@@ -445,7 +445,9 @@ read from the exact WASM being packaged and checked against
 later; older CLIs cannot read this descriptor. The versioned WASM and
 `.wasm.sha256` names are unchanged. The downloaded descriptor is still named
 `<artifact-base>-<version>.release.json`; rename it to `release.json` before
-publishing. WASM installs show `Claims: unchecked`.
+publishing. WASM installs show `Claims: unchecked`. The claims list MEP `0.1`
+and `0.2.0-draft.1` and, under `capabilities.modelTransport`, the two model
+tuples and the guest's limits.
 
 See the [packaging contract](../../docs/extensions/capability-claims.md#packaging-wasm-extensions)
 for the descriptor shape and provenance rules.

@@ -121,13 +121,13 @@ fn unprintable_code_points_round_trip() {
 
 #[test]
 fn scalars_from_lexeme() {
-    // `1e3` and `-0` are the two lexemes the reader hands on in serde_json's spelling rather
-    // than the source's: `serde_json::Number` prints an exponent as `1e+3`, and folds `-0` to
-    // `0`. Everything else keeps the text it was read with.
+    // `1e3` is the one lexeme the reader hands on in serde_json's spelling rather than the
+    // source's: `serde_json::Number` prints an exponent as `1e+3`. Everything else keeps the
+    // text it was read with, `-0` included (serde_json 1.0.152 and later keep its sign).
     let v = read("a: 1.50\nb: 1e3\nc: -0\nd: true\ne: null\nf: 12345678901234567890\n").unwrap();
     assert_eq!(
         w(v),
-        "a: 1.50\nb: 1e+3\nc: 0\nd: true\ne: null\nf: 12345678901234567890\n"
+        "a: 1.50\nb: 1e+3\nc: -0\nd: true\ne: null\nf: 12345678901234567890\n"
     );
 }
 

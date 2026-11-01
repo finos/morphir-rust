@@ -47,14 +47,16 @@
 
 - [x] 4.1 Bump `morphir-rust-binding` to `0.4.0`, update `Cargo.lock`, the README version references and the
   changelog release section; verify `cargo test --locked -p morphir-rust-binding` passes.
-- [ ] 4.2 Open the pull request, get CI green and handle each verified review finding.
-- [ ] 4.3 Dry run on the merge candidate: `.github/scripts/extension_release.py` for the tag,
+- [x] 4.2 Open the pull request, get CI green and handle each verified review finding.
+- [x] 4.3 Dry run on the merge candidate: `.github/scripts/extension_release.py` for the tag,
   `mise run extension:artifact:rust` from a clean checkout and `select_extension_assets.py
   --validate-short-id rust`; record the asset digests.
-- [ ] 4.4 After approval, merge and tag `extension/rust/v0.4.0` on the merge commit; verify the release
+- [x] 4.4 After approval, merge and tag `extension/rust/v0.4.0` on the merge commit; verify the release
   workflow publishes the WASM, `.wasm.sha256` and `release.json`.
-- [ ] 4.5 Verify the published assets: digests equal the dry run, and `extension describe` on the
-  downloaded bundle from the MoonBit native CLI reports MEP `0.1, 0.2.0-draft.1`.
+- [x] 4.5 Verify the published assets, and qualify the published bytes. The published WASM digest does not
+  equal the local dry run, because the two builds ran on different machines (follow-up `morphir-0xtc.5`), so
+  run the qualification of group 3 and `mise run test:cli-release rust` again on the downloaded assets.
+  `extension describe` from the MoonBit native CLI reports MEP `0.1, 0.2.0-draft.1`.
 
 ## Workflow follow-up
 

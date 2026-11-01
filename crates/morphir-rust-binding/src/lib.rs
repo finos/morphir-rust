@@ -1,6 +1,10 @@
 //! Rust type and pure-function frontend and backend for Morphir IR v3 and v4.
 //! Explicit native and external function bindings are extracted into v4 value definitions.
 //!
+//! The extension speaks MEP `0.1` and MEP `0.2.0-draft.1`. On the second line it also serves the
+//! model operations `morphir.frontend.compileModel` and `morphir.backend.generateModel` for the
+//! tuple `morphir-ir` / `morphir-json` / envelope `0.1.0-draft.1` / IR `4.0.0`.
+//!
 //! ```
 //! use morphir_extension_sdk::{Extension, NativeExtension};
 //! use morphir_rust_binding::RustExtension;
@@ -11,6 +15,7 @@
 mod backend;
 mod frontend;
 mod functions;
+mod model_transport;
 mod patterns;
 mod values;
 
@@ -52,6 +57,7 @@ impl Extension for RustExtension {
                 ir_versions: vec!["3".into(), "4".into()],
                 generate: true,
             }),
+            model_transport: Some(model_transport::support()),
             ..Default::default()
         }
     }
@@ -72,6 +78,13 @@ impl Frontend for RustExtension {
         )
     }
 
+    fn compile_model(
+        &self,
+        request: morphir_extension_sdk::model::CompileModelRequest,
+    ) -> Result<morphir_extension_sdk::model::CompileModelResult> {
+        model_transport::compile_model(request)
+    }
+
     fn supported_languages() -> Vec<String> {
         vec!["rust".into()]
     }
@@ -90,6 +103,13 @@ impl Backend for RustExtension {
                 diagnostics: vec![diagnostic],
             },
         })
+    }
+
+    fn generate_model(
+        &self,
+        request: morphir_extension_sdk::model::GenerateModelRequest,
+    ) -> Result<GenerateResult> {
+        model_transport::generate_model(request)
     }
 
     fn target_languages() -> Vec<String> {

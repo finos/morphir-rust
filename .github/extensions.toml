@@ -3,7 +3,7 @@ package = "morphir-rust-binding"
 artifact = "morphir-rust-binding"
 extension_id = "morphir-rust"
 name = "Morphir Rust"
-mep_versions = ["0.1"]
+mep_versions = ["0.1", "0.2.0-draft.1"]
 targets = ["rust"]
 languages = [{ id = "rust", file_extensions = [".rs"] }]
 ir_versions = ["3", "4"]

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rust-extension-mep-0-2: design</title>
+<!--
+  Agent document template (docs/templates/agent-document.html). Specs, plans and reports that a person reviews
+  start from this file: copy it, keep the <head> as it is, and write the content inside <main>.
+  Styles and scripts are files in docs/templates/assets/, referenced and not embedded. In a copy, change the
+  "assets/" prefix of each href and src to the relative path from the copy to that directory, for example
+  "../../../docs/templates/assets/" from openspec/changes/<name>/. See AGENTS.md, "Specs and plans are HTML
+  documents". Code goes in <pre><code class="language-rust"> (or toml, json, yaml, bash, diff). Give sections an
+  id and list them in nav.toc.
+-->
+<link rel="stylesheet" href="../../../docs/templates/assets/agent-document.css">
+<link rel="stylesheet" href="../../../docs/templates/assets/highlight/styles/github.min.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="../../../docs/templates/assets/highlight/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+<script defer src="../../../docs/templates/assets/highlight/highlight.min.js"></script>
+<body>
+<main>
+<h1>rust-extension-mep-0-2: design</h1>
+<p class="meta">OpenSpec change · Bead <code>morphir-0xtc</code> · 2026-10-31 · proposed</p>
+
+<nav class="toc" aria-label="Contents">
+<ul>
+<li><a href="#context">Context</a></li>
+<li><a href="#goals">Goals and non-goals</a></li>
+<li><a href="#decisions">Decisions</a></li>
+<li><a href="#risks">Risks and trade-offs</a></li>
+<li><a href="#migration">Migration plan</a></li>
+</ul>
+</nav>
+
+<h2 id="context">Context</h2>
+<p>See proposal.md, Why. The Rust extension is <code>RustExtension</code> in <code>crates/morphir-rust-binding</code>. It
+has the frontend and backend roles, and <code>export_extension!(RustExtension, frontend, backend)</code> makes it
+an Extism WASM guest (<code>extism-kernel-v1</code>). <code>morphir-extension-sdk</code> 0.4.0, in this workspace,
+already does the MEP <code>0.2.0-draft.1</code> work for a guest that opts in:</p>
+<ul>
+<li>A guest opts in with <code>ExtensionCapabilities::model_transport</code> and implements
+<code>Frontend::compile_model</code> and <code>Backend::generate_model</code>. The trait defaults refuse.</li>
+<li>The guest protocol session adds <code>0.2.0-draft.1</code> to the describe claims when the support is valid,
+selects it at <code>initialize</code> only when the host sends a model transport offer, intersects the complete
+tuples in the host's order and takes the smaller limits.</li>
+<li>Before dispatch, it refuses a rich request whose tuple was not agreed, whose envelope does not match the
+tuple or whose payload fails its length or SHA-256 check. After the call, it checks a successful compile
+result's model.</li>
+<li>The Ion reader is native only. On <code>wasm32</code>, a guest that advertises an Ion tuple is invalid.</li>
+</ul>
+<p>The reference is finos/morphir-gleam <code>rust/crates/morphir-gleam-binding/src/model_transport.rs</code>
+(release <code>extension/gleam/v0.4.0</code>). The MoonBit CLI host offers <code>morphir-model</code> /
+<code>ion-binary</code>, then <code>morphir-ir</code> / <code>morphir-json</code>, both at IR <code>4.0.0</code>, and
+uses the first tuple that the extension agrees on.</p>
+
+<h2 id="goals">Goals and non-goals</h2>
+<p><strong>Goals:</strong> the requirements in
+<code>specs/rust-extension-model-operations/spec.md</code>, through the SDK's existing opt-in, with no SDK
+change; MEP <code>0.1</code> behaviour unchanged; a released bundle that the MoonBit worker host runs on both
+lines.</p>
+<p><strong>Non-goals:</strong> Ion transport; IR v3 model tuples; multi-document compilation or compile
+dependencies (the frontend still compiles one document and refuses dependencies); release attestations,
+which this repository's extension release does not make today; the finos/morphir bundle pins.</p>
+
+<h2 id="decisions">Decisions</h2>
+
+<h3 id="mep-1">MEP-1. Use the SDK opt-in, not a second protocol layer</h3>
+<p><code>RustExtension::capabilities()</code> sets <code>model_transport</code>, and the <code>Frontend</code> and
+<code>Backend</code> impls forward <code>compile_model</code> and <code>generate_model</code> to a new private
+module <code>model_transport</code>. The SDK session then gives negotiation, the 0.1 fallback and the
+admission checks to both the native <code>NativeExtension</code> dispatch and the WASM guest. The alternative, a
+guest-specific protocol layer like the Gleam core-Wasm guest, would duplicate the session for no gain: the
+Extism route already reaches the MoonBit worker host.</p>
+
+<h3 id="mep-2">MEP-2. One JSON tuple per operation, at IR 4.0.0</h3>
+<pre><code class="language-json">{"operation": "morphir.frontend.compileModel", "profile": "morphir-ir", "codec": "morphir-json",
+ "envelopeVersion": "0.1.0-draft.1", "irVersion": "4.0.0"}</code></pre>
+<p>and the same tuple for <code>morphir.backend.generateModel</code>. No Ion tuple: the release artifact is a
+WASM guest, and the SDK refuses Ion support on <code>wasm32</code> rather than transcode
+(<code>morphir-opua.1.3.1.3</code> tracks a WASM Ion reader). A native-only Ion tuple would make the native
+and WASM claims differ, and the packager reads the claims from the WASM. No IR 3 tuple: the hosts offer only
+IR <code>4.0.0</code>, and IR 3 stays available on the <code>0.1</code> line.</p>
+
+<h3 id="mep-3">MEP-3. The payload is the legacy IR v4 document</h3>
+<p><code>compileModel</code> runs the existing compile with <code>irVersion</code> <code>4</code> and encodes
+the returned IR v4 JSON with <code>ModelPayload::from_bytes</code>. <code>modelId</code> is the package name and
+<code>revision</code> is <code>sha256:</code> and the payload digest, as in the Gleam extension.
+<code>generateModel</code> decodes the payload through the SDK's <code>retain_model</code> with the extension's
+own tuple and limits, then runs the existing generate. So the two lines give the same IR and the same Rust,
+and the golden tests compare both lines with one recorded output.</p>
+
+<h3 id="mep-4">MEP-4. Refusals</h3>
+<p>The SDK session refuses an unagreed tuple, a wrong envelope and a failed integrity check before the
+extension runs. The module checks the tuple again, because the native trait methods can be called without a
+session, and refuses with <code>InvalidParams</code>. A required guarantee gives a failed
+<code>GenerateResult</code> with diagnostic <code>RS_UNSUPPORTED_GUARANTEE</code>; the session already refuses it
+first. A frontend failure is <code>CompileModelResult::Failed</code> with the frontend's diagnostics.</p>
+
+<h3 id="mep-5">MEP-5. Limits</h3>
+<p>The guest advertises 64 MiB encoded, 48 MiB decoded, depth 128 and 16 Mi nodes. Hosts take the smaller value
+of each limit (the MoonBit host offers 2 MiB decoded), so these are upper bounds only. The host's WASM memory
+and instruction budgets still apply. Depth 128 is the deepest document that <code>serde_json</code> decodes
+with its default recursion limit, counted as admission counts depth, so every payload that the session admits
+can be decoded. The Gleam extension's depth 1024 was not taken: a host that agreed a depth above 128 could
+admit a payload that the decoder then refuses. Disabling the recursion limit was not chosen either, because a
+deep document could then overflow the WASM guest's stack.</p>
+
+<h3 id="rel-1">REL-1. Release 0.4.0 with the existing workflow</h3>
+<p><code>.github/extensions.toml</code> sets <code>mep_versions = ["0.1", "0.2.0-draft.1"]</code>; the packager
+already compares it with the claims that it reads from the exact WASM, and the claims carry
+<code>modelTransport</code>. The binding version moves to <code>0.4.0</code> (a new minor: a new protocol
+line). The tag <code>extension/rust/v0.4.0</code> on the merge commit starts the existing release workflow,
+which publishes the WASM, <code>.wasm.sha256</code> and <code>release.json</code>. The dry run is the same
+resolution, build and asset validation, run locally on the merged commit before the tag.</p>
+
+<h2 id="risks">Risks and trade-offs</h2>
+<table>
+<thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td>An older host reads <code>0.2.0-draft.1</code> or <code>modelTransport</code> in the descriptor claims and
+refuses the bundle.</td><td>Run the existing 0.1-only paths: the installed-bundle test of
+<code>morphir-host-native</code> and <code>mise run test:cli-release rust</code> with the pinned finos/morphir
+CLI.</td></tr>
+<tr><td>A host compares the claims of <code>initialize</code> (narrowed tuples and limits) with the describe
+claims and finds a difference.</td><td>Qualify on the MoonBit worker host, native and npm, before release.
+A difference that the SDK causes is fixed in a separate SDK pull request first.</td></tr>
+<tr><td>A model larger than the host's WASM budgets fails where the legacy line passes.</td><td>The payload is
+the same document as the legacy result; the budgets are the host's, not the transport's.</td></tr>
+</tbody>
+</table>
+
+<h2 id="migration">Migration plan</h2>
+<p>Additive. Hosts that offer only MEP <code>0.1</code> see no change. To roll back, publish nothing more and
+keep the <code>v0.3.0</code> pins; a released tag is not moved or deleted.</p>
+
+</main>
+</body>
+</html>

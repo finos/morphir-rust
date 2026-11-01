@@ -3,7 +3,8 @@
 `morphir-rust-binding` implements the `morphir-rust` extension. It provides MEP
 `frontend/compile` and `backend/generate` natively and as an Extism WASM guest.
 Both capabilities advertise IR versions `3` and `4`, language/target `rust` and
-source suffix `.rs`. Syn parses source without running rustc, macros or build
+source suffix `.rs`. The extension speaks MEP `0.1` and MEP `0.2.0-draft.1`; on
+the second line it also serves the [model operations](#model-operations-on-mep-020-draft1). Syn parses source without running rustc, macros or build
 scripts. The shared `morphir-core` codecs and typed migration handle the IR.
 
 The frontend and backend translate types and a small subset of pure
@@ -322,6 +323,45 @@ their declared order. The consumer supplies external crates and implementations.
 Mappings do not synthesize opaque representations. Unknown types without a
 mapping, wrong arities, invalid names and Rust name collisions fail generation.
 
+## Model operations on MEP 0.2.0-draft.1
+
+The extension declares MEP `0.2.0-draft.1` and MEP `0.1`. It selects
+`0.2.0-draft.1` only when the host offers that version with a model transport
+offer. A host that offers only `0.1`, or no model transport, gets `0.1` and the
+legacy `compile` and `generate` methods, unchanged.
+
+On `0.2.0-draft.1` the extension serves one tuple for each operation:
+
+| Operation | Profile | Codec | Envelope | IR |
+| --- | --- | --- | --- | --- |
+| `morphir.frontend.compileModel` | `morphir-ir` | `morphir-json` | `0.1.0-draft.1` | `4.0.0` |
+| `morphir.backend.generateModel` | `morphir-ir` | `morphir-json` | `0.1.0-draft.1` | `4.0.0` |
+
+It offers no Ion tuple: the released guest is WASM, and the SDK has no Ion reader
+for WASM targets. It offers no IR 3 tuple; IR 3 remains available on MEP `0.1`.
+The legacy `compile` and `generate` methods also stay available on
+`0.2.0-draft.1`.
+
+`compileModel` compiles with the same rules as `compile` at IR v4: one document,
+no dependencies. A request with dependencies fails with `RS_DEPENDENCIES`. The
+model payload is the IR v4 JSON document that `compile` returns for the same
+source. `modelId` is the package name and `revision` is `sha256:` followed by the
+payload digest. A source that the frontend rejects gives `success: false`, the
+diagnostics, and no model.
+
+`generateModel` admits the envelope against its tuple, checks the payload's
+length and SHA-256, and generates the same `lib.rs` as `generate` does for the
+payload's IR, for target `rust`. A request with a required guarantee generates
+nothing; the extension checks no guarantee.
+
+The SDK session refuses, with a JSON-RPC error and before the extension runs, a
+tuple that the session did not agree, an envelope that does not match its tuple
+and a payload that fails its integrity checks. The guest's limits are 64 MiB
+encoded, 48 MiB decoded, depth 128 and 16 Mi nodes; a host takes the smaller
+value of each. Depth 128 is the deepest document that the JSON decoder reads, so
+every admitted payload can be decoded. [The model operation tests](tests/model_operations.rs) compare
+both operations with golden files in `tests/fixtures/model/`.
+
 ## Native usage and tests
 
 The public entry point is `RustExtension`, implementing the SDK's `Extension`,
@@ -344,7 +384,7 @@ For a distributable guest, build with `--release`. Its artifact is
 `MORPHIR_RUST_GUEST` to that artifact's absolute path when running the host tests. Tests load it with
 WASI disabled and compare native and guest results for both IR versions.
 
-The guest reports ID `morphir-rust`, name `Morphir Rust`, version `0.3.0`,
+The guest reports ID `morphir-rust`, name `Morphir Rust`, version `0.4.0`,
 frontend language `rust`, suffix `.rs`, backend target `rust`, and
 `irVersions: ["3", "4"]` on both capabilities.
 
@@ -367,9 +407,9 @@ artifact, its SHA-256 checksum and `release.json`. A clean checkout builds from
 an archived HEAD and records that commit in the descriptor. A dirty checkout
 can produce a local test bundle, without release provenance.
 
-Independent releases use tags such as `extension/rust/v0.3.0`. Download the
-assets from the [Rust v0.3.0 release](https://github.com/finos/morphir-rust/releases/tag/extension/rust/v0.3.0).
-The published descriptor is named `morphir-rust-binding-0.3.0.release.json`;
+Independent releases use tags such as `extension/rust/v0.4.0`. Download the
+assets from the [Rust v0.4.0 release](https://github.com/finos/morphir-rust/releases/tag/extension/rust/v0.4.0).
+The published descriptor is named `morphir-rust-binding-0.4.0.release.json`;
 rename it to `release.json` alongside the WASM and checksum before publishing
 the directory to a local extension repository.
 
@@ -406,7 +446,9 @@ read from the exact WASM being packaged and checked against
 later; older CLIs cannot read this descriptor. The versioned WASM and
 `.wasm.sha256` names are unchanged. The downloaded descriptor is still named
 `<artifact-base>-<version>.release.json`; rename it to `release.json` before
-publishing. WASM installs show `Claims: unchecked`.
+publishing. WASM installs show `Claims: unchecked`. The claims list MEP `0.1`
+and `0.2.0-draft.1` and, under `capabilities.modelTransport`, the two model
+tuples and the guest's limits.
 
 See the [packaging contract](../../docs/extensions/capability-claims.md#packaging-wasm-extensions)
 for the descriptor shape and provenance rules.

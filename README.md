@@ -68,7 +68,7 @@ This table lists independently releasable extensions. Registrations come from
 | Extension | Package | Version | Description |
 | --- | --- | --- | --- |
 | `morphir-elm-native` | `morphir-elm-binding` | `0.2.0` | Compiles Elm type declarations to IR v3 and v4 and generates Elm back; incremental. |
-| `morphir-rust` | `morphir-rust-binding` | `0.3.0` | Compiles and generates Rust types, conditional functions, pattern matches, calls and typed lambdas using IR v3 and v4. |
+| `morphir-rust` | `morphir-rust-binding` | `0.4.0` | Compiles and generates Rust types, conditional functions, pattern matches, calls and typed lambdas using IR v3 and v4; MEP 0.1, and MEP 0.2.0-draft.1 with model operations. |
 
 The Python extension (crate `morphir-python-binding`, bundle `morphir-python`) is now
 maintained and released from [finos/morphir-python](https://github.com/finos/morphir-python).

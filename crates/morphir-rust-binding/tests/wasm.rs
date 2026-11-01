@@ -32,6 +32,9 @@ mod pattern;
 #[path = "support/functions.rs"]
 mod functions;
 
+#[path = "support/model.rs"]
+mod model;
+
 #[test]
 #[ignore = "requires a built Rust WASM guest"]
 fn wasm_compiles_and_generates_functions_and_lambdas_in_both_versions() {
@@ -250,6 +253,8 @@ fn initialize(plugin: &mut Plugin) {
     .unwrap();
     let initialized: InitializeResult = serde_json::from_value(result(plugin, request)).unwrap();
     assert_eq!(initialized.protocol_version, MEP_VERSION);
+    // A host that offers only MEP 0.1 gets no model transport.
+    assert!(initialized.capabilities.model_transport.is_none());
     assert_eq!(initialized.extension.id, "morphir-rust");
     assert_eq!(
         initialized.extension.types,
@@ -401,4 +406,93 @@ fn wasm_returns_protocol_errors_and_remains_usable() {
         ExtensionRequest::new(methods::PING, json!({}), 42).unwrap(),
     );
     assert_eq!(pong, json!({ "ok": true }));
+}
+
+#[test]
+#[ignore = "requires a built Rust WASM guest; see this file's module documentation"]
+fn wasm_serves_the_model_operations_like_native() {
+    use morphir_extension_sdk::{
+        model::{MODEL_MEP_VERSION, ModelOperation, ModelTransportSupport},
+        protocol::DescribeParams,
+    };
+    let mut plugin = guest();
+    let claims = result(
+        &mut plugin,
+        ExtensionRequest::new(
+            methods::DESCRIBE,
+            DescribeParams {
+                protocol_versions: vec![MEP_VERSION.into()],
+            },
+            1,
+        )
+        .unwrap(),
+    );
+    let mut versions: Vec<String> =
+        serde_json::from_value(claims["protocolVersions"].clone()).unwrap();
+    versions.sort();
+    assert_eq!(versions, [MEP_VERSION, MODEL_MEP_VERSION]);
+    let json_tuples = [
+        model::a_json_tuple(ModelOperation::CompileModel),
+        model::a_json_tuple(ModelOperation::GenerateModel),
+    ];
+    let advertised: ModelTransportSupport =
+        serde_json::from_value(claims["capabilities"]["modelTransport"].clone()).unwrap();
+    assert_eq!(advertised.tuples, json_tuples);
+
+    let initialized: InitializeResult = serde_json::from_value(result(
+        &mut plugin,
+        ExtensionRequest::new(
+            methods::INITIALIZE,
+            InitializeParams {
+                model_transport: Some(model::a_moonbit_like_offer()),
+                protocol_versions: vec![MODEL_MEP_VERSION.into(), MEP_VERSION.into()],
+                host: PeerInfo {
+                    kind: Default::default(),
+                    name: "rust-binding-integration-test".into(),
+                    version: "0.1.0".into(),
+                },
+            },
+            2,
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(initialized.protocol_version, MODEL_MEP_VERSION);
+    let agreed = initialized.capabilities.model_transport.unwrap();
+    assert_eq!(agreed.tuples, json_tuples);
+    assert_eq!(agreed.limits, model::moonbit_host_limits());
+
+    let native = model::Session::on_model_line();
+    let compiled = result(
+        &mut plugin,
+        ExtensionRequest::new(methods::COMPILE_MODEL, model::a_compile_model_request(), 3).unwrap(),
+    );
+    let expected = native
+        .call(methods::COMPILE_MODEL, model::a_compile_model_request())
+        .result
+        .unwrap();
+    assert_eq!(compiled, expected);
+    let envelope = serde_json::from_value(compiled["model"].clone()).unwrap();
+
+    let generated = result(
+        &mut plugin,
+        ExtensionRequest::new(
+            methods::GENERATE_MODEL,
+            model::a_generate_model_request(envelope),
+            4,
+        )
+        .unwrap(),
+    );
+    let generated: GenerateResult = serde_json::from_value(generated).unwrap();
+    assert!(generated.success, "{:?}", generated.diagnostics);
+    model::assert_golden("generated-lib.rs", &generated.artifacts[0].content);
+
+    let mut unagreed =
+        model::a_generate_model_request(serde_json::from_value(compiled["model"].clone()).unwrap());
+    unagreed.input = model::an_ion_tuple(ModelOperation::GenerateModel);
+    let refused = call(
+        &mut plugin,
+        ExtensionRequest::new(methods::GENERATE_MODEL, unagreed, 5).unwrap(),
+    );
+    assert!(refused.result.is_none() && refused.error.is_some());
 }

@@ -235,7 +235,7 @@ fn read_with_policy<B: YamlBudget>(
             ))
         })?;
         match event {
-            Event::StreamStart | Event::StreamEnd | Event::DocumentEnd | Event::Comment(..) => {}
+            Event::StreamStart | Event::StreamEnd | Event::DocumentEnd => {}
             Event::DocumentStart(_, version) => {
                 r.documents += 1;
                 if version.is_some() {

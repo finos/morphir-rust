@@ -3,8 +3,8 @@
 //!
 //! Both operations reuse the MEP `0.1` compile and generate paths. The model payload is the IR v4
 //! JSON document that `morphir.frontend.compile` returns. The SDK session checks tuples, limits and
-//! payload integrity before and after each call; this module checks the tuple again because the
-//! trait methods can also be called without a session.
+//! payload integrity before and after each call; this module checks the tuple, the IR version
+//! option and the envelope again because the trait methods can also be called without a session.
 //!
 //! The extension offers no Ion tuple: the released guest is WASM, and the SDK has no Ion reader for
 //! WASM targets.
@@ -62,6 +62,12 @@ pub(crate) fn compile_model(request: CompileModelRequest) -> Result<CompileModel
     if request.output != tuple(ModelOperation::CompileModel) {
         return Err(ExtensionError::InvalidParams(
             "Unsupported model output tuple".into(),
+        ));
+    }
+    // The session refuses this too: the IR version option must name the tuple's version.
+    if request.options.ir_version != request.output.ir_version {
+        return Err(ExtensionError::InvalidParams(
+            "The irVersion option differs from the model output tuple".into(),
         ));
     }
     // The frontend does not compile against dependencies, so their models are never decoded.

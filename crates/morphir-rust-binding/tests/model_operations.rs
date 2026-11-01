@@ -6,8 +6,8 @@ mod model;
 use model::*;
 use morphir_extension_sdk::{
     model::{
-        CompileModelResult, MODEL_ENVELOPE_VERSION, MODEL_MEP_VERSION, ModelGuaranteeRequirement,
-        ModelOperation, ModelTransportSupport, MorphirModel,
+        CompileModelResult, MODEL_ENVELOPE_VERSION, MODEL_MEP_VERSION, ModelCodec,
+        ModelGuaranteeRequirement, ModelOperation, ModelTransportSupport, MorphirModel,
     },
     prelude::*,
     protocol::{DescribeParams, methods},
@@ -82,6 +82,28 @@ fn a_model_host_gets_the_agreed_json_tuples_in_host_order_and_its_smaller_limits
         ]
     );
     assert_eq!(support.limits, moonbit_host_limits());
+}
+
+#[test]
+fn the_agreement_follows_the_host_order_and_takes_each_smaller_limit() {
+    // The host lists generate before compile, and offers more nodes than the guest allows.
+    let mut offer = a_moonbit_like_offer();
+    offer.tuples.reverse();
+    offer.limits.max_nodes = u32::try_from(i32::MAX).unwrap();
+    let session = Session::start(&[MODEL_MEP_VERSION, "0.1"], Some(offer));
+    let support = agreed(&session);
+    assert_eq!(
+        support.tuples,
+        [
+            a_json_tuple(ModelOperation::GenerateModel),
+            a_json_tuple(ModelOperation::CompileModel)
+        ]
+    );
+    assert_eq!(support.limits.max_nodes, 16 * 1024 * 1024);
+    assert_eq!(
+        support.limits.max_decoded_bytes,
+        moonbit_host_limits().max_decoded_bytes
+    );
 }
 
 #[test]
@@ -265,9 +287,23 @@ fn the_trait_methods_refuse_an_unagreed_tuple_without_a_session() {
     assert!(RustExtension.compile_model(compile).is_err());
 
     let session = Session::on_model_line();
-    let mut generate = a_generate_model_request(compiled_model(&session));
+    let model = compiled_model(&session);
+    let mut generate = a_generate_model_request(model.clone());
+    generate.input = an_ion_tuple(ModelOperation::GenerateModel);
+    generate.model.profile = "morphir-model".into();
+    generate.model.payload.codec = ModelCodec::IonBinary;
+    assert!(RustExtension.generate_model(generate).is_err());
+
+    let mut generate = a_generate_model_request(model);
     generate.model.profile = "morphir-model".into();
     assert!(RustExtension.generate_model(generate).is_err());
+}
+
+#[test]
+fn compile_model_refuses_an_ir_version_option_that_differs_from_the_tuple_without_a_session() {
+    let mut request = a_compile_model_request();
+    request.options.ir_version = "3".into();
+    assert!(RustExtension.compile_model(request).is_err());
 }
 
 #[test]

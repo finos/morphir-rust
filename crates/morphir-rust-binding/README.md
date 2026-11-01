@@ -3,7 +3,8 @@
 `morphir-rust-binding` implements the `morphir-rust` extension. It provides MEP
 `frontend/compile` and `backend/generate` natively and as an Extism WASM guest.
 Both capabilities advertise IR versions `3` and `4`, language/target `rust` and
-source suffix `.rs`. Syn parses source without running rustc, macros or build
+source suffix `.rs`. The extension speaks MEP `0.1` and MEP `0.2.0-draft.1`; on
+the second line it also serves the [model operations](#model-operations-on-mep-020-draft1). Syn parses source without running rustc, macros or build
 scripts. The shared `morphir-core` codecs and typed migration handle the IR.
 
 The frontend and backend translate types and a small subset of pure
@@ -321,6 +322,44 @@ Mappings are Rust paths without generic arguments. IR arguments are appended in
 their declared order. The consumer supplies external crates and implementations.
 Mappings do not synthesize opaque representations. Unknown types without a
 mapping, wrong arities, invalid names and Rust name collisions fail generation.
+
+## Model operations on MEP 0.2.0-draft.1
+
+The extension declares MEP `0.2.0-draft.1` and MEP `0.1`. It selects
+`0.2.0-draft.1` only when the host offers that version with a model transport
+offer. A host that offers only `0.1`, or no model transport, gets `0.1` and the
+legacy `compile` and `generate` methods, unchanged.
+
+On `0.2.0-draft.1` the extension serves one tuple for each operation:
+
+| Operation | Profile | Codec | Envelope | IR |
+| --- | --- | --- | --- | --- |
+| `morphir.frontend.compileModel` | `morphir-ir` | `morphir-json` | `0.1.0-draft.1` | `4.0.0` |
+| `morphir.backend.generateModel` | `morphir-ir` | `morphir-json` | `0.1.0-draft.1` | `4.0.0` |
+
+It offers no Ion tuple: the released guest is WASM, and the SDK has no Ion reader
+for WASM targets. It offers no IR 3 tuple; IR 3 remains available on MEP `0.1`.
+The legacy `compile` and `generate` methods also stay available on
+`0.2.0-draft.1`.
+
+`compileModel` compiles with the same rules as `compile` at IR v4: one document,
+no dependencies. A request with dependencies fails with `RS_DEPENDENCIES`. The
+model payload is the IR v4 JSON document that `compile` returns for the same
+source. `modelId` is the package name and `revision` is `sha256:` followed by the
+payload digest. A source that the frontend rejects gives `success: false`, the
+diagnostics, and no model.
+
+`generateModel` admits the envelope against its tuple, checks the payload's
+length and SHA-256, and generates the same `lib.rs` as `generate` does for the
+payload's IR, for target `rust`. A request with a required guarantee generates
+nothing; the extension checks no guarantee.
+
+The SDK session refuses, with a JSON-RPC error and before the extension runs, a
+tuple that the session did not agree, an envelope that does not match its tuple
+and a payload that fails its integrity checks. The guest's limits are 64 MiB
+encoded, 48 MiB decoded, depth 1024 and 16 Mi nodes; a host takes the smaller
+value of each. [The model operation tests](tests/model_operations.rs) compare
+both operations with golden files in `tests/fixtures/model/`.
 
 ## Native usage and tests
 

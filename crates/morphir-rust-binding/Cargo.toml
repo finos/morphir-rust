@@ -23,6 +23,7 @@ indexmap = "2"
 
 [dev-dependencies]
 tempfile.workspace = true
+serde = "1"
 cucumber = "0.23"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

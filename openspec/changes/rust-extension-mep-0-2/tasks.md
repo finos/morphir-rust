@@ -2,20 +2,20 @@
 
 ## 1. Model operations in the Rust binding (morphir-0xtc.1)
 
-- [ ] 1.1 Write failing native tests for negotiation: a `0.1`-only host gets `0.1` and no `modelTransport`; a
+- [x] 1.1 Write failing native tests for negotiation: a `0.1`-only host gets `0.1` and no `modelTransport`; a
   `0.2.0-draft.1` host with an offer gets the agreed tuples and the smaller limits; an offer without
   `modelTransport` gets `0.1`; an Ion-only offer agrees on no tuple. Verify they fail before 1.3.
-- [ ] 1.2 Write failing native tests for `compileModel` and `generateModel` with golden IR and golden Rust
+- [x] 1.2 Write failing native tests for `compileModel` and `generateModel` with golden IR and golden Rust
   under `crates/morphir-rust-binding/tests/fixtures/model/`, and for the refusals (unagreed tuple, wrong
   envelope version, payload digest mismatch, model operation on the `0.1` line, required guarantee, frontend
   failure). Verify they fail before 1.3.
-- [ ] 1.3 Add the `model_transport` module and wire `capabilities()`, `compile_model` and `generate_model`;
+- [x] 1.3 Add the `model_transport` module and wire `capabilities()`, `compile_model` and `generate_model`;
   verify `cargo test --locked -p morphir-rust-binding` passes.
-- [ ] 1.4 Verify the compiled model's payload equals the `morphir.frontend.compile` IR v4 result and the
+- [x] 1.4 Verify the compiled model's payload equals the `morphir.frontend.compile` IR v4 result and the
   generated `lib.rs` equals the `morphir.backend.generate` result for the same input (test).
-- [ ] 1.5 Verify `cargo clippy --locked -p morphir-rust-binding --all-targets -- -D warnings` and
+- [x] 1.5 Verify `cargo clippy --locked -p morphir-rust-binding --all-targets -- -D warnings` and
   `cargo fmt --check` pass.
-- [ ] 1.6 Document the model operations, the tuples and the absence of Ion in the binding README; verify the
+- [x] 1.6 Document the model operations, the tuples and the absence of Ion in the binding README; verify the
   README states the claimed protocol versions.
 
 ## 2. WASM guest, claims and release descriptor (morphir-0xtc.2)

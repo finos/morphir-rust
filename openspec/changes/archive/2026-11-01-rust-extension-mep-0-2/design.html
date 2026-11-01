@@ -9,18 +9,18 @@
   start from this file: copy it, keep the <head> as it is, and write the content inside <main>.
   Styles and scripts are files in docs/templates/assets/, referenced and not embedded. In a copy, change the
   "assets/" prefix of each href and src to the relative path from the copy to that directory, for example
-  "../../../docs/templates/assets/" from openspec/changes/<name>/. See AGENTS.md, "Specs and plans are HTML
+  "../../../../docs/templates/assets/" from openspec/changes/<name>/. See AGENTS.md, "Specs and plans are HTML
   documents". Code goes in <pre><code class="language-rust"> (or toml, json, yaml, bash, diff). Give sections an
   id and list them in nav.toc.
 -->
-<link rel="stylesheet" href="../../../docs/templates/assets/agent-document.css">
-<link rel="stylesheet" href="../../../docs/templates/assets/highlight/styles/github.min.css" media="(prefers-color-scheme: light)">
-<link rel="stylesheet" href="../../../docs/templates/assets/highlight/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
-<script defer src="../../../docs/templates/assets/highlight/highlight.min.js"></script>
+<link rel="stylesheet" href="../../../../docs/templates/assets/agent-document.css">
+<link rel="stylesheet" href="../../../../docs/templates/assets/highlight/styles/github.min.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="../../../../docs/templates/assets/highlight/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+<script defer src="../../../../docs/templates/assets/highlight/highlight.min.js"></script>
 <body>
 <main>
 <h1>rust-extension-mep-0-2: design</h1>
-<p class="meta">OpenSpec change · Bead <code>morphir-0xtc</code> · 2026-10-31 · proposed</p>
+<p class="meta">OpenSpec change · Bead <code>morphir-0xtc</code> · 2026-10-31 · released as <code>extension/rust/v0.4.0</code></p>
 
 <nav class="toc" aria-label="Contents">
 <ul>
@@ -111,7 +111,10 @@ already compares it with the claims that it reads from the exact WASM, and the c
 <code>modelTransport</code>. The binding version moves to <code>0.4.0</code> (a new minor: a new protocol
 line). The tag <code>extension/rust/v0.4.0</code> on the merge commit starts the existing release workflow,
 which publishes the WASM, <code>.wasm.sha256</code> and <code>release.json</code>. The dry run is the same
-resolution, build and asset validation, run locally on the merged commit before the tag.</p>
+resolution, build and asset validation, run locally on the merged commit before the tag. It checks the release
+steps, not the published digest: the release job builds on another machine, and the WASM embeds absolute build
+paths, so the published WASM differs from the local one (<code>morphir-0xtc.5</code>). The qualification
+therefore runs again on the published assets.</p>
 
 <h2 id="risks">Risks and trade-offs</h2>
 <table>

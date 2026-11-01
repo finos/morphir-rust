@@ -141,10 +141,11 @@ fn invalid_literals() {
         );
     }
     assert_eq!(value("a: 0\n")["a"], json!(0));
-    // `-0` is accepted, but serde_json's arbitrary-precision scanner folds the sign away: the
-    // stored lexeme is `0`, not the `-0` of the source.
-    assert_eq!(value("a: -0\n")["a"], json!(-0));
-    assert_eq!(lexeme(&value("a: -0\n")["a"]), "0");
+    // `-0` is accepted, and serde_json's arbitrary-precision scanner keeps its sign (serde_json
+    // 1.0.152 and later): the stored lexeme is the `-0` of the source.
+    let negative_zero = value("a: -0\n")["a"].clone();
+    assert!(negative_zero.is_number(), "{negative_zero}");
+    assert_eq!(lexeme(&negative_zero), "-0");
 }
 
 #[test]

@@ -97,9 +97,13 @@ session, and refuses with <code>InvalidParams</code>. A required guarantee gives
 first. A frontend failure is <code>CompileModelResult::Failed</code> with the frontend's diagnostics.</p>
 
 <h3 id="mep-5">MEP-5. Limits</h3>
-<p>The guest advertises 64 MiB encoded, 48 MiB decoded, depth 1024 and 16 Mi nodes, the values of the Gleam
-extension. Hosts take the smaller value of each limit (the MoonBit host offers 2 MiB decoded), so these are
-upper bounds only. The host's WASM memory and instruction budgets still apply.</p>
+<p>The guest advertises 64 MiB encoded, 48 MiB decoded, depth 128 and 16 Mi nodes. Hosts take the smaller value
+of each limit (the MoonBit host offers 2 MiB decoded), so these are upper bounds only. The host's WASM memory
+and instruction budgets still apply. Depth 128 is the deepest document that <code>serde_json</code> decodes
+with its default recursion limit, counted as admission counts depth, so every payload that the session admits
+can be decoded. The Gleam extension's depth 1024 was not taken: a host that agreed a depth above 128 could
+admit a payload that the decoder then refuses. Disabling the recursion limit was not chosen either, because a
+deep document could then overflow the WASM guest's stack.</p>
 
 <h3 id="rel-1">REL-1. Release 0.4.0 with the existing workflow</h3>
 <p><code>.github/extensions.toml</code> sets <code>mep_versions = ["0.1", "0.2.0-draft.1"]</code>; the packager

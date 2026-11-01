@@ -357,8 +357,9 @@ nothing; the extension checks no guarantee.
 The SDK session refuses, with a JSON-RPC error and before the extension runs, a
 tuple that the session did not agree, an envelope that does not match its tuple
 and a payload that fails its integrity checks. The guest's limits are 64 MiB
-encoded, 48 MiB decoded, depth 1024 and 16 Mi nodes; a host takes the smaller
-value of each. [The model operation tests](tests/model_operations.rs) compare
+encoded, 48 MiB decoded, depth 128 and 16 Mi nodes; a host takes the smaller
+value of each. Depth 128 is the deepest document that the JSON decoder reads, so
+every admitted payload can be decoded. [The model operation tests](tests/model_operations.rs) compare
 both operations with golden files in `tests/fixtures/model/`.
 
 ## Native usage and tests

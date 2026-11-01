@@ -35,12 +35,17 @@ fn tuple(operation: ModelOperation) -> ModelTransportTuple {
     }
 }
 
-/// The guest's own upper bounds. A host takes the smaller value of each limit.
+/// The deepest document that `serde_json` decodes with its default recursion limit, counted as
+/// model admission counts depth (the root at depth one).
+const MAX_DEPTH: u32 = 128;
+
+/// The guest's own upper bounds. A host takes the smaller value of each limit. The depth bound is
+/// the decoder's, so every payload that admission accepts can be decoded.
 fn limits() -> ModelTransportLimits {
     ModelTransportLimits {
         max_encoded_bytes: 64 * 1024 * 1024,
         max_decoded_bytes: 48 * 1024 * 1024,
-        max_depth: 1024,
+        max_depth: MAX_DEPTH,
         max_nodes: 16 * 1024 * 1024,
     }
 }
@@ -168,6 +173,36 @@ mod tests {
                 .iter()
                 .all(|tuple| tuple.codec == ModelCodec::MorphirJson)
         );
+    }
+
+    fn nested(depth: u32) -> String {
+        let levels = depth as usize - 1;
+        format!("{}0{}", "[".repeat(levels), "]".repeat(levels))
+    }
+
+    fn admit(text: &str, max_depth: u32) -> std::result::Result<(), &'static str> {
+        let model = MorphirModel {
+            payload: ModelPayload::from_bytes(ModelCodec::MorphirJson, text.as_bytes()).unwrap(),
+            ..encode("acme/example", &serde_json::json!({})).unwrap()
+        };
+        let limits = ModelTransportLimits {
+            max_depth,
+            ..limits()
+        };
+        retain_model(&model, &tuple(ModelOperation::GenerateModel), &limits)
+            .map(|_| ())
+            .map_err(|error| error.code())
+    }
+
+    #[test]
+    fn every_depth_that_admission_accepts_is_decodable() {
+        // Admission refuses the deeper document for its depth, and refuses the deepest allowed
+        // one only for its profile, so it accepts that depth. The decoder reads exactly that depth.
+        assert_eq!(admit(&nested(MAX_DEPTH + 1), MAX_DEPTH), Err("depth_limit"));
+        assert_ne!(admit(&nested(MAX_DEPTH), MAX_DEPTH), Err("depth_limit"));
+        assert!(serde_json::from_str::<serde_json::Value>(&nested(MAX_DEPTH)).is_ok());
+        assert!(serde_json::from_str::<serde_json::Value>(&nested(MAX_DEPTH + 1)).is_err());
+        assert_eq!(support().limits.max_depth, MAX_DEPTH);
     }
 
     #[test]

@@ -44,7 +44,7 @@
 
 ## 4. Release extension/rust/v0.4.0 (morphir-0xtc.4)
 
-- [ ] 4.1 Bump `morphir-rust-binding` to `0.4.0`, update `Cargo.lock`, the README version references and the
+- [x] 4.1 Bump `morphir-rust-binding` to `0.4.0`, update `Cargo.lock`, the README version references and the
   changelog release section; verify `cargo test --locked -p morphir-rust-binding` passes.
 - [ ] 4.2 Open the pull request, get CI green and handle each verified review finding.
 - [ ] 4.3 Dry run on the merge candidate: `.github/scripts/extension_release.py` for the tag,

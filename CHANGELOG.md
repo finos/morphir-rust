@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   released guest is WASM and the SDK has no Ion reader for WASM targets. Hosts
   that offer only MEP `0.1`, or no model transport, get the `0.1` line
   unchanged. The bundle's capability claims and `.github/extensions.toml`
-  declare both protocol versions.
+  declare both protocol versions. Released as `extension/rust/v0.4.0`.
 - SDK 0.4.0 adds canonical numeric/string `RequestId` wire identity and explicit
   constructors that preserve string IDs through native and generated guest
   dispatch, including lifecycle errors. Numeric convenience constructors retain

@@ -34,13 +34,14 @@
 
 ## 3. Qualify on the MoonBit worker host (morphir-0xtc.3)
 
-- [ ] 3.1 Build the native and npm CLIs from finos/morphir-moonbit `main` and record the revision.
-- [ ] 3.2 With a contract `0.2.0` pin (WASM and descriptor), run `extension describe`, `extension compile`
+- [x] 3.1 Build the native and npm CLIs from finos/morphir-moonbit `main` and record the revision.
+- [x] 3.2 With a contract `0.2.0` pin (WASM and descriptor), run `extension describe`, `extension compile`
   (model line) and `extension generate` (model envelope) from the native CLI; check the outputs against the
   golden files and that each process exits by itself.
-- [ ] 3.3 Run the same operations from the npm CLI.
-- [ ] 3.4 Run compile and generate once on the `0.1` line (plain IR) from both CLIs, and record the receipts
-  in the pull request.
+- [x] 3.3 Run the same operations from the npm CLI.
+- [x] 3.4 Run generate once on the `0.1` line (plain IR) from both CLIs, and record the receipts in the pull
+  request. The MoonBit host compiles on the model line whenever the extension claims `compileModel`, so the
+  `0.1` compile runs on the 0.1-only hosts of task 2.3.
 
 ## 4. Release extension/rust/v0.4.0 (morphir-0xtc.4)
 

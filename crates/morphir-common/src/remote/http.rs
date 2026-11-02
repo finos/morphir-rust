@@ -160,6 +160,11 @@ impl HttpFetcher {
         let file = std::fs::File::open(archive_path)?;
         let mut archive = zip::ZipArchive::new(file)
             .map_err(|e| RemoteSourceError::ArchiveError(format!("Failed to open zip: {}", e)))?;
+        // `ZipArchive` reads names from the central directory only, and does not check them
+        // against the local headers unless asked (GHSA-m665-v7pm-7grj).
+        archive.validate_header_consistency().map_err(|e| {
+            RemoteSourceError::ArchiveError(format!("Inconsistent zip headers: {}", e))
+        })?;
 
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).map_err(|e| {
@@ -311,4 +316,136 @@ mod tests {
     }
 
     // Note: Additional tests would require a mock HTTP server
+
+    mod extract_zip {
+        use super::super::{HttpFetcher, RemoteSourceError};
+        use std::fs;
+        use std::io::Write;
+        use std::path::Path;
+        use zip::write::SimpleFileOptions;
+
+        const CENTRAL_DIRECTORY_HEADER: &[u8] = b"PK\x01\x02";
+        const CENTRAL_NAME_OFFSET: usize = 46;
+
+        fn extract(archive: &Path, destination: &Path) -> crate::remote::error::Result<()> {
+            HttpFetcher::with_defaults()
+                .unwrap()
+                .extract_zip(archive, destination)
+        }
+
+        fn an_archive_with_entries(path: &Path, entries: &[(&str, &[u8])]) {
+            let mut writer = zip::ZipWriter::new(fs::File::create(path).unwrap());
+            for (name, bytes) in entries {
+                writer
+                    .start_file(*name, SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(bytes).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        /// One entry whose local header says `local_name` and whose central directory says
+        /// `central_name`. The names must have the same length.
+        fn an_archive_whose_headers_disagree_on_the_name(
+            path: &Path,
+            local_name: &str,
+            central_name: &str,
+        ) {
+            assert_eq!(local_name.len(), central_name.len());
+            an_archive_with_entries(path, &[(local_name, b"payload")]);
+            let mut bytes = fs::read(path).unwrap();
+            let central = bytes
+                .windows(CENTRAL_DIRECTORY_HEADER.len())
+                .position(|window| window == CENTRAL_DIRECTORY_HEADER)
+                .unwrap()
+                + CENTRAL_NAME_OFFSET;
+            bytes[central..central + central_name.len()].copy_from_slice(central_name.as_bytes());
+            fs::write(path, bytes).unwrap();
+        }
+
+        #[test]
+        fn a_well_formed_archive_is_extracted() {
+            let root = tempfile::tempdir().unwrap();
+            let archive = root.path().join("source.zip");
+            let destination = root.path().join("out");
+            fs::create_dir(&destination).unwrap();
+            an_archive_with_entries(&archive, &[("dir/file.txt", b"contents")]);
+
+            extract(&archive, &destination).unwrap();
+
+            assert_eq!(
+                fs::read(destination.join("dir/file.txt")).unwrap(),
+                b"contents"
+            );
+        }
+
+        #[test]
+        fn an_archive_whose_headers_disagree_on_a_name_is_rejected() {
+            // zip 8.6.0, and 9.2.1 without the header check, extract this under the central name.
+            let root = tempfile::tempdir().unwrap();
+            let archive = root.path().join("cloaked.zip");
+            let destination = root.path().join("out");
+            fs::create_dir(&destination).unwrap();
+            an_archive_whose_headers_disagree_on_the_name(&archive, "../a.txt", "safe.txt");
+
+            let error = extract(&archive, &destination).unwrap_err();
+
+            assert!(matches!(error, RemoteSourceError::ArchiveError(_)));
+            assert!(!destination.join("safe.txt").exists());
+            assert!(!root.path().join("a.txt").exists());
+        }
+
+        #[test]
+        fn an_entry_that_escapes_the_root_is_skipped() {
+            let root = tempfile::tempdir().unwrap();
+            let archive = root.path().join("escape.zip");
+            let destination = root.path().join("out");
+            fs::create_dir(&destination).unwrap();
+            an_archive_with_entries(
+                &archive,
+                &[("../escape.txt", b"escape"), ("safe.txt", b"safe")],
+            );
+
+            extract(&archive, &destination).unwrap();
+
+            assert!(!root.path().join("escape.txt").exists());
+            assert_eq!(fs::read(destination.join("safe.txt")).unwrap(), b"safe");
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn unix_modes_are_applied_and_a_symlink_entry_stays_a_regular_file() {
+            use std::os::unix::fs::PermissionsExt;
+            let root = tempfile::tempdir().unwrap();
+            let archive = root.path().join("modes.zip");
+            let destination = root.path().join("out");
+            fs::create_dir(&destination).unwrap();
+            let mut writer = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+            writer
+                .start_file(
+                    "run.sh",
+                    SimpleFileOptions::default().unix_permissions(0o750),
+                )
+                .unwrap();
+            writer.write_all(b"#!/bin/sh\n").unwrap();
+            writer
+                .add_symlink("link", "/etc/passwd", SimpleFileOptions::default())
+                .unwrap();
+            writer.finish().unwrap();
+
+            extract(&archive, &destination).unwrap();
+
+            assert_eq!(
+                fs::metadata(destination.join("run.sh"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o750
+            );
+            let link = fs::symlink_metadata(destination.join("link")).unwrap();
+            assert!(!link.file_type().is_symlink());
+            assert_eq!(fs::read(destination.join("link")).unwrap(), b"/etc/passwd");
+        }
+    }
 }

@@ -49,6 +49,11 @@ pub(crate) fn extract_zip(
             format!("archive exceeds {MAX_ARCHIVE_ENTRIES} entries"),
         ));
     }
+    // `ZipArchive` reads names from the central directory only, and does not check them against
+    // the local headers unless asked (GHSA-m665-v7pm-7grj).
+    archive
+        .validate_header_consistency()
+        .map_err(|source| unsafe_archive("", format!("inconsistent ZIP headers: {source}")))?;
 
     let mut names = PortableArchivePaths::default();
     let mut unpacked = 0_u64;
@@ -58,7 +63,10 @@ pub(crate) fn extract_zip(
         let mut entry = archive
             .by_index(index)
             .map_err(|source| unsafe_archive("", format!("invalid ZIP entry: {source}")))?;
-        let raw_name = entry.name().to_owned();
+        let raw_name = entry
+            .name()
+            .map_err(|source| unsafe_archive("", format!("invalid ZIP entry name: {source}")))?
+            .into_owned();
         let enclosed = entry.enclosed_name().ok_or_else(|| {
             unsafe_archive(&raw_name, "entry escapes the package root".to_owned())
         })?;
@@ -542,9 +550,14 @@ pub(crate) fn copy_zip_entry<R: Read, W: io::Write>(
         ));
     }
     let actual = io::copy(&mut input.take(declared_size + 1), output).map_err(|source| {
-        DistributionError::Io {
-            path: output_path.to_path_buf(),
-            source,
+        // `zip` 9 fails the read itself when an entry expands past its declared size.
+        if source.kind() == io::ErrorKind::InvalidData {
+            unsafe_archive(entry_name, format!("invalid ZIP entry data: {source}"))
+        } else {
+            DistributionError::Io {
+                path: output_path.to_path_buf(),
+                source,
+            }
         }
     })?;
     if actual != declared_size {

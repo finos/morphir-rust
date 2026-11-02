@@ -2,6 +2,7 @@ mod archive_portability;
 mod package_namespacing;
 mod rollback_history;
 mod support;
+mod zip_extraction_safety;
 
 use super::*;
 use crate::{Channel, RelativeArtifactPath, Selection, Sha256Digest, ToolId};

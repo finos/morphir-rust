@@ -177,16 +177,20 @@ fn an_absolute_entry_name_stays_inside_the_root() {
     let archive = root.path().join("absolute.zip");
     let destination = root.path().join("out");
     fs::create_dir(&destination).unwrap();
-    let outside = root.path().join("outside.exe");
-    let absolute = outside.to_str().unwrap();
-    write_zip(&archive, &[(ENTRY_POINT, b"tool"), (absolute, b"outside")]);
+    write_zip(
+        &archive,
+        &[
+            (ENTRY_POINT, b"tool"),
+            ("/morphir-zip-safety-absolute.exe", b"rooted"),
+        ],
+    );
 
     extract(&archive, &destination).unwrap();
 
-    assert!(!outside.exists());
+    assert!(!Path::new("/morphir-zip-safety-absolute.exe").exists());
     assert_eq!(
-        fs::read(destination.join(absolute.trim_start_matches('/'))).unwrap(),
-        b"outside"
+        fs::read(destination.join("morphir-zip-safety-absolute.exe")).unwrap(),
+        b"rooted"
     );
 }
 

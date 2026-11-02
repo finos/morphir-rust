@@ -285,7 +285,24 @@ fi
                 'build --locked --release -p morphir-rust-binding --target wasm32-unknown-unknown')
                     mkdir -p "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release"
                     printf '\\000asm\\001\\000\\000\\000' > "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/morphir_rust_binding.wasm"
+                    printf '%s' "${CARGO_ENCODED_RUSTFLAGS:-}" > "$ARTIFACT_TASK_LOG.wasm-flags"
+                    printf '%s' "${ARTIFACT_EMBEDDED_PATH:-}" >> "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/morphir_rust_binding.wasm"
                     ;;
+                *)
+                    if [ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
+                        printf '%s\n' "cargo $*" >> "$ARTIFACT_TASK_LOG.leaked-flags"
+                    fi
+                    ;;
+            esac
+            """,
+        )
+        self._write_tool(
+            "rustc",
+            """
+            case "$*" in
+                '--print sysroot') printf '%s\n' "${ARTIFACT_SYSROOT-/fixture/sysroot}" ;;
+                '-vV') printf 'rustc 1.0.0\ncommit-hash: %s\nhost: fixture\n' "${ARTIFACT_RUSTC_COMMIT-abc123}" ;;
+                *) exit 1 ;;
             esac
             """,
         )

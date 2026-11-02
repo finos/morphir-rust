@@ -101,6 +101,41 @@ require_snapshot_inputs() {
     fi
 }
 
+# A guest must not record where it was built. Without these flags it embeds the builder's Cargo home
+# and, when the toolchain has rust-src, the path of the toolchain. The second flag gives the path that
+# rustc records when rust-src is absent, so that component makes no difference. The flags apply only to
+# the guest build: CARGO_ENCODED_RUSTFLAGS keeps a path with spaces whole, and with --target it does not
+# reach build scripts and proc macros. Cargo still mixes the build machine's host triple into crate hashes
+# through those units, so builds on different host triples give different bytes. See "Build paths and
+# digests" in docs/extensions/capability-claims.md.
+cargo_home() {
+    home="${CARGO_HOME:-$HOME/.cargo}"
+    printf '%s' "${home%/}"
+}
+
+guest_path_flags() {
+    sysroot="$(rustc --print sysroot)"
+    commit="$(rustc -vV | sed -n 's/^commit-hash: //p')"
+    if [ -z "$sysroot" ] || [ -z "$commit" ]; then
+        echo "cannot read the Rust sysroot and commit hash" >&2
+        return 1
+    fi
+    printf '%s\037%s' \
+        "--remap-path-prefix=$(cargo_home)=/cargo" \
+        "--remap-path-prefix=$sysroot/lib/rustlib/src/rust=/rustc/$commit"
+}
+
+refuse_machine_paths() {
+    for machine_path in "$(cargo_home)/" "$(rustc --print sysroot)/lib/rustlib/"; do
+        # A Cargo home at /cargo is its own canonical path: every remapped path starts with it.
+        [ "$machine_path" = "/cargo/" ] && continue
+        if LC_ALL=C grep -aqF "$machine_path" "$1"; then
+            echo "$1 embeds a build machine path: $machine_path" >&2
+            return 1
+        fi
+    done
+}
+
 run_pipeline() {
     source_root="$1"
     output="$2"
@@ -108,7 +143,9 @@ run_pipeline() {
     (
         cd "$source_root"
         cargo test --locked -p morphir-rust-binding
-        cargo build --locked --release -p morphir-rust-binding --target wasm32-unknown-unknown
+        path_flags="$(guest_path_flags)"
+        CARGO_ENCODED_RUSTFLAGS="$path_flags" cargo build --locked --release -p morphir-rust-binding --target wasm32-unknown-unknown
+        refuse_machine_paths "$WASM"
         wasm-tools validate "$WASM"
         MORPHIR_RUST_GUEST="$WASM" cargo test --locked -p morphir-rust-binding --features wasm-host-tests --test wasm -- --ignored
         set -- scripts/package_extension.py \

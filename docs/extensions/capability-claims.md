@@ -77,6 +77,24 @@ The claimed extension version must match the registered crate's `Cargo.toml`.
 `.github/extensions.toml` remains the declared source of release capabilities;
 packaging never replaces a guest claim with a registry value.
 
+### Build paths and digests
+
+The `rust` and `elm-native` tasks build the guest with `--remap-path-prefix`, so
+it does not record the builder's Cargo home or toolchain directory. Paths under
+the Cargo home become `/cargo/...`, and standard library paths become
+`/rustc/<commit>/...`, with or without the `rust-src` component. The task fails
+if the guest still contains either directory.
+
+One commit and toolchain give the same WASM on machines with the same host
+triple. Machines with different host triples give different bytes: Cargo hashes
+the `host:` line of `rustc -vV` for build scripts and proc macros, and that hash
+reaches every crate that depends on them, which changes the guest's mangled
+symbols. So a run of the task on macOS checks the release steps, but its WASM
+digest differs from the release job's, which runs on
+`x86_64-unknown-linux-gnu`. Run the task on that host triple to predict the
+published digest. `release.json` records the commit and the WASM digest, so its
+own digest follows them. Qualify the published assets, not a local build.
+
 A bundle descriptor has this structure. The digest below is illustrative:
 
 ```json

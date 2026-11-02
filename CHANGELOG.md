@@ -392,6 +392,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `ProcessChild::read_within`, or a `ProcessChannel`.
 
 ### Fixed
+- Extension WASM guests no longer record the build machine's Cargo home or
+  toolchain directory. `extension:artifact:rust` and `extension:artifact:elm-native`
+  remap those paths and fail if a guest still contains them. Builds of one commit
+  on one host triple now give the same bytes; builds on different host triples
+  still differ, because Cargo hashes the host triple into crate metadata.
 - Concurrent first cache-maintenance saves and mutation leases share one
   coordination file without macOS `NotFound` failures. Atomic creation and
   existing-file opens retain directory confinement and no-follow checks.

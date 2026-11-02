@@ -125,6 +125,44 @@ class RustArtifactTaskTests(unittest.TestCase):
                 self.assertIn("embeds a build machine path", result.stderr)
                 self.assertFalse(any((fixture.root / ".morphir/build/extensions/rust").glob("*.wasm")))
 
+    def test_a_cargo_home_that_is_already_the_canonical_path_is_not_a_machine_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")
+
+            result = fixture.run(
+                {"CARGO_HOME": "/cargo", "ARTIFACT_EMBEDDED_PATH": "/cargo/registry/src/a.rs"}
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue(any((fixture.root / ".morphir/build/extensions/rust").glob("*.wasm")))
+
+    def test_the_canonical_cargo_home_does_not_hide_a_toolchain_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")
+
+            result = fixture.run(
+                {
+                    "CARGO_HOME": "/cargo",
+                    "ARTIFACT_EMBEDDED_PATH": "/fixture/sysroot/lib/rustlib/src/rust/b.rs",
+                }
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("embeds a build machine path", result.stderr)
+
+    def test_a_trailing_slash_on_cargo_home_changes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")
+
+            result = fixture.run(
+                {"CARGO_HOME": "/fixture/cargo/", "ARTIFACT_EMBEDDED_PATH": "/fixture/cargo/registry/a.rs"}
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("embeds a build machine path", result.stderr)
+            flags = Path(f"{fixture.log}.wasm-flags").read_text(encoding="utf-8")
+            self.assertIn("--remap-path-prefix=/fixture/cargo=/cargo\x1f", flags)
+
     def test_an_unknown_toolchain_fails_instead_of_building_without_remapping(self) -> None:
         for environment in ({"ARTIFACT_SYSROOT": ""}, {"ARTIFACT_RUSTC_COMMIT": ""}):
             with self.subTest(environment=environment), tempfile.TemporaryDirectory() as temporary_directory:

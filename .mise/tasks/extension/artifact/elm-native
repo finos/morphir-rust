@@ -150,6 +150,11 @@ require_snapshot_inputs() {
 # reach build scripts and proc macros. Cargo still mixes the build machine's host triple into crate hashes
 # through those units, so builds on different host triples give different bytes. See "Build paths and
 # digests" in docs/extensions/capability-claims.md.
+cargo_home() {
+    home="${CARGO_HOME:-$HOME/.cargo}"
+    printf '%s' "${home%/}"
+}
+
 guest_path_flags() {
     sysroot="$(rustc --print sysroot)"
     commit="$(rustc -vV | sed -n 's/^commit-hash: //p')"
@@ -158,12 +163,14 @@ guest_path_flags() {
         return 1
     fi
     printf '%s\037%s' \
-        "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" \
+        "--remap-path-prefix=$(cargo_home)=/cargo" \
         "--remap-path-prefix=$sysroot/lib/rustlib/src/rust=/rustc/$commit"
 }
 
 refuse_machine_paths() {
-    for machine_path in "${CARGO_HOME:-$HOME/.cargo}/" "$(rustc --print sysroot)/lib/rustlib/"; do
+    for machine_path in "$(cargo_home)/" "$(rustc --print sysroot)/lib/rustlib/"; do
+        # A Cargo home at /cargo is its own canonical path: every remapped path starts with it.
+        [ "$machine_path" = "/cargo/" ] && continue
         if LC_ALL=C grep -aqF "$machine_path" "$1"; then
             echo "$1 embeds a build machine path: $machine_path" >&2
             return 1

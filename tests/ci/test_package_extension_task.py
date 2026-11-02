@@ -84,6 +84,80 @@ class RustArtifactTaskTests(unittest.TestCase):
             self.assertNotIn("Traceback", result.stderr)
             self.assertFalse(fixture.log.exists())
 
+    def test_the_guest_build_remaps_machine_paths_and_native_builds_do_not(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")
+
+            result = fixture.run({"CARGO_HOME": "/fixture/cargo home"})
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            flags = Path(f"{fixture.log}.wasm-flags").read_text(encoding="utf-8")
+            self.assertEqual(
+                [
+                    "--remap-path-prefix=/fixture/cargo home=/cargo",
+                    "--remap-path-prefix=/fixture/sysroot/lib/rustlib/src/rust=/rustc/abc123",
+                ],
+                flags.split("\x1f"),
+            )
+            self.assertFalse(Path(f"{fixture.log}.leaked-flags").exists())
+
+    def test_cargo_home_defaults_to_the_directory_cargo_uses(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")
+            environment = {"HOME": "/fixture/home", "CARGO_HOME": ""}
+
+            result = fixture.run(environment)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            flags = Path(f"{fixture.log}.wasm-flags").read_text(encoding="utf-8")
+            self.assertIn("--remap-path-prefix=/fixture/home/.cargo=/cargo", flags)
+
+    def test_a_guest_that_embeds_a_machine_path_fails_before_packaging(self) -> None:
+        for embedded in ("/fixture/cargo/registry/src/a.rs", "/fixture/sysroot/lib/rustlib/src/rust/b.rs"):
+            with self.subTest(embedded=embedded), tempfile.TemporaryDirectory() as temporary_directory:
+                fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")
+
+                result = fixture.run(
+                    {"CARGO_HOME": "/fixture/cargo", "ARTIFACT_EMBEDDED_PATH": embedded}
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("embeds a build machine path", result.stderr)
+                self.assertFalse(any((fixture.root / ".morphir/build/extensions/rust").glob("*.wasm")))
+
+    def test_an_unknown_toolchain_fails_instead_of_building_without_remapping(self) -> None:
+        for environment in ({"ARTIFACT_SYSROOT": ""}, {"ARTIFACT_RUSTC_COMMIT": ""}):
+            with self.subTest(environment=environment), tempfile.TemporaryDirectory() as temporary_directory:
+                fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")
+
+                result = fixture.run(environment)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(Path(f"{fixture.log}.wasm-flags").exists())
+
+    def test_every_artifact_task_builds_its_guest_with_the_same_path_rules(self) -> None:
+        for short_id, package in (("rust", "morphir-rust-binding"), ("elm-native", "morphir-elm-binding")):
+            with self.subTest(short_id=short_id):
+                script = (RUST_ARTIFACT_TASK.parent / short_id).read_text(encoding="utf-8")
+                self.assertIn(
+                    f'CARGO_ENCODED_RUSTFLAGS="$path_flags" cargo build --locked --release -p {package}'
+                    " --target wasm32-unknown-unknown",
+                    script,
+                )
+                self.assertLess(
+                    script.index('CARGO_ENCODED_RUSTFLAGS="$path_flags"'),
+                    script.index('refuse_machine_paths "$WASM"'),
+                )
+                self.assertLess(
+                    script.index('refuse_machine_paths "$WASM"'),
+                    script.index("set -- scripts/package_extension.py"),
+                )
+        def rules(short_id: str) -> str:
+            script = (RUST_ARTIFACT_TASK.parent / short_id).read_text(encoding="utf-8")
+            return script[script.index("guest_path_flags() {"):script.index("run_pipeline() {")]
+
+        self.assertEqual(rules("rust"), rules("elm-native"))
+
     def test_clean_tree_records_the_head_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")

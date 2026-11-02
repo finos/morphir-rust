@@ -1433,6 +1433,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Extension resolution now rejects releases without a host-supported MEP version, and v2 exact locks authenticate launch arguments, capabilities, and MEP versions before activation; legacy v1 locks are rejected explicitly
+- `morphir-common` and `morphir-distribution` move from `zip` 8.6.0 to 9.2.1 for [GHSA-m665-v7pm-7grj](https://github.com/advisories/GHSA-m665-v7pm-7grj). Both ZIP extractors now call `ZipArchive::validate_header_consistency`, which `zip` does not run by default, so they reject an archive whose local headers and central directory disagree, including duplicate central names, overlapping entries and local headers that the central directory does not list. Before this change those archives extracted under the central directory names
 
 ## [0.2.0] - 2026-01-24
 

@@ -53,4 +53,4 @@ num-bigint = "0.5"
 
 [dev-dependencies]
 morphir-gherkin = { path = "../morphir-gherkin" }
-rstest = "0.27"
+rstest = "0.28"

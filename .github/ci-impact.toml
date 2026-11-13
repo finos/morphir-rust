@@ -36,6 +36,11 @@ prefixes = [
   ".beads/",
   "docs/",
   "openspec/",
+  # The development tools of finos/morphir. They are a Cargo workspace of their
+  # own that builds only inside a finos/morphir checkout, so no job here can
+  # build them. The CI of finos/morphir tests them when its submodule pin moves.
+  # See umbrella-tools/README.md.
+  "umbrella-tools/",
   ".github/ISSUE_TEMPLATE/",
   ".github/PULL_REQUEST_TEMPLATE/",
 ]

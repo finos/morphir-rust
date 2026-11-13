@@ -48,6 +48,11 @@ This table lists the crates in the Cargo workspace.
 | `morphir-workspace` | Portable workspace discovery protocol and algorithms. |
 | `morphir-workspace-wasm` | Browser-facing JSON and WebAssembly adapter for workspace discovery. |
 
+The development tools of [finos/morphir](https://github.com/finos/morphir), `morphir-mck` and `morphir-dev`, are in
+[`umbrella-tools/`](umbrella-tools/README.md). That directory is a Cargo workspace of its own. It builds only from a
+finos/morphir checkout, where this repository is the `ecosystem/morphir-rust` submodule, and the commands in this
+README do not build it.
+
 The package MVP adapter has a runnable signed initial-resolve example:
 `cargo run -p morphir-mck-adapter --example package_mvp_resolve`. It sends the
 exact root and input-only fixture files through the adapter session, then checks

@@ -245,6 +245,11 @@ Reflecting Morphir's functional domain-driven design nature, strictly adhere to:
         optimization.rs
   ```
 
+### The umbrella-tools workspace
+- `umbrella-tools/` holds the development tools of finos/morphir (`morphir-mck`, `morphir-dev`). It is a Cargo workspace of its own, not a member of the root workspace.
+- It builds only inside a finos/morphir checkout, where this repository is the `ecosystem/morphir-rust` submodule. `cargo build`, `cargo test` and CI in this repository do not build it. Read `umbrella-tools/README.md` before you change it.
+- Do not add its crates to the root workspace, and do not make a root workspace crate depend on them.
+
 ### Git Workflow & Version Control
 - **Commit Upon Task Completion**: Create a commit as soon as a logical unit of work is complete (e.g., after implementing a feature, fixing a bug, or completing a refactoring).
 - **Avoid Large Worktrees**: Do not accumulate large amounts of uncommitted changes. Break work into smaller, committable units.

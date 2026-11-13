@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `umbrella-tools/` holds the Rust development tools of finos/morphir: the
+  Morphir Compatibility Kit engine and runner (`morphir-mck`,
+  `morphir-mck-cli`), the internal tool `morphir-dev` (`morphir-dev-tools`) and
+  the test-only vendored `rust-tuf`. They moved from the root of finos/morphir
+  so that the umbrella repository holds no Rust workspace. The directory is a
+  Cargo workspace of its own that builds only from a finos/morphir checkout;
+  the root workspace, its published crates and its CI do not change.
 - The Rust extension (`morphir-rust-binding`) speaks MEP `0.2.0-draft.1` as
   well as MEP `0.1`. On the new line it serves `morphir.frontend.compileModel`
   and `morphir.backend.generateModel` for the tuple `morphir-ir` /

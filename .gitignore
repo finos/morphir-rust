@@ -16,6 +16,8 @@ Thumbs.db
 
 # Rust
 /target/
+# The development tools of finos/morphir are a workspace of their own (umbrella-tools/README.md).
+/umbrella-tools/target/
 **/*.rs.bk
 
 # Docusaurus generated folders

@@ -10,6 +10,23 @@ fn contract_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../../spec/mep/contract")
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContractDraft {
+    ModelTransport,
+    BoundedGeneration,
+}
+
+fn contract_draft() -> ContractDraft {
+    let manifest: toml::Value =
+        toml::from_str(&fs::read_to_string(contract_dir().join("gleam.toml")).unwrap()).unwrap();
+    let version = semver::Version::parse(manifest["version"].as_str().unwrap()).unwrap();
+    match version.to_string().as_str() {
+        "0.2.0-draft.1" => ContractDraft::ModelTransport,
+        "0.2.0-draft.2" => ContractDraft::BoundedGeneration,
+        _ => panic!("unrecognized exact MEP contract draft {version}"),
+    }
+}
+
 fn committed_ir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../../spec/mep/generated/mep.ir.json")
 }
@@ -54,6 +71,10 @@ fn type_names(ir: &Value) -> BTreeSet<String> {
 /// The Gleam frontend emits a record as a custom type with one constructor
 /// that has the type's own name; each argument is a `[label, type]` pair.
 fn field_labels(ir: &Value, type_name: &str) -> Vec<String> {
+    constructor_labels(ir, type_name, type_name)
+}
+
+fn constructor_labels(ir: &Value, type_name: &str, constructor_name: &str) -> Vec<String> {
     let definition = mep_types(ir)
         .get(type_name)
         .unwrap_or_else(|| panic!("module mep has no type {type_name}"));
@@ -61,9 +82,11 @@ fn field_labels(ir: &Value, type_name: &str) -> Vec<String> {
         .as_object()
         .unwrap_or_else(|| panic!("{type_name} is not a custom type: {definition}"));
     let arguments = constructors
-        .get(type_name)
+        .get(constructor_name)
         .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("{type_name} has no record constructor: {constructors:?}"));
+        .unwrap_or_else(|| {
+            panic!("{type_name} has no {constructor_name} constructor: {constructors:?}")
+        });
     arguments
         .iter()
         .map(|argument| {
@@ -92,6 +115,15 @@ const HANDSHAKE_TYPES: &[&str] = &[
 #[test]
 fn the_contract_covers_the_handshake() {
     let ir = contract_ir();
+    let initialize_fields: &[&str] = match contract_draft() {
+        ContractDraft::ModelTransport => &["protocol-versions", "host", "model-transport"],
+        ContractDraft::BoundedGeneration => &[
+            "protocol-versions",
+            "host",
+            "model-transport",
+            "model-access",
+        ],
+    };
     let names = type_names(&ir);
     for expected in HANDSHAKE_TYPES {
         assert!(
@@ -103,10 +135,7 @@ fn the_contract_covers_the_handshake() {
     let records: &[(&str, &[&str])] = &[
         ("peer-info", &["kind", "name", "version"]),
         ("describe-params", &["protocol-versions"]),
-        (
-            "initialize-params",
-            &["protocol-versions", "host", "model-transport"],
-        ),
+        ("initialize-params", initialize_fields),
         (
             "initialize-result",
             &["protocol-version", "extension", "capabilities"],
@@ -149,29 +178,36 @@ fn constructor_names(ir: &Value, type_name: &str) -> Vec<String> {
 #[test]
 fn the_contract_covers_every_method_and_error_code() {
     let ir = contract_ir();
-    assert_eq!(
-        constructor_names(&ir, "method"),
-        [
-            "initialize",
-            "describe",
-            "initialized",
-            "ping",
-            "info",
-            "capabilities",
-            "compile",
-            "compile-model",
-            "generate",
-            "generate-model",
-            "validate",
-            "validate-model",
-            "transform",
-            "workspace-discover",
-            "shutdown",
-            "exit",
-            "cancel-request",
-            "progress",
-        ]
-    );
+    let mut methods = vec![
+        "initialize",
+        "describe",
+        "initialized",
+        "ping",
+        "info",
+        "capabilities",
+        "compile",
+        "compile-model",
+        "generate",
+        "generate-model",
+    ];
+    if contract_draft() == ContractDraft::BoundedGeneration {
+        methods.extend([
+            "generate-model-start",
+            "generate-model-advance",
+            "generate-model-cancel",
+        ]);
+    }
+    methods.extend([
+        "validate",
+        "validate-model",
+        "transform",
+        "workspace-discover",
+        "shutdown",
+        "exit",
+        "cancel-request",
+        "progress",
+    ]);
+    assert_eq!(constructor_names(&ir, "method"), methods);
     assert_eq!(
         constructor_names(&ir, "error-code"),
         [
@@ -220,6 +256,109 @@ fn assert_records(ir: &Value, records: &[(&str, &[&str])]) {
             field_labels(ir, type_name),
             *labels,
             "fields of {type_name}"
+        );
+    }
+}
+
+#[test]
+fn bounded_generation_has_exact_versions_and_ordered_carriers() {
+    let ir = contract_ir();
+    let types = mep_types(&ir);
+    if contract_draft() == ContractDraft::ModelTransport {
+        assert!(!types.contains_key("model-access-tuple"));
+        return;
+    }
+
+    assert_eq!(
+        constructor_names(&ir, "model-access-protocol-version"),
+        ["model-access-protocol-draft2"]
+    );
+    assert_eq!(
+        constructor_names(&ir, "model-access-version"),
+        ["model-access-draft1"]
+    );
+    assert_eq!(
+        constructor_names(&ir, "model-access-ir-version"),
+        ["model-access-ir3", "model-access-ir4"]
+    );
+    assert_records(
+        &ir,
+        &[
+            (
+                "model-access-tuple",
+                &[
+                    "protocol-version",
+                    "access-version",
+                    "operation",
+                    "ir-version",
+                    "profile",
+                    "codec",
+                    "layout",
+                    "contextual-encoding",
+                ],
+            ),
+            (
+                "model-access-start",
+                &[
+                    "session-id",
+                    "snapshot",
+                    "input",
+                    "target",
+                    "options",
+                    "required-guarantees",
+                    "limits",
+                ],
+            ),
+            (
+                "model-access-advance",
+                &["session-id", "round", "deliveries"],
+            ),
+            ("model-access-cancel", &["session-id"]),
+        ],
+    );
+    for name in ["initialize-params", "extension-capabilities"] {
+        let fields = unwrap_access(&types[name])["CustomTypeDefinition"]["constructors"][name]
+            .as_array()
+            .unwrap();
+        let field = fields
+            .iter()
+            .find(|field| field[0] == "model-access")
+            .unwrap();
+        assert_eq!(field[1]["Reference"]["fqname"], "morphir/SDK:maybe#maybe");
+        assert_eq!(
+            field[1]["Reference"]["args"][0]["Reference"]["fqname"],
+            "morphir/mep:mep#model-access-support"
+        );
+    }
+
+    assert_eq!(
+        constructor_names(&ir, "model-access-step"),
+        [
+            "continue-generation",
+            "complete-generation",
+            "fail-generation"
+        ]
+    );
+    for (constructor, fields) in [
+        (
+            "continue-generation",
+            &[
+                "session-id",
+                "round",
+                "requests",
+                "artifacts",
+                "diagnostics",
+            ][..],
+        ),
+        (
+            "complete-generation",
+            &["session-id", "artifacts", "diagnostics"][..],
+        ),
+        ("fail-generation", &["session-id", "diagnostics"][..]),
+    ] {
+        assert_eq!(
+            constructor_labels(&ir, "model-access-step", constructor),
+            fields
         );
     }
 }
@@ -373,12 +512,12 @@ fn model_operations_have_explicit_carriers_and_scoped_evidence() {
 
 #[test]
 fn model_draft_adopts_semver_without_relabeling_the_legacy_protocol() {
-    let manifest: toml::Value =
-        toml::from_str(&fs::read_to_string(contract_dir().join("gleam.toml")).unwrap()).unwrap();
-    let version = semver::Version::parse(manifest["version"].as_str().unwrap()).unwrap();
-    assert_eq!(version.to_string(), "0.2.0-draft.1");
+    let draft = contract_draft();
     let readme = fs::read_to_string(contract_dir().parent().unwrap().join("README.md")).unwrap();
     assert!(readme.contains("0.2.0-draft.1"));
+    if draft == ContractDraft::BoundedGeneration {
+        assert!(readme.contains("0.2.0-draft.2"));
+    }
     assert!(readme.contains("0.1.0-draft.1"));
     assert!(readme.contains("legacy `0.1`"));
     assert!(!readme.contains("Published contracts carry no prerelease tags"));
@@ -566,6 +705,23 @@ const CAPABILITY_TYPES: &[&str] = &[
 #[test]
 fn the_contract_covers_capabilities_and_claims() {
     let ir = contract_ir();
+    let mut extension_fields = vec![
+        "frontend",
+        "backend",
+        "workspace",
+        "validator",
+        "model-transport",
+    ];
+    if contract_draft() == ContractDraft::BoundedGeneration {
+        extension_fields.push("model-access");
+    }
+    extension_fields.extend([
+        "streaming",
+        "incremental",
+        "cancellation",
+        "progress",
+        "extra",
+    ]);
     let names = type_names(&ir);
     for expected in CAPABILITY_TYPES {
         assert!(
@@ -594,21 +750,7 @@ fn the_contract_covers_capabilities_and_claims() {
         ("workspace-capability", &["protocol-versions", "discover"]),
         ("validator-capability", &["ir-versions", "rules"]),
         ("validator-rule", &["id", "code"]),
-        (
-            "extension-capabilities",
-            &[
-                "frontend",
-                "backend",
-                "workspace",
-                "validator",
-                "model-transport",
-                "streaming",
-                "incremental",
-                "cancellation",
-                "progress",
-                "extra",
-            ],
-        ),
+        ("extension-capabilities", &extension_fields),
         ("claims-requirements", &["host"]),
         (
             "capability-claim-set",

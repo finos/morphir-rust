@@ -493,7 +493,7 @@ fn run_query(db: &Path, sql: &str, binds: Vec<Value>) -> rusqlite::Result<Rows> 
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let mut stmt = conn.prepare(sql)?;
-    let columns: Vec<String> = stmt.column_names().into_iter().map(String::from).collect();
+    let columns: Vec<String> = stmt.column_names().map(String::from).collect();
     let ncols = columns.len();
     let mut out = Vec::new();
     let mut rows = stmt.query(params_from_iter(binds))?;

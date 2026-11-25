@@ -95,29 +95,31 @@ finos/morphir-moonbit.
 
 ### Skills and CLI
 
-The skills are `openspec-explore`, `openspec-propose`, `openspec-apply-change`, `openspec-update-change`,
-`openspec-sync-specs` and `openspec-archive-change`. Invoke them as `/openspec-propose`, or as `$openspec-propose`
-in Codex. `openspec init` wrote one copy for each agent:
+The skills are `openspec`, `openspec-explore`, `openspec-propose`, `openspec-apply-change`,
+`openspec-update-change`, `openspec-sync-specs` and `openspec-archive-change`. Start with `openspec` when you do
+not know which skill to use: it answers OpenSpec questions, or sends the request to the skill that does the work.
+Invoke them as `/openspec-propose`, or as `$openspec-propose` in Codex.
+
+OpenSpec 2 writes one copy of each skill to `.agents/skills/`. Agents that have their own skill directory get a
+relative link to that copy. Agents that read `.agents/skills/` get no extra copy:
 
 | Agent | Skill directory |
 |---|---|
-| Claude Code | `.claude/skills/openspec-*/` |
-| Codex, Antigravity and other `.agents` readers | `.agents/skills/openspec-*/` |
-| GitHub Copilot | `.github/skills/openspec-*/` |
-| Cursor | `.cursor/skills/openspec-*/` |
-| Grok Build | `.grok/skills/openspec-*/` |
-| Devin Desktop (formerly Windsurf) | `.devin/skills/openspec-*/` |
-| Gemini CLI | `.gemini/skills/openspec-*/` |
-| OpenCode | `.opencode/skills/openspec-*/` |
+| Codex, GitHub Copilot, Cursor, Gemini CLI, OpenCode, Antigravity and other `.agents` readers | `.agents/skills/openspec*/` |
+| Claude Code | `.claude/skills/openspec*/` (links) |
+| Grok Build | `.grok/skills/openspec*/` (links) |
+| Devin Desktop (formerly Windsurf) | `.devin/skills/openspec*/` (links) |
 
-The Copilot cloud coding-agent files are not installed, and `openspec/config.yaml` records `cloudAgent: false`.
+On Windows, set `git config --global core.symlinks true` before you clone, or each link checks out as a small
+text file. `openspec update` then replaces it with a plain copy. The Copilot cloud coding-agent files are not
+installed, and `openspec/config.yaml` records `cloudAgent: false`.
 
-The skills run the `openspec` CLI. Install the version that generated them, which each skill records as
-`generatedBy` (now 1.14.3): `mise use -g npm:@fission-ai/openspec@1.14.3`. Do not add it to `mise.toml`:
+The skills run the `openspec` CLI. Install the version that generated them (now 2.2.0):
+`mise use -g npm:@fission-ai/openspec@2.2.0`. It needs Node.js 22.20 or later. Do not add it to `mise.toml`:
 `mise run` installs every missing tool in that file, so each CI job would download it.
 
-The CLI generates the skills: do not edit them, and do not replace them with links. To change the version, install
-the new version, run `openspec update`, and commit the regenerated files.
+The CLI generates the skills and the links: do not edit them. To change the version, install the new version, run
+`openspec update`, and commit the regenerated files.
 
 ### Specs and plans are HTML documents
 

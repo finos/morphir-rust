@@ -100,25 +100,26 @@ The skills are `openspec`, `openspec-explore`, `openspec-propose`, `openspec-app
 not know which skill to use: it answers OpenSpec questions, or sends the request to the skill that does the work.
 Invoke them as `/openspec-propose`, or as `$openspec-propose` in Codex.
 
-OpenSpec 2 writes one copy of each skill to `.agents/skills/`. Agents that have their own skill directory get a
-relative link to that copy. Agents that read `.agents/skills/` get no extra copy:
+OpenSpec 2 writes one copy of each skill to `.agents/skills/`. Agents that read `.agents/skills/` get no extra
+copy. Agents that have their own skill directory get a plain copy, not the relative link that OpenSpec makes by
+default: the extension provenance snapshot (`.mise/tasks/extension/artifact/*`) refuses any symbolic link in the
+repository. `openspec update`, also with `--force`, keeps the copies:
 
 | Agent | Skill directory |
 |---|---|
 | Codex, GitHub Copilot, Cursor, Gemini CLI, OpenCode, Antigravity and other `.agents` readers | `.agents/skills/openspec*/` |
-| Claude Code | `.claude/skills/openspec*/` (links) |
-| Grok Build | `.grok/skills/openspec*/` (links) |
-| Devin Desktop (formerly Windsurf) | `.devin/skills/openspec*/` (links) |
+| Claude Code | `.claude/skills/openspec*/` |
+| Grok Build | `.grok/skills/openspec*/` |
+| Devin Desktop (formerly Windsurf) | `.devin/skills/openspec*/` |
 
-On Windows, set `git config --global core.symlinks true` before you clone, or each link checks out as a small
-text file. `openspec update` then replaces it with a plain copy. The Copilot cloud coding-agent files are not
-installed, and `openspec/config.yaml` records `cloudAgent: false`.
+If a later `openspec update` makes links again, replace each link with a copy of its target before you commit.
+The Copilot cloud coding-agent files are not installed, and `openspec/config.yaml` records `cloudAgent: false`.
 
 The skills run the `openspec` CLI. Install the version that generated them (now 2.2.0):
 `mise use -g npm:@fission-ai/openspec@2.2.0`. It needs Node.js 22.20 or later. Do not add it to `mise.toml`:
 `mise run` installs every missing tool in that file, so each CI job would download it.
 
-The CLI generates the skills and the links: do not edit them. To change the version, install the new version, run
+The CLI generates the skills: do not edit them. To change the version, install the new version, run
 `openspec update`, and commit the regenerated files.
 
 ### Specs and plans are HTML documents

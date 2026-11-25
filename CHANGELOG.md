@@ -251,8 +251,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - OpenSpec 2.2.0 (was 1.14.3) generates the agent skills. It writes one copy
-  of each skill to `.agents/skills/` and relative links in `.claude/skills/`,
-  `.grok/skills/` and `.devin/skills/`. It removes the copies in `.cursor/`,
+  of each skill to `.agents/skills/` and plain copies in `.claude/skills/`,
+  `.grok/skills/` and `.devin/skills/` (not links: the extension provenance
+  snapshot refuses symbolic links). It removes the copies in `.cursor/`,
   `.gemini/`, `.github/` and `.opencode/`, because those agents read
   `.agents/skills/`. The new `openspec` skill answers OpenSpec questions and
   sends requests to the workflow skills. The project schema `html-design` does

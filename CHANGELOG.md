@@ -250,6 +250,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#946).
 
 ### Changed
+- OpenSpec 2.2.0 (was 1.14.3) generates the agent skills. It writes one copy
+  of each skill to `.agents/skills/` and plain copies in `.claude/skills/`,
+  `.grok/skills/` and `.devin/skills/` (not links: the extension provenance
+  snapshot refuses symbolic links). It removes the copies in `.cursor/`,
+  `.gemini/`, `.github/` and `.opencode/`, because those agents read
+  `.agents/skills/`. The new `openspec` skill answers OpenSpec questions and
+  sends requests to the workflow skills. The project schema `html-design` does
+  not change. See "Specs and Changes with OpenSpec" in `AGENTS.md`.
 - Renovate groups updates by risk and opens or refreshes its PRs on Monday and
   Thursday mornings (UTC). GitHub Actions, mise tools, npm packages and docs
   gems share one `tooling` PR, with their major updates in `major-tooling`;
